@@ -72,7 +72,7 @@ python -m chatty [options]
 - `--max-loops`, `-l`: Maximum sequential tool execution loops allowed in a single turn (default: `20`).
 - `--config-prompt`, `-f`: Path to a YAML or text configuration file containing a custom system prompt.
 - `--prompt-mode`, `-d`: How to apply the custom system prompt (`replace` or `integrate`). Default is `replace`.
-- `--api-key`, `-k`: OpenRouter API key. Overrides the `OPENROUTER_API_KEY` environment variable.
+- `--api-key`, `-a`: OpenRouter API key. Overrides the `OPENROUTER_API_KEY` environment variable.
 - `--url`, `-u`: API Base URL override.
 
 ### Example Commands
@@ -84,7 +84,7 @@ chatty
 
 Run using OpenRouter with a specific model:
 ```bash
-chatty -p openrouter -m google/gemini-2.5-flash -k YOUR_API_KEY
+chatty -p openrouter -m google/gemini-2.5-flash -a YOUR_API_KEY
 ```
 
 Run with a custom sandbox directory:

@@ -1734,7 +1734,7 @@ def main():
         help="How to apply the custom system prompt file (replace default prompt, or integrate/append to it)."
     )
     parser.add_argument(
-        "--api-key", "-k",
+        "--api-key", "-a",
         help="OpenRouter API key. Overrides the OPENROUTER_API_KEY environment variable."
     )
     parser.add_argument(
