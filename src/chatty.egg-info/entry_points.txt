@@ -1,0 +1,2 @@
+[console_scripts]
+chatty = chatty.cli:main

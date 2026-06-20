@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatty"
+version = "0.1.0"
+description = "AI Chatbot CLI with advanced sandboxed text and file system interaction"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "requests",
+    "openai",
+    "tiktoken",
+    "rich",
+    "prompt-toolkit",
+    "PyYAML",
+]
+
+[project.scripts]
+chatty = "chatty.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+chatty = ["skills/**/*"]
+
+
