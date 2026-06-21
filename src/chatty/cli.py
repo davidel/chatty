@@ -9,6 +9,7 @@ import requests
 import openai
 import tiktoken
 import logging
+import datetime
 from typing import List, Dict, Any, Tuple
 
 # Initialize module logger
@@ -2062,6 +2063,55 @@ class ChatbotSession:
                 logger.exception("Unexpected error in CLI loop")
                 console.print(f"[bold red]Unexpected error in CLI loop:[/bold red] {str(e)}")
 
+
+class GlogFormatter(logging.Formatter):
+  """A logging formatter that formats messages like Google's glog,
+  but using process ID instead of thread ID.
+  Format: Lyyyymmdd hh:mm:ss.uuuuuu process file:line] msg
+  """
+
+  def format(self, record):
+    level_char = "I"
+    if record.levelname:
+      if record.levelname == "CRITICAL":
+        level_char = "F"
+      elif record.levelname in ("DEBUG", "INFO", "WARNING", "ERROR"):
+        level_char = record.levelname[0]
+      else:
+        level_char = record.levelname[0]
+    dt = datetime.datetime.fromtimestamp(record.created)
+    time_str = dt.strftime("%Y%m%d %H:%M:%S.%f")
+    pid = record.process
+    filename = record.filename
+    lineno = record.lineno
+    record.message = record.getMessage()
+    prefix = f"{level_char}{time_str} {pid} {filename}:{lineno}]"
+    s = f"{prefix} {record.message}"
+    if record.exc_info:
+      if not record.exc_text:
+        record.exc_text = self.formatException(record.exc_info)
+    if record.exc_text:
+      if s[-1:] != "\n":
+        s = s + "\n"
+      s = s + record.exc_text
+    if record.stack_info:
+      if s[-1:] != "\n":
+        s = s + "\n"
+      s = s + self.formatStack(record.stack_info)
+    return s
+
+
+def setup_logging(log_file: str, log_level_str: str) -> None:
+  """Configure logging with the custom GlogFormatter."""
+  log_level = getattr(logging, log_level_str.upper(), logging.INFO)
+  handler = logging.FileHandler(log_file, encoding="utf-8")
+  handler.setFormatter(GlogFormatter())
+  logging.basicConfig(
+    level=log_level,
+    handlers=[handler]
+  )
+
+
 # --- CLI Main Entrance ---
 
 def main():
@@ -2177,13 +2227,7 @@ def main():
     
     # Initialize logging
     if args.log_file:
-        log_level = getattr(logging, args.log_level.upper(), logging.INFO)
-        logging.basicConfig(
-            filename=args.log_file,
-            level=log_level,
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            encoding="utf-8"
-        )
+        setup_logging(args.log_file, args.log_level)
         logger.info("==========================================")
         logger.info(f"Logging initialized to '{args.log_file}' (level: {args.log_level}).")
     
