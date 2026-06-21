@@ -825,13 +825,13 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_tests",
-            "description": "Run tests for the project. Auto-detects standard test runners (pytest, npm test, cargo test, go test) or executes a custom test command.",
+            "description": "Run tests for the project. Auto-detects standard test runners (pytest, npm test, cargo test, go test, ctest, make test, meson test) or executes a custom test command.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Optional custom command to run tests (e.g. 'pytest tests/test_math.py'). If omitted, the chatbot will attempt to auto-detect and run the project's test suite."
+                        "description": "Optional custom command to run tests (e.g. 'pytest tests/test_math.py', 'make test'). If omitted, the chatbot will attempt to auto-detect and run the project's test suite."
                     }
                 }
             }
