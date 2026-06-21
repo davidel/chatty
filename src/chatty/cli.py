@@ -590,11 +590,157 @@ def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int,
     return f"Error editing lines: {str(e)}"
 
 
+def tool_format_file(sandbox_dir: str, path: str) -> str:
+  """Automatically format a source code file using the appropriate formatter."""
+  try:
+    safe_p = get_safe_path(sandbox_dir, path)
+    if not os.path.exists(safe_p):
+      return f"Error: File '{path}' does not exist."
+    if not os.path.isfile(safe_p):
+      return f"Error: Path '{path}' is not a file."
+
+    rel_path = os.path.relpath(safe_p, sandbox_dir)
+    
+    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+      old_content = f.read()
+
+    ext = os.path.splitext(safe_p)[1].lower()
+    formatted_content = None
+    formatter_used = ""
+
+    import subprocess
+    import shutil
+
+    if ext == ".py":
+      # Try black, ruff, yapf, autopep8
+      if shutil.which("black"):
+        subprocess.run(["black", "-q", safe_p], capture_output=True, text=True)
+        formatter_used = "black"
+      elif shutil.which("ruff"):
+        subprocess.run(["ruff", "format", safe_p], capture_output=True, text=True)
+        formatter_used = "ruff format"
+      elif shutil.which("yapf"):
+        subprocess.run(["yapf", "-i", safe_p], capture_output=True, text=True)
+        formatter_used = "yapf"
+      elif shutil.which("autopep8"):
+        subprocess.run(["autopep8", "-i", safe_p], capture_output=True, text=True)
+        formatter_used = "autopep8"
+      else:
+        return (
+          f"Error: No Python formatter found (black, ruff, yapf, or autopep8). "
+          f"Please run a command like 'pip install black' or 'pip install ruff' in the project environment."
+        )
+      
+      # For formatters running in-place, read updated file
+      with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+        formatted_content = f.read()
+
+    elif ext == ".json":
+      import json
+      try:
+        data = json.loads(old_content)
+        formatted_content = json.dumps(data, indent=2) + "\n"
+        formatter_used = "built-in json.dumps"
+      except json.JSONDecodeError as e:
+        return f"Error parsing JSON: {str(e)}"
+
+    elif ext in (".yaml", ".yml"):
+      import yaml
+      try:
+        # We can try prettier first, as it preserves comments
+        if shutil.which("prettier"):
+          subprocess.run(["prettier", "--write", safe_p], capture_output=True, text=True)
+          formatter_used = "prettier"
+          with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+            formatted_content = f.read()
+        else:
+          data = yaml.safe_load(old_content)
+          formatted_content = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+          formatter_used = "built-in PyYAML (note: comments may have been stripped)"
+      except Exception as e:
+        return f"Error formatting YAML: {str(e)}"
+
+    elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java"):
+      if shutil.which("clang-format"):
+        subprocess.run(["clang-format", "-i", safe_p], capture_output=True, text=True)
+        formatter_used = "clang-format"
+        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+          formatted_content = f.read()
+      else:
+        return "Error: clang-format is not installed on the system."
+
+    elif ext == ".go":
+      if shutil.which("gofmt"):
+        subprocess.run(["gofmt", "-w", safe_p], capture_output=True, text=True)
+        formatter_used = "gofmt"
+        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+          formatted_content = f.read()
+      else:
+        return "Error: gofmt is not installed on the system."
+
+    elif ext in (".rs", ".rlib"):
+      if shutil.which("rustfmt"):
+        subprocess.run(["rustfmt", safe_p], capture_output=True, text=True)
+        formatter_used = "rustfmt"
+        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+          formatted_content = f.read()
+      else:
+        return "Error: rustfmt is not installed on the system."
+
+    elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md"):
+      if shutil.which("prettier"):
+        subprocess.run(["prettier", "--write", safe_p], capture_output=True, text=True)
+        formatter_used = "prettier"
+        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+          formatted_content = f.read()
+      else:
+        return "Error: prettier is not installed on the system."
+
+    else:
+      return f"Error: No formatter configured for files with extension '{ext}'."
+
+    # If formatted content was generated programmatically (JSON, YAML fallback), write it back
+    if formatted_content is not None and formatted_content != old_content:
+      with open(safe_p, 'w', encoding='utf-8') as f:
+        f.write(formatted_content)
+
+    if formatted_content is None:
+      # If formatted_content was read back from disk after in-place formatting
+      with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+        formatted_content = f.read()
+
+    if formatted_content == old_content:
+      return f"File '{rel_path}' is already formatted correctly."
+
+    print_diff(rel_path, old_content, formatted_content)
+    return f"Successfully formatted file '{rel_path}' using {formatter_used}."
+
+  except Exception as e:
+    return f"Error formatting file: {str(e)}"
+
+
 # (Deleted tool_run_command. Replaced by ChatbotSession.tool_run_command)
 
 
 # Define standard schemas for tools
 TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "format_file",
+            "description": "Format a source code file using the appropriate formatter (e.g. black/ruff for Python, clang-format for C/C++, prettier for JS/TS/HTML/CSS/MD, or built-in json/yaml tools). Shows a diff of changes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The file path relative to the sandbox root."
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -879,6 +1025,11 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
     if not path or replacement is None:
       return "Error: Missing parameters 'path' or 'replacement'."
     return tool_edit_lines(session.sandbox, path, start_line, end_line, replacement)
+  elif name == "format_file":
+    path = arguments.get("path")
+    if not path:
+      return "Error: Missing parameter 'path'."
+    return tool_format_file(session.sandbox, path)
   elif name == "search_grep":
     pattern = arguments.get("pattern")
     path = arguments.get("path", ".")
