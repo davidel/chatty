@@ -300,6 +300,73 @@ def validate_file_syntax(path: str, content: str) -> Tuple[bool, str]:
           pass
     except Exception:
       pass
+
+  elif ext in (".v", ".sv", ".vh", ".svh"):
+    import subprocess
+    import tempfile
+    import shutil
+    try:
+      with tempfile.NamedTemporaryFile(suffix=ext, delete=False, mode='w+t') as temp:
+        temp.write(content)
+        temp_name = temp.name
+      try:
+        if shutil.which("verilator"):
+          proc = subprocess.run(
+            ["verilator", "--lint-only", "-Wno-fatal", temp_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3
+          )
+          if proc.returncode != 0:
+            err_msg = (proc.stderr + proc.stdout).replace(temp_name, os.path.basename(path))
+            return False, f"Verilator Lint Error:\n{err_msg}"
+        elif shutil.which("iverilog"):
+          proc = subprocess.run(
+            ["iverilog", "-g2012", "-t", "null", temp_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3
+          )
+          if proc.returncode != 0:
+            err_msg = (proc.stderr + proc.stdout).replace(temp_name, os.path.basename(path))
+            return False, f"Icarus Verilog Syntax Error:\n{err_msg}"
+      finally:
+        try:
+          os.unlink(temp_name)
+        except Exception:
+          pass
+    except Exception:
+      pass
+
+  elif ext in (".vhd", ".vhdl"):
+    import subprocess
+    import tempfile
+    import shutil
+    try:
+      with tempfile.NamedTemporaryFile(suffix=ext, delete=False, mode='w+t') as temp:
+        temp.write(content)
+        temp_name = temp.name
+      try:
+        if shutil.which("ghdl"):
+          proc = subprocess.run(
+            ["ghdl", "-s", temp_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3
+          )
+          if proc.returncode != 0:
+            err_msg = (proc.stderr + proc.stdout).replace(temp_name, os.path.basename(path))
+            return False, f"GHDL Syntax Error:\n{err_msg}"
+      finally:
+        try:
+          os.unlink(temp_name)
+        except Exception:
+          pass
+    except Exception:
+      pass
       
   return True, ""
 
