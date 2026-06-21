@@ -1657,7 +1657,11 @@ class ChatbotSession:
                 key = "missing_api_key"
             self.client = openai.OpenAI(
                 base_url=base,
-                api_key=key
+                api_key=key,
+                default_headers={
+                  "HTTP-Referer": "https://github.com/davidel/chatty",
+                  "X-Title": "Chatty",
+                }
             )
 
     def tool_run_tests(self, command: str = None) -> str:
