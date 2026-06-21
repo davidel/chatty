@@ -801,9 +801,171 @@ def tool_format_file(sandbox_dir: str, path: str) -> str:
 
 # (Deleted tool_run_command. Replaced by ChatbotSession.tool_run_command)
 
+def tool_move_file(sandbox_dir: str, src: str, dest: str) -> str:
+  """Move or rename a file or directory inside the sandbox."""
+  try:
+    safe_src = get_safe_path(sandbox_dir, src)
+    safe_dest = get_safe_path(sandbox_dir, dest)
+    
+    if not os.path.exists(safe_src):
+      return f"Error: Source path '{src}' does not exist."
+      
+    dest_parent = os.path.dirname(safe_dest)
+    if not os.path.exists(dest_parent):
+      os.makedirs(dest_parent, exist_ok=True)
+      
+    import shutil
+    shutil.move(safe_src, safe_dest)
+    
+    rel_src = os.path.relpath(safe_src, sandbox_dir)
+    rel_dest = os.path.relpath(safe_dest, sandbox_dir)
+    return f"Successfully moved '{rel_src}' to '{rel_dest}'."
+  except Exception as e:
+    return f"Error moving file/directory: {str(e)}"
+
+
+def tool_copy_file(sandbox_dir: str, src: str, dest: str) -> str:
+  """Copy a file or directory inside the sandbox."""
+  try:
+    safe_src = get_safe_path(sandbox_dir, src)
+    safe_dest = get_safe_path(sandbox_dir, dest)
+    
+    if not os.path.exists(safe_src):
+      return f"Error: Source path '{src}' does not exist."
+      
+    dest_parent = os.path.dirname(safe_dest)
+    if not os.path.exists(dest_parent):
+      os.makedirs(dest_parent, exist_ok=True)
+      
+    import shutil
+    if os.path.isdir(safe_src):
+      shutil.copytree(safe_src, safe_dest, dirs_exist_ok=True)
+    else:
+      shutil.copy2(safe_src, safe_dest)
+      
+    rel_src = os.path.relpath(safe_src, sandbox_dir)
+    rel_dest = os.path.relpath(safe_dest, sandbox_dir)
+    return f"Successfully copied '{rel_src}' to '{rel_dest}'."
+  except Exception as e:
+    return f"Error copying file/directory: {str(e)}"
+
+
+def tool_delete_file(sandbox_dir: str, path: str) -> str:
+  """Delete a file or directory inside the sandbox."""
+  try:
+    safe_path = get_safe_path(sandbox_dir, path)
+    
+    if not os.path.exists(safe_path):
+      return f"Error: Path '{path}' does not exist."
+      
+    rel_path = os.path.relpath(safe_path, sandbox_dir)
+    import shutil
+    if os.path.isdir(safe_path):
+      shutil.rmtree(safe_path)
+      return f"Successfully deleted directory '{rel_path}'."
+    else:
+      os.remove(safe_path)
+      return f"Successfully deleted file '{rel_path}'."
+  except Exception as e:
+    return f"Error deleting file/directory: {str(e)}"
+
+
+def tool_make_directory(sandbox_dir: str, path: str) -> str:
+  """Create a new directory (and any parent directories) inside the sandbox."""
+  try:
+    safe_path = get_safe_path(sandbox_dir, path)
+    
+    if os.path.exists(safe_path):
+      if os.path.isdir(safe_path):
+        return f"Directory '{path}' already exists."
+      else:
+        return f"Error: Path '{path}' already exists but is a file."
+        
+    os.makedirs(safe_path, exist_ok=True)
+    rel_path = os.path.relpath(safe_path, sandbox_dir)
+    return f"Successfully created directory '{rel_path}'."
+  except Exception as e:
+    return f"Error creating directory: {str(e)}"
+
 
 # Define standard schemas for tools
 TOOLS_SCHEMA = [
+  {
+    "type": "function",
+    "function": {
+      "name": "move_file",
+      "description": "Move or rename a file or directory inside the sandboxed file system.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "src": {
+            "type": "string",
+            "description": "The source file or directory path relative to the sandbox root."
+          },
+          "dest": {
+            "type": "string",
+            "description": "The destination file or directory path relative to the sandbox root."
+          }
+        },
+        "required": ["src", "dest"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "copy_file",
+      "description": "Copy a file or directory inside the sandboxed file system.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "src": {
+            "type": "string",
+            "description": "The source file or directory path relative to the sandbox root."
+          },
+          "dest": {
+            "type": "string",
+            "description": "The destination file or directory path relative to the sandbox root."
+          }
+        },
+        "required": ["src", "dest"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_file",
+      "description": "Delete a file or directory inside the sandboxed file system.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The path to the file or directory to delete relative to the sandbox root."
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "make_directory",
+      "description": "Create a new directory (and any parent directories recursively) inside the sandboxed file system.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The directory path to create relative to the sandbox root."
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  },
     {
         "type": "function",
         "function": {
@@ -1088,7 +1250,29 @@ TOOLS_SCHEMA = [
 
 def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession") -> str:
   """Executes the specified tool with arguments in the sandbox directory."""
-  if name == "run_tests":
+  if name == "move_file":
+    src = arguments.get("src")
+    dest = arguments.get("dest")
+    if not src or not dest:
+      return "Error: Missing parameters 'src' and/or 'dest'."
+    return tool_move_file(session.sandbox, src, dest)
+  elif name == "copy_file":
+    src = arguments.get("src")
+    dest = arguments.get("dest")
+    if not src or not dest:
+      return "Error: Missing parameters 'src' and/or 'dest'."
+    return tool_copy_file(session.sandbox, src, dest)
+  elif name == "delete_file":
+    path = arguments.get("path")
+    if not path:
+      return "Error: Missing parameter 'path'."
+    return tool_delete_file(session.sandbox, path)
+  elif name == "make_directory":
+    path = arguments.get("path")
+    if not path:
+      return "Error: Missing parameter 'path'."
+    return tool_make_directory(session.sandbox, path)
+  elif name == "run_tests":
     return session.tool_run_tests(arguments.get("command"))
   elif name == "list_dir":
     return tool_list_dir(session.sandbox, arguments.get("path", "."), max_items=session.max_dir_items)
