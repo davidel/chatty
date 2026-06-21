@@ -1184,6 +1184,23 @@ class ChatbotSession:
           if shutil.which("go"):
             command = "go test ./..."
             
+        elif os.path.exists(os.path.join(self.sandbox, "CMakeLists.txt")):
+          if shutil.which("ctest"):
+            command = "ctest"
+          elif shutil.which("make"):
+            command = "make test"
+            
+        elif os.path.exists(os.path.join(self.sandbox, "Makefile")) or \
+             os.path.exists(os.path.join(self.sandbox, "makefile")):
+          if shutil.which("make"):
+            command = "make test"
+            
+        elif os.path.exists(os.path.join(self.sandbox, "meson.build")):
+          if shutil.which("meson"):
+            command = "meson test"
+          elif shutil.which("ninja"):
+            command = "ninja test"
+            
         if not command:
           return "Error: Could not auto-detect a test suite. Please specify a custom test 'command' (e.g. 'pytest', 'npm test')."
           
