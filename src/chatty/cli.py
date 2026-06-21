@@ -259,7 +259,7 @@ def tool_fetch_url(url: str, max_chars: int = 24000) -> str:
     return f"Error fetching URL: {str(e)}"
 
 
-def validate_file_syntax(path: str, content: str) -> Tuple[bool, str]:
+def validate_file_syntax(path: str, content: str, sandbox_dir: str = None, compile_paths: List[str] = None) -> Tuple[bool, str]:
   """
   Checks syntax of content based on file extension.
   Returns (True, "") if syntax is valid or language has no validator.
@@ -298,13 +298,22 @@ def validate_file_syntax(path: str, content: str) -> Tuple[bool, str]:
         temp_name = temp.name
       try:
         is_cpp = ext in (".cpp", ".hpp")
-        if is_cpp:
-          compiler = "clang++" if shutil.which("clang++") else "g++"
-        else:
-          compiler = "clang" if shutil.which("clang") else "gcc"
+        compiler = "clang++" if shutil.which("clang++") else "g++" if is_cpp else "clang" if shutil.which("clang") else "gcc"
+          
+        cmd_args = [compiler, "-fsyntax-only"]
+        target_dir = os.path.dirname(path) or "."
+        cmd_args.extend(["-I", target_dir])
+        if sandbox_dir:
+          for p in (compile_paths or []):
+            abs_p = os.path.abspath(os.path.join(sandbox_dir, p))
+            if os.path.isdir(abs_p):
+              cmd_args.extend(["-I", abs_p])
+            elif os.path.isfile(abs_p):
+              cmd_args.extend(["-I", os.path.dirname(abs_p)])
+        cmd_args.append(temp_name)
           
         proc = subprocess.run(
-          [compiler, "-fsyntax-only", temp_name],
+          cmd_args,
           stdout=subprocess.PIPE,
           stderr=subprocess.PIPE,
           text=True,
@@ -330,9 +339,33 @@ def validate_file_syntax(path: str, content: str) -> Tuple[bool, str]:
         temp.write(content)
         temp_name = temp.name
       try:
+        dir_name = os.path.dirname(path) or "."
+        search_dirs = {dir_name}
+        extra_files = []
+        if sandbox_dir:
+          try:
+            for root, dirs, files in os.walk(sandbox_dir):
+              if any(f.endswith((".v", ".sv", ".vh", ".svh")) for f in files):
+                search_dirs.add(root)
+          except Exception:
+            pass
+
+          for p in (compile_paths or []):
+            abs_p = os.path.abspath(os.path.join(sandbox_dir, p))
+            if os.path.isdir(abs_p):
+              search_dirs.add(abs_p)
+            elif os.path.isfile(abs_p):
+              extra_files.append(abs_p)
+              search_dirs.add(os.path.dirname(abs_p))
+
         if shutil.which("verilator"):
+          cmd_args = ["verilator", "--lint-only", "-Wno-fatal", "-Wno-MODMISSING"]
+          for s_dir in sorted(search_dirs):
+            cmd_args.extend(["-y", s_dir, f"-I{s_dir}"])
+          cmd_args.extend(extra_files)
+          cmd_args.append(temp_name)
           proc = subprocess.run(
-            ["verilator", "--lint-only", "-Wno-fatal", temp_name],
+            cmd_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -340,10 +373,18 @@ def validate_file_syntax(path: str, content: str) -> Tuple[bool, str]:
           )
           if proc.returncode != 0:
             err_msg = (proc.stderr + proc.stdout).replace(temp_name, os.path.basename(path))
-            return False, f"Verilator Lint Error:\n{err_msg}"
+            return False, (
+              f"Verilator Lint Error:\n{err_msg}\n"
+              "Note: If Verilator cannot resolve dependencies, make sure the required module or include files are present. "
+            )
         elif shutil.which("iverilog"):
+          cmd_args = ["iverilog", "-g2012", "-t", "null"]
+          for s_dir in sorted(search_dirs):
+            cmd_args.extend(["-y", s_dir, f"-I{s_dir}"])
+          cmd_args.extend(extra_files)
+          cmd_args.append(temp_name)
           proc = subprocess.run(
-            ["iverilog", "-g2012", "-t", "null", temp_name],
+            cmd_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -351,7 +392,9 @@ def validate_file_syntax(path: str, content: str) -> Tuple[bool, str]:
           )
           if proc.returncode != 0:
             err_msg = (proc.stderr + proc.stdout).replace(temp_name, os.path.basename(path))
-            return False, f"Icarus Verilog Syntax Error:\n{err_msg}"
+            return False, (
+              f"Icarus Verilog Syntax Error:\n{err_msg}\n"
+            )
       finally:
         try:
           os.unlink(temp_name)
@@ -370,8 +413,17 @@ def validate_file_syntax(path: str, content: str) -> Tuple[bool, str]:
         temp_name = temp.name
       try:
         if shutil.which("ghdl"):
+          cmd_args = ["ghdl", "-s"]
+          if sandbox_dir:
+            for p in (compile_paths or []):
+              abs_p = os.path.abspath(os.path.join(sandbox_dir, p))
+              if os.path.isdir(abs_p):
+                cmd_args.append(f"-P{abs_p}")
+              elif os.path.isfile(abs_p):
+                cmd_args.append(f"-P{os.path.dirname(abs_p)}")
+          cmd_args.append(temp_name)
           proc = subprocess.run(
-            ["ghdl", "-s", temp_name],
+            cmd_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -431,11 +483,11 @@ def print_diff(path: str, old_content: str, new_content: str):
   ))
 
 
-def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
+def tool_write_file(sandbox_dir: str, path: str, content: str, compile_paths: List[str] = None) -> str:
   """Write text content to a file inside the sandbox."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
-    is_valid, err_msg = validate_file_syntax(safe_p, content)
+    is_valid, err_msg = validate_file_syntax(safe_p, content, sandbox_dir, compile_paths)
     if not is_valid:
       return f"Error: Syntax verification failed. File was not saved.\n{err_msg}"
       
@@ -509,7 +561,7 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_result
     return f"Error searching files: {str(e)}"
 
 
-def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> str:
+def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str, compile_paths: List[str] = None) -> str:
   """Replace a specific unique block of text/code in a file with new content."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -549,7 +601,7 @@ def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> s
     else:
       new_content = updated_normalized
       
-    is_valid, err_msg = validate_file_syntax(safe_p, new_content)
+    is_valid, err_msg = validate_file_syntax(safe_p, new_content, sandbox_dir, compile_paths)
     if not is_valid:
       return f"Error: Syntax verification failed for updated file content. Patch was not applied.\n{err_msg}"
       
@@ -563,7 +615,7 @@ def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> s
     return f"Error patching file: {str(e)}"
 
 
-def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int, replacement: str) -> str:
+def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int, replacement: str, compile_paths: List[str] = None) -> str:
   """Replace a range of lines in a file (1-indexed, inclusive) with new content."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -599,7 +651,7 @@ def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int,
     lines[slice_start:slice_end] = replacement_lines_formatted
     
     new_content = "".join(lines)
-    is_valid, err_msg = validate_file_syntax(safe_p, new_content)
+    is_valid, err_msg = validate_file_syntax(safe_p, new_content, sandbox_dir, compile_paths)
     if not is_valid:
       return f"Error: Syntax verification failed for updated file content. Line edits were not applied.\n{err_msg}"
       
@@ -788,6 +840,13 @@ TOOLS_SCHEMA = [
                     "replace": {
                         "type": "string",
                         "description": "The new code/text to replace the search block with."
+                    },
+                    "compile_paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional list of files or directories (relative to sandbox) containing compile-time dependencies, library search paths, or include paths needed for syntax verification."
                     }
                 },
                 "required": ["path", "search", "replace"]
@@ -817,6 +876,13 @@ TOOLS_SCHEMA = [
                     "replacement": {
                         "type": "string",
                         "description": "The new text/code content to insert in place of the specified lines."
+                    },
+                    "compile_paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional list of files or directories (relative to sandbox) containing compile-time dependencies, library search paths, or include paths needed for syntax verification."
                     }
                 },
                 "required": ["path", "start_line", "end_line", "replacement"]
@@ -879,6 +945,13 @@ TOOLS_SCHEMA = [
                     "content": {
                         "type": "string",
                         "description": "The complete content to write into the file."
+                    },
+                    "compile_paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional list of files or directories (relative to sandbox) containing compile-time dependencies, library search paths, or include paths needed for syntax verification."
                     }
                 },
                 "required": ["path", "content"]
@@ -999,13 +1072,13 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_tests",
-            "description": "Run tests for the project. Auto-detects standard test runners (pytest, npm test, cargo test, go test, ctest, make test, meson test) or executes a custom test command.",
+            "description": "Run tests, linting, or verification suites for the project (e.g., pytest, verilator, iverilog, npm test, cargo test, go test, ctest, make test, meson test) or executes a custom test command.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Optional custom command to run tests (e.g. 'pytest tests/test_math.py', 'make test'). If omitted, the chatbot will attempt to auto-detect and run the project's test suite."
+                        "description": "Optional custom command to run tests/linting (e.g., 'pytest tests/test_math.py', 'make test', or 'verilator --lint-only -y src -Isrc/include src/top.sv'). Specify any required include paths, library search paths, or source files directly in the command string."
                     }
                 }
             }
@@ -1032,18 +1105,21 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
   elif name == "write_file":
     path = arguments.get("path")
     content = arguments.get("content")
+    compile_paths = arguments.get("compile_paths")
     if not path or content is None:
       return "Error: Missing parameters 'path' and 'content'."
-    return tool_write_file(session.sandbox, path, content)
+    return tool_write_file(session.sandbox, path, content, compile_paths)
   elif name == "patch_file":
     path = arguments.get("path")
     search = arguments.get("search")
     replace = arguments.get("replace")
+    compile_paths = arguments.get("compile_paths")
     if not path or search is None or replace is None:
       return "Error: Missing parameters 'path', 'search', or 'replace'."
-    return tool_patch_file(session.sandbox, path, search, replace)
+    return tool_patch_file(session.sandbox, path, search, replace, compile_paths)
   elif name == "edit_lines":
     path = arguments.get("path")
+    compile_paths = arguments.get("compile_paths")
     try:
       start_line = int(arguments.get("start_line"))
       end_line = int(arguments.get("end_line"))
@@ -1052,7 +1128,7 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
     replacement = arguments.get("replacement")
     if not path or replacement is None:
       return "Error: Missing parameters 'path' or 'replacement'."
-    return tool_edit_lines(session.sandbox, path, start_line, end_line, replacement)
+    return tool_edit_lines(session.sandbox, path, start_line, end_line, replacement, compile_paths)
   elif name == "format_file":
     path = arguments.get("path")
     if not path:
