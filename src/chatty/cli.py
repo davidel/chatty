@@ -52,7 +52,7 @@ def get_safe_path(sandbox_dir: str, target_path: str) -> str:
     )
   return resolved_path
 
-def tool_list_dir(sandbox_dir: str, path: str = ".") -> str:
+def tool_list_dir(sandbox_dir: str, path: str = ".", max_items: int = 200) -> str:
     """List the contents of a directory path inside the sandbox."""
     try:
         safe_p = get_safe_path(sandbox_dir, path)
@@ -62,8 +62,14 @@ def tool_list_dir(sandbox_dir: str, path: str = ".") -> str:
             return f"Error: Path '{path}' is not a directory."
             
         items = os.listdir(safe_p)
+        sorted_items = sorted(items)
+        truncated = False
+        if len(sorted_items) > max_items:
+            sorted_items = sorted_items[:max_items]
+            truncated = True
+            
         result = []
-        for item in sorted(items):
+        for item in sorted_items:
             full_path = os.path.join(safe_p, item)
             rel_path = os.path.relpath(full_path, sandbox_dir)
             if os.path.isdir(full_path):
@@ -71,11 +77,14 @@ def tool_list_dir(sandbox_dir: str, path: str = ".") -> str:
             else:
                 size = os.path.getsize(full_path)
                 result.append(f"[FILE] {rel_path} ({size} bytes)")
-        return "\n".join(result) if result else "(Empty directory)"
+        output_str = "\n".join(result) if result else "(Empty directory)"
+        if truncated:
+            output_str += f"\n\n[WARNING: Directory listing truncated. Showing first {max_items} of {len(items)} items.]"
+        return output_str
     except Exception as e:
         return f"Error listing directory: {str(e)}"
 
-def tool_read_file(sandbox_dir: str, path: str, start_line: int = None, end_line: int = None) -> str:
+def tool_read_file(sandbox_dir: str, path: str, start_line: int = None, end_line: int = None, max_chars: int = 40000) -> str:
   """Read the contents of a file inside the sandbox, optionally specifying a 1-indexed line range."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -86,7 +95,10 @@ def tool_read_file(sandbox_dir: str, path: str, start_line: int = None, end_line
       
     with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
       if start_line is None and end_line is None:
-        return f.read()
+        content = f.read()
+        if len(content) > max_chars:
+          return content[:max_chars] + f"\n\n[WARNING: File '{path}' is too large ({len(content)} characters) and has been truncated. Use 'start_line' and 'end_line' parameters to read specific sections.]"
+        return content
         
       lines = f.readlines()
       total_lines = len(lines)
@@ -212,7 +224,7 @@ def tool_get_file_info(sandbox_dir: str, path: str) -> str:
     return f"Error getting file info: {str(e)}"
 
 
-def tool_fetch_url(url: str) -> str:
+def tool_fetch_url(url: str, max_chars: int = 24000) -> str:
   """Fetch the text content of a public URL and convert it to clean text (removes HTML tags)."""
   try:
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -234,7 +246,10 @@ def tool_fetch_url(url: str) -> str:
         cleaned_lines.append(stripped)
       elif cleaned_lines and cleaned_lines[-1] != "":
         cleaned_lines.append("")
-    return "\n".join(cleaned_lines).strip()
+    full_text = "\n".join(cleaned_lines).strip()
+    if len(full_text) > max_chars:
+      return full_text[:max_chars] + f"\n\n[WARNING: URL content truncated. Total length: {len(full_text)} characters.]"
+    return full_text
   except Exception as e:
     return f"Error fetching URL: {str(e)}"
 
@@ -439,7 +454,7 @@ def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
   except Exception as e:
     return f"Error writing file: {str(e)}"
 
-def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".") -> str:
+def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_results: int = 100) -> str:
   """Search for a regex pattern inside files in the sandbox, ignoring files in .gitignore and common cache directories."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -473,9 +488,17 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".") -> str:
             for line_num, line in enumerate(f, 1):
               if regex.search(line):
                 results.append(f"{rel_path}:{line_num}: {line.strip()}")
+                if len(results) >= max_results:
+                  break
         except Exception:
           continue
+        if len(results) >= max_results:
+          break
+      if len(results) >= max_results:
+        break
           
+    if len(results) >= max_results:
+      return "\n".join(results) + f"\n\n[WARNING: Search results truncated to {max_results} matches. Please refine your regex pattern to filter more specifically.]"
     return "\n".join(results) if results else "No matches found."
   except Exception as e:
     return f"Error searching files: {str(e)}"
@@ -990,7 +1013,7 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
   if name == "run_tests":
     return session.tool_run_tests(arguments.get("command"))
   elif name == "list_dir":
-    return tool_list_dir(session.sandbox, arguments.get("path", "."))
+    return tool_list_dir(session.sandbox, arguments.get("path", "."), max_items=session.max_dir_items)
   elif name == "read_file":
     path = arguments.get("path")
     if not path:
@@ -1000,7 +1023,7 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
       end_line = int(arguments.get("end_line")) if arguments.get("end_line") is not None else None
     except (ValueError, TypeError):
       return "Error: start_line and end_line must be valid integers."
-    return tool_read_file(session.sandbox, path, start_line, end_line)
+    return tool_read_file(session.sandbox, path, start_line, end_line, max_chars=session.max_read_chars)
   elif name == "write_file":
     path = arguments.get("path")
     content = arguments.get("content")
@@ -1035,7 +1058,7 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
     path = arguments.get("path", ".")
     if not pattern:
       return "Error: Missing parameter 'pattern'."
-    return tool_search_grep(session.sandbox, pattern, path)
+    return tool_search_grep(session.sandbox, pattern, path, max_results=session.max_grep_results)
   elif name == "run_command":
     command = arguments.get("command")
     if not command:
@@ -1061,7 +1084,7 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
     url = arguments.get("url")
     if not url:
       return "Error: Missing parameter 'url'."
-    return tool_fetch_url(url)
+    return tool_fetch_url(url, max_chars=session.max_url_chars)
   else:
     return f"Error: Tool '{name}' is not recognized."
 
@@ -1136,6 +1159,15 @@ def count_tokens(text: str) -> int:
         # Fallback approximation (roughly 4 characters per token for English text)
         return len(text) // 4
 
+
+def truncate_output(text: str, max_chars: int = 16000) -> str:
+  """Truncates output in the middle if it exceeds max_chars."""
+  if len(text) <= max_chars:
+    return text
+  half = max_chars // 2
+  truncated_chars = len(text) - max_chars
+  return f"{text[:half]}\n\n... [TRUNCATED {truncated_chars} CHARACTERS OF OUTPUT] ...\n\n{text[-half:]}"
+
 def get_ollama_models(url: str) -> List[str]:
     """Queries local Ollama instance for installed models."""
     try:
@@ -1152,7 +1184,7 @@ def get_ollama_models(url: str) -> List[str]:
 # --- Chatbot Session Manager ---
 
 class ChatbotSession:
-    def __init__(self, provider: str, model: str, context_size: int, sandbox: str, api_key: str = None, url: str = None, max_loops: int = 20, system_prompt_override: str = None, prompt_mode: str = "replace", skills_paths: List[str] = None):
+    def __init__(self, provider: str, model: str, context_size: int, sandbox: str, api_key: str = None, url: str = None, max_loops: int = 20, system_prompt_override: str = None, prompt_mode: str = "replace", skills_paths: List[str] = None, max_read_chars: int = 40000, max_grep_results: int = 100, max_command_chars: int = 16000, max_history_tool_chars: int = 1000, history_keep_messages: int = 4, max_url_chars: int = 24000, max_dir_items: int = 200):
         self.provider = provider
         self.model = model
         self.context_size = context_size
@@ -1163,6 +1195,15 @@ class ChatbotSession:
         self.background_commands = {}
         self.next_task_id = 1
         self.skills_paths = skills_paths or []
+        
+        # Cutoff limits configurations
+        self.max_read_chars = max_read_chars
+        self.max_grep_results = max_grep_results
+        self.max_command_chars = max_command_chars
+        self.max_history_tool_chars = max_history_tool_chars
+        self.history_keep_messages = history_keep_messages
+        self.max_url_chars = max_url_chars
+        self.max_dir_items = max_dir_items
         
         # Internal state
         self.messages: List[Dict[str, Any]] = []
@@ -1396,9 +1437,9 @@ class ChatbotSession:
             pass
           output = []
           if stdout:
-            output.append(f"Stdout:\n{stdout}")
+            output.append(f"Stdout:\n{truncate_output(stdout, max_chars=self.max_command_chars)}")
           if stderr:
-            output.append(f"Stderr:\n{stderr}")
+            output.append(f"Stderr:\n{truncate_output(stderr, max_chars=self.max_command_chars)}")
           status = f"Command exited with code {proc.returncode}."
           return "\n".join(output) + f"\n{status}" if output else status
         except subprocess.TimeoutExpired:
@@ -1450,9 +1491,9 @@ class ChatbotSession:
             stderr_content = ""
         output = []
         if stdout_content:
-            output.append(f"Stdout:\n{stdout_content}")
+            output.append(f"Stdout:\n{truncate_output(stdout_content, max_chars=self.max_command_chars)}")
         if stderr_content:
-            output.append(f"Stderr:\n{stderr_content}")
+            output.append(f"Stderr:\n{truncate_output(stderr_content, max_chars=self.max_command_chars)}")
         if status is None:
             return (
                 f"Status: Task '{task_id}' is STILL RUNNING.\n"
@@ -1493,7 +1534,7 @@ class ChatbotSession:
         self.background_commands.clear()
 
     def prune_history(self) -> List[Dict[str, Any]]:
-      """Prunes conversation history to respect the configured context size."""
+      """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
       sys_prompt = self.get_active_system_prompt()
       system_msg = {"role": "system", "content": sys_prompt}
       sys_tokens = count_tokens(sys_prompt)
@@ -1501,11 +1542,29 @@ class ChatbotSession:
       if sys_tokens >= self.context_size:
         return [system_msg]
         
+      processed_messages = []
+      total_msgs = len(self.messages)
+      
+      for idx, msg in enumerate(self.messages):
+        cloned_msg = dict(msg)
+        # Compress tool outputs that are not part of the active window
+        if cloned_msg.get("role") == "tool" and idx < total_msgs - self.history_keep_messages:
+          content = cloned_msg.get("content") or ""
+          if len(content) > self.max_history_tool_chars:
+            half = self.max_history_tool_chars // 2
+            truncated_len = len(content) - self.max_history_tool_chars
+            cloned_msg["content"] = (
+              f"{content[:half]}\n\n"
+              f"... [TRUNCATED {truncated_len} CHARACTERS OF HISTORICAL TOOL OUTPUT] ...\n\n"
+              f"{content[-half:]}"
+            )
+        processed_messages.append(cloned_msg)
+        
       pruned = []
       accumulated_tokens = sys_tokens
       
       # Process from newest to oldest
-      for msg in reversed(self.messages):
+      for msg in reversed(processed_messages):
         content = msg.get("content") or ""
         # Estimate tool call tokens
         if msg.get("tool_calls"):
@@ -2030,6 +2089,48 @@ def main():
         "--url", "-u",
         help="API Base URL override (defaults to Ollama local endpoint or OpenRouter base URL)."
     )
+    parser.add_argument(
+        "--max-read-chars",
+        type=int,
+        default=40000,
+        help="Max characters to read from a file during full read tool execution (default: 40000)."
+    )
+    parser.add_argument(
+        "--max-grep-results",
+        type=int,
+        default=100,
+        help="Max results returned by regex search tool (default: 100)."
+    )
+    parser.add_argument(
+        "--max-command-chars",
+        type=int,
+        default=16000,
+        help="Max characters returned from standard output/error of a shell command (default: 16000)."
+    )
+    parser.add_argument(
+        "--max-history-tool-chars",
+        type=int,
+        default=1000,
+        help="Max characters to keep in historical tool outputs before compression (default: 1000)."
+    )
+    parser.add_argument(
+        "--history-keep-messages",
+        type=int,
+        default=4,
+        help="Number of recent messages to keep fully uncompressed (default: 4)."
+    )
+    parser.add_argument(
+        "--max-url-chars",
+        type=int,
+        default=24000,
+        help="Max characters returned from fetched URLs (default: 24000)."
+    )
+    parser.add_argument(
+        "--max-dir-items",
+        type=int,
+        default=200,
+        help="Max items listed by the directory list tool (default: 200)."
+    )
     
     args = parser.parse_args()
     
@@ -2072,7 +2173,14 @@ def main():
         max_loops=args.max_loops,
         system_prompt_override=custom_system_prompt,
         prompt_mode=args.prompt_mode,
-        skills_paths=args.skills_path
+        skills_paths=args.skills_path,
+        max_read_chars=args.max_read_chars,
+        max_grep_results=args.max_grep_results,
+        max_command_chars=args.max_command_chars,
+        max_history_tool_chars=args.max_history_tool_chars,
+        history_keep_messages=args.history_keep_messages,
+        max_url_chars=args.max_url_chars,
+        max_dir_items=args.max_dir_items
     )
     
     chat_session.start_loop()
