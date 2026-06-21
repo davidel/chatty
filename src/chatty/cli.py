@@ -820,12 +820,30 @@ TOOLS_SCHEMA = [
                 "required": ["url"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tests",
+            "description": "Run tests for the project. Auto-detects standard test runners (pytest, npm test, cargo test, go test) or executes a custom test command.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Optional custom command to run tests (e.g. 'pytest tests/test_math.py'). If omitted, the chatbot will attempt to auto-detect and run the project's test suite."
+                    }
+                }
+            }
+        }
     }
 ]
 
 def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession") -> str:
   """Executes the specified tool with arguments in the sandbox directory."""
-  if name == "list_dir":
+  if name == "run_tests":
+    return session.tool_run_tests(arguments.get("command"))
+  elif name == "list_dir":
     return tool_list_dir(session.sandbox, arguments.get("path", "."))
   elif name == "read_file":
     path = arguments.get("path")
@@ -1137,6 +1155,42 @@ class ChatbotSession:
                 base_url=base,
                 api_key=key
             )
+
+    def tool_run_tests(self, command: str = None) -> str:
+      """Run tests in the sandbox, auto-detecting the testing framework if no command is provided."""
+      import os
+      import shutil
+
+      detected_msg = ""
+      if not command:
+        if os.path.exists(os.path.join(self.sandbox, "pytest.ini")) or \
+           os.path.exists(os.path.join(self.sandbox, "conftest.py")) or \
+           os.path.isdir(os.path.join(self.sandbox, "tests")) or \
+           os.path.isdir(os.path.join(self.sandbox, "test")):
+          if shutil.which("pytest"):
+            command = "pytest"
+          else:
+            command = "python -m unittest discover"
+            
+        elif os.path.exists(os.path.join(self.sandbox, "package.json")):
+          if shutil.which("npm"):
+            command = "npm test"
+            
+        elif os.path.exists(os.path.join(self.sandbox, "Cargo.toml")):
+          if shutil.which("cargo"):
+            command = "cargo test"
+            
+        elif os.path.exists(os.path.join(self.sandbox, "go.mod")):
+          if shutil.which("go"):
+            command = "go test ./..."
+            
+        if not command:
+          return "Error: Could not auto-detect a test suite. Please specify a custom test 'command' (e.g. 'pytest', 'npm test')."
+          
+        detected_msg = f"Auto-detected test command: '{command}'\n"
+
+      result = self.tool_run_command(command)
+      return detected_msg + result
 
     def tool_run_command(self, command: str) -> str:
       """Execute a shell command, transitioning to background execution if it takes too long."""
