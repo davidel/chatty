@@ -129,5 +129,37 @@ class TestCutoffs(unittest.TestCase):
         # Msg 2 (within active keep window of last 2 messages) should remain raw/untruncated
         self.assertEqual(msg2_pruned["content"], "y" * 200)
 
+    def test_session_logging(self):
+        import logging
+        log_filepath = os.path.join(self.sandbox_dir, "test_chatty.log")
+        
+        # Manually configure a file handler for the 'chatty' logger
+        chatty_logger = logging.getLogger("chatty")
+        chatty_logger.setLevel(logging.INFO)
+        handler = logging.FileHandler(log_filepath, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        chatty_logger.addHandler(handler)
+        
+        try:
+            # Instantiate session, which should write logs
+            session = ChatbotSession(
+                provider="ollama",
+                model="mock-model-logging",
+                context_size=10000,
+                sandbox=self.sandbox_dir
+            )
+            
+            # Close handler to flush contents to disk
+            handler.close()
+            
+            # Verify log file exists and contains initialization info
+            self.assertTrue(os.path.exists(log_filepath))
+            with open(log_filepath, "r") as f:
+                log_content = f.read()
+            self.assertIn("ChatbotSession initialized", log_content)
+            self.assertIn("mock-model-logging", log_content)
+        finally:
+            chatty_logger.removeHandler(handler)
+
 if __name__ == "__main__":
     unittest.main()

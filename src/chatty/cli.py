@@ -8,7 +8,11 @@ import urllib.parse
 import requests
 import openai
 import tiktoken
+import logging
 from typing import List, Dict, Any, Tuple
+
+# Initialize module logger
+logger = logging.getLogger("chatty")
 
 # Rich imports for beautiful terminal output
 from rich.console import Console
@@ -1238,6 +1242,7 @@ class ChatbotSession:
         # Load active skills
         self.skills = {}
         self.load_skills()
+        logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}")
 
     def load_skills(self):
       """Scans all configured skills directories and loads/merges valid skill definitions."""
@@ -1292,10 +1297,12 @@ class ChatbotSession:
                   pass
         except Exception:
           pass
+      logger.info(f"Loaded {len(self.skills)} skills: {list(self.skills.keys())}")
 
     def get_active_system_prompt(self) -> str:
       """Returns system prompt integrated with dynamically activated skills."""
       active_skills = []
+      active_names = []
       last_user_msg = ""
       for msg in reversed(self.messages):
         if msg.get("role") == "user":
@@ -1320,8 +1327,10 @@ class ChatbotSession:
           
         if match:
           active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+          active_names.append(meta.get("name"))
           
       if active_skills:
+        logger.info(f"System prompt built with activated skills: {active_names}")
         skills_text = "\n\n".join(active_skills)
         return f"{self.system_prompt}\n\n## Activated Skills\n{skills_text}"
       return self.system_prompt
@@ -1403,6 +1412,7 @@ class ChatbotSession:
 
     def tool_run_command(self, command: str) -> str:
       """Execute a shell command, transitioning to background execution if it takes too long."""
+      logger.info(f"Running shell command: '{command}'")
       import subprocess
       import os
       import tempfile
@@ -1441,10 +1451,12 @@ class ChatbotSession:
           if stderr:
             output.append(f"Stderr:\n{truncate_output(stderr, max_chars=self.max_command_chars)}")
           status = f"Command exited with code {proc.returncode}."
+          logger.info(f"Command completed in foreground. Exit code: {proc.returncode}")
           return "\n".join(output) + f"\n{status}" if output else status
         except subprocess.TimeoutExpired:
           task_id = f"task_{self.next_task_id}"
           self.next_task_id += 1
+          logger.info(f"Command timed out. Transitioned to background. Task ID: {task_id}")
           self.background_commands[task_id] = {
             "proc": proc,
             "command": command,
@@ -1476,8 +1488,10 @@ class ChatbotSession:
     def tool_check_background_command(self, task_id: str) -> str:
         """Check status of a background task and read its currently accumulated stdout and stderr."""
         import os
+        logger.info(f"Checking status of background task: '{task_id}'")
         task = self.background_commands.get(task_id)
         if not task:
+            logger.warning(f"Check background task failed: Task ID '{task_id}' not found")
             return f"Error: Task ID '{task_id}' not found."
         proc = task["proc"]
         status = proc.poll()
@@ -1495,11 +1509,13 @@ class ChatbotSession:
         if stderr_content:
             output.append(f"Stderr:\n{truncate_output(stderr_content, max_chars=self.max_command_chars)}")
         if status is None:
+            logger.info(f"Task '{task_id}' is STILL RUNNING.")
             return (
                 f"Status: Task '{task_id}' is STILL RUNNING.\n"
                 + ("\n".join(output) if output else "(No output generated yet)")
             )
         else:
+            logger.info(f"Task '{task_id}' FINISHED with exit code {status}.")
             try:
                 task["stdout_file"].close()
                 task["stderr_file"].close()
@@ -1517,6 +1533,8 @@ class ChatbotSession:
         """Kills all active background tasks and removes temporary files."""
         import os
         import signal
+        if self.background_commands:
+            logger.info(f"Cleaning up {len(self.background_commands)} background commands...")
         for task_id, task in list(self.background_commands.items()):
             proc = task["proc"]
             if proc.poll() is None:
@@ -1532,6 +1550,7 @@ class ChatbotSession:
             except Exception:
                 pass
         self.background_commands.clear()
+        logger.info("Background commands cleanup finished.")
 
     def prune_history(self) -> List[Dict[str, Any]]:
       """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
@@ -1580,6 +1599,7 @@ class ChatbotSession:
         pruned.insert(0, msg)
         accumulated_tokens += msg_tokens
         
+      logger.info(f"Pruning history: kept {len(pruned)} out of {total_msgs} messages (accumulated tokens: {accumulated_tokens})")
       # Filter orphaned tool messages
       defined_ids = set()
       for msg in pruned:
@@ -1663,6 +1683,7 @@ class ChatbotSession:
         self.load_skills()
         max_tool_loops = self.max_loops
         loop_count = 0
+        logger.info(f"Starting LLM cycle. Max sequential tool loops: {max_tool_loops}")
         
         while loop_count < max_tool_loops:
             # Prepare message payloads based on limit settings
@@ -1672,6 +1693,7 @@ class ChatbotSession:
             tool_calls_accumulated = []
             content_accumulated = ""
             
+            logger.info(f"Loop {loop_count + 1}/{max_tool_loops}: Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
             try:
                 # Live rendering console helper
                 with Live(Panel("Connecting to LLM...", title="Assistant", border_style="green"), 
@@ -1722,8 +1744,9 @@ class ChatbotSession:
                                 # Render loading indicator
                                 live.update(Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
                                                   title="System", border_style="yellow"))
-                                
+                logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
             except Exception as e:
+                logger.exception("Error calling LLM API")
                 console.print(f"[bold red]Error calling API:[/bold red] {str(e)}")
                 break
                 
@@ -1783,6 +1806,7 @@ class ChatbotSession:
                         title="🔧 Executing Tool",
                         border_style="yellow"
                     ))
+                    logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
                     t_result = execute_tool(t_name, args_parsed, self)
                     
                 # Print result summary nicely
@@ -1791,6 +1815,9 @@ class ChatbotSession:
                     title="🔧 Tool Result",
                     border_style="dim yellow"
                 ))
+                
+                truncated = "TRUNCATED" in t_result or "truncated" in t_result.lower() or "WARNING" in t_result
+                logger.info(f"Tool {t_name} (id={t_id}) completed. Result size: {len(t_result)} characters (truncated: {truncated})")
                 
                 # Record result for context
                 self.messages.append({
@@ -2012,12 +2039,14 @@ class ChatbotSession:
                     
                 # Check for slash commands
                 if user_input.strip().startswith("/"):
+                    logger.info(f"Slash Command: {user_input.strip()}")
                     should_continue = self.handle_command(user_input)
                     if not should_continue:
                         break
                     continue
                     
                 # Append user query to history and execute loop
+                logger.info(f"User Input: {user_input}")
                 self.messages.append({"role": "user", "content": user_input})
                 self.run_llm_cycle()
                 
@@ -2030,6 +2059,7 @@ class ChatbotSession:
                 console.print("\n[bold green]Goodbye![/bold green]")
                 break
             except Exception as e:
+                logger.exception("Unexpected error in CLI loop")
                 console.print(f"[bold red]Unexpected error in CLI loop:[/bold red] {str(e)}")
 
 # --- CLI Main Entrance ---
@@ -2131,8 +2161,31 @@ def main():
         default=200,
         help="Max items listed by the directory list tool (default: 200)."
     )
+    parser.add_argument(
+        "--log-file",
+        default="chatty.log",
+        help="Path to the file where operations will be logged (default: chatty.log). Set to empty string to disable logging."
+    )
+    parser.add_argument(
+        "--log-level",
+        default="info",
+        choices=["debug", "info", "warning", "error"],
+        help="Logging level (default: info)."
+    )
     
     args = parser.parse_args()
+    
+    # Initialize logging
+    if args.log_file:
+        log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+        logging.basicConfig(
+            filename=args.log_file,
+            level=log_level,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            encoding="utf-8"
+        )
+        logger.info("==========================================")
+        logger.info(f"Logging initialized to '{args.log_file}' (level: {args.log_level}).")
     
     # Load system prompt from file if specified
     custom_system_prompt = None
