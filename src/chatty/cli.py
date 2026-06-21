@@ -206,8 +206,35 @@ def tool_locate_files(sandbox_dir: str, pattern: str, path: str = ".") -> str:
     return f"Error locating files: {str(e)}"
 
 
+def is_text_file(file_path: str) -> bool:
+  """Check if a file is a text file by scanning for null bytes."""
+  try:
+    with open(file_path, "rb") as f:
+      chunk = f.read(8192)
+      return b"\0" not in chunk
+  except Exception:
+    return False
+
+
+def count_lines(file_path: str) -> int:
+  """Count the number of lines in a text file."""
+  count = 0
+  try:
+    with open(file_path, "rb") as f:
+      last_char = None
+      for chunk in iter(lambda: f.read(65536), b""):
+        if chunk:
+          count += chunk.count(b"\n")
+          last_char = chunk[-1]
+      if last_char is not None and last_char != 10:
+        count += 1
+  except Exception:
+    pass
+  return count
+
+
 def tool_get_file_info(sandbox_dir: str, path: str) -> str:
-  """Get metadata info (size, last modified, type) about a path inside the sandbox."""
+  """Get metadata info (size, last modified, type, and line count for text files) about a path."""
   import time
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -224,6 +251,9 @@ def tool_get_file_info(sandbox_dir: str, path: str) -> str:
       f"Size: {stat.st_size} bytes",
       f"Last Modified: {mtime}"
     ]
+    if not is_dir and is_text_file(safe_p):
+      info.append(f"Lines: {count_lines(safe_p)}")
+      
     return "\n".join(info)
   except Exception as e:
     return f"Error getting file info: {str(e)}"
@@ -1200,7 +1230,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_file_info",
-            "description": "Get metadata info (size, last modified, type) about a path inside the sandbox.",
+            "description": "Get metadata info (size, last modified, type, and line count for text files) about a path inside the sandbox.",
             "parameters": {
                 "type": "object",
                 "properties": {

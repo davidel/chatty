@@ -11,7 +11,8 @@ from chatty.cli import (
   tool_move_file,
   tool_copy_file,
   tool_delete_file,
-  tool_make_directory
+  tool_make_directory,
+  tool_get_file_info
 )
 
 class TestSandboxOps(unittest.TestCase):
@@ -146,6 +147,49 @@ class TestSandboxOps(unittest.TestCase):
     # Test sandbox traversal
     res = tool_delete_file(self.sandbox_dir, "../outside.txt")
     self.assertIn("Access Denied", res)
+
+  def test_get_file_info(self):
+    # Test non-existent path
+    res = tool_get_file_info(self.sandbox_dir, "nonexistent.txt")
+    self.assertIn("does not exist", res)
+
+    # Test directory info (should not have "Lines:")
+    dir_name = "test_dir"
+    os.makedirs(os.path.join(self.sandbox_dir, dir_name))
+    res = tool_get_file_info(self.sandbox_dir, dir_name)
+    self.assertIn("Type: Directory", res)
+    self.assertNotIn("Lines:", res)
+
+    # Test empty text file info
+    empty_file = "empty.txt"
+    with open(os.path.join(self.sandbox_dir, empty_file), "w") as f:
+      pass
+    res = tool_get_file_info(self.sandbox_dir, empty_file)
+    self.assertIn("Type: File", res)
+    self.assertIn("Lines: 0", res)
+
+    # Test text file with standard newlines
+    text_file = "text.txt"
+    with open(os.path.join(self.sandbox_dir, text_file), "w") as f:
+      f.write("line1\nline2\nline3\n")
+    res = tool_get_file_info(self.sandbox_dir, text_file)
+    self.assertIn("Lines: 3", res)
+
+    # Test text file without trailing newline
+    text_file_no_trail = "text_no_trail.txt"
+    with open(os.path.join(self.sandbox_dir, text_file_no_trail), "w") as f:
+      f.write("line1\nline2")
+    res = tool_get_file_info(self.sandbox_dir, text_file_no_trail)
+    self.assertIn("Lines: 2", res)
+
+    # Test binary file (should not have "Lines:")
+    bin_file = "binary.bin"
+    with open(os.path.join(self.sandbox_dir, bin_file), "wb") as f:
+      f.write(b"hello\x00world\n")
+    res = tool_get_file_info(self.sandbox_dir, bin_file)
+    self.assertIn("Type: File", res)
+    self.assertNotIn("Lines:", res)
+
 
 if __name__ == "__main__":
   unittest.main()
