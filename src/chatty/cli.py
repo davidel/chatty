@@ -10,7 +10,7 @@ import openai
 import tiktoken
 import logging
 import datetime
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 # Initialize module logger
 logger = logging.getLogger("chatty")
@@ -541,7 +541,7 @@ def tool_write_file(sandbox_dir: str, path: str, content: str, compile_paths: Li
   except Exception as e:
     return f"Error writing file: {str(e)}"
 
-def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_results: int = 100) -> str:
+def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_results: int = 100, line_numbers: bool = False) -> str:
   """Search for a regex pattern inside files in the sandbox, ignoring files in .gitignore and common cache directories."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -558,7 +558,10 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_result
         with open(safe_p, 'r', encoding='utf-8', errors='ignore') as f:
           for line_num, line in enumerate(f, 1):
             if regex.search(line):
-              results.append(f"{rel_path}:{line_num}: {line.strip()}")
+              if line_numbers:
+                results.append(f"{rel_path}:{line_num}: {line.strip()}")
+              else:
+                results.append(f"{rel_path}: {line.strip()}")
               if len(results) >= max_results:
                 break
     else:
@@ -584,7 +587,10 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_result
             with open(safe_file_path, 'r', encoding='utf-8', errors='ignore') as f:
               for line_num, line in enumerate(f, 1):
                 if regex.search(line):
-                  results.append(f"{rel_path}:{line_num}: {line.strip()}")
+                  if line_numbers:
+                    results.append(f"{rel_path}:{line_num}: {line.strip()}")
+                  else:
+                    results.append(f"{rel_path}: {line.strip()}")
                   if len(results) >= max_results:
                     break
           except Exception:
@@ -1027,7 +1033,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "patch_file",
-            "description": "Replace a unique, specific block of text/code inside a file in the sandbox. Preserves the rest of the file.",
+            "description": "Replace a unique, specific block of text/code inside a file in the sandbox. Preserves the rest of the file. Use this for editing existing files when you can match a unique block of text. For editing where matching is difficult, use 'edit_lines'.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1059,7 +1065,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "edit_lines",
-            "description": "Replace a range of lines in a file (1-indexed, inclusive) with new content. Immunity to search text matching errors.",
+            "description": "Replace a range of lines in a file (1-indexed, inclusive) with new content. This tool is highly recommended for editing existing files because it uses line numbers (which you can get from 'search_grep' or 'read_file') and is completely immune to text-matching failures.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1111,7 +1117,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the text contents of a file inside the sandboxed file system, optionally restricted to a specific line range.",
+            "description": "Read the text contents of a file inside the sandboxed file system, optionally restricted to a specific line range. Use this tool instead of shell commands like 'cat', 'head', 'tail', 'sed', 'awk', 'less', or 'more' via run_command.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1136,7 +1142,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Write text content to a file inside the sandboxed file system. Restricts modifications to only inside the sandbox folder.",
+            "description": "Write text content to a file inside the sandboxed file system. Restricts modifications to only inside the sandbox folder. WARNING: For editing existing files, you should use 'edit_lines' or 'patch_file' instead of overwriting the entire file.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1175,6 +1181,10 @@ TOOLS_SCHEMA = [
                     "path": {
                         "type": "string",
                         "description": "The relative directory or file path in the sandbox to start searching from. Defaults to '.'."
+                    },
+                    "line_numbers": {
+                        "type": "boolean",
+                        "description": "Set to true to include line numbers in the search results (formatted as 'file_path:line_number: content'). Set this to true if you plan to edit the matches later (e.g. using edit_lines or patch_file). Defaults to false."
                     }
                 },
                 "required": ["pattern"]
@@ -1185,7 +1195,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Execute a shell command. The command will run with its working directory (cwd) set to the sandbox folder.",
+            "description": "Execute a shell command. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to search files (use search_grep), find files (use locate_files), or view/inspect files (use read_file/get_file_info). Using commands like 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', or 'more' to search or view files directly will fail with an error.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1361,9 +1371,10 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
   elif name == "search_grep":
     pattern = arguments.get("pattern")
     path = arguments.get("path", ".")
+    line_numbers = arguments.get("line_numbers", False)
     if not pattern:
       return "Error: Missing parameter 'pattern'."
-    return tool_search_grep(session.sandbox, pattern, path, max_results=session.max_grep_results)
+    return tool_search_grep(session.sandbox, pattern, path, max_results=session.max_grep_results, line_numbers=line_numbers)
   elif name == "run_command":
     command = arguments.get("command")
     if not command:
@@ -1517,10 +1528,7 @@ class ChatbotSession:
             "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), and checking background tasks (check_background_command).\n"
             "All paths provided to the tools will resolve relative to the sandbox directory.\n"
             "You are strictly prohibited from writing files outside the sandbox folder.\n"
-            "For editing existing files, you should use the edit_lines tool (if you know the line numbers) or the patch_file tool (if replacing a unique text block) instead of overwriting the entire file with write_file. The edit_lines tool is highly recommended as it is completely immune to text-matching failures.\n"
-            "For searching regex patterns in the workspace or specific files, you MUST use the search_grep tool instead of running shell commands like 'grep' or 'find' via run_command. The search_grep tool supports standard python-compatible regex patterns (e.g. use '0F10|0E20|FF00' for alternation instead of basic grep '0F10\\|0E20\\|FF00') and can be run on both directories and single files.\n"
-            "To inspect specific line ranges or parts of a file, you MUST use the read_file tool with the start_line and end_line parameters, instead of executing command-line tools like 'sed', 'head', 'tail', or 'awk' via run_command.\n"
-            "WARNING: When inspecting files using shell commands, avoid using `cat -A` or `cat -E`. These commands append a dollar sign (`$`) to the end of every line as a line-end marker. The `$` character is NOT part of the file. Do NOT include `$` in replacement text when writing or editing files.\n"
+            "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error.\n"
             "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output. Perform other file tasks (read, patch, edit) while waiting.\n"
             "When compilation, testing, verification, or running tools (like verilator, python scripts, compilers) is needed, you MUST execute them directly using the run_command tool instead of instructing the user to run them manually.\n"
             "Always use your tools proactively to solve tasks directly."
@@ -1717,9 +1725,75 @@ class ChatbotSession:
       result = self.tool_run_command(command)
       return detected_msg + result
 
+    def validate_command_safety(self, command: str) -> Optional[str]:
+      """Validates that the shell command does not bypass dedicated tools."""
+      import shlex
+      import re
+      import os
+      
+      def check_cmd(cmd_str: str) -> Optional[str]:
+        cmd_str = cmd_str.strip()
+        if not cmd_str:
+          return None
+          
+        try:
+          tokens = shlex.split(cmd_str)
+        except ValueError:
+          tokens = cmd_str.split()
+          
+        sequencers = {'&&', '||', ';', '&', '(', '{', ')', '}'}
+        is_cmd_token = True
+        
+        for token in tokens:
+          if is_cmd_token:
+            clean_token = os.path.basename(token.strip().lower())
+            
+            if clean_token in {'grep', 'egrep', 'fgrep', 'rgrep'}:
+              return (
+                f"Error: Using '{token}' directly in run_command is prohibited to search files. "
+                "Please use the dedicated 'search_grep' tool instead."
+              )
+            elif clean_token == 'find':
+              return (
+                f"Error: Using 'find' in run_command is prohibited to locate files. "
+                "Please use the dedicated 'locate_files' tool instead."
+              )
+            elif clean_token in {'cat', 'less', 'more'}:
+              return (
+                f"Error: Using '{token}' in run_command is prohibited to view files. "
+                "Please use the dedicated 'read_file' tool instead."
+              )
+            elif clean_token in {'head', 'tail', 'sed', 'awk'}:
+              return (
+                f"Error: Using '{token}' in run_command is prohibited to inspect files. "
+                "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
+              )
+          
+          if token.strip() in sequencers:
+            is_cmd_token = True
+          elif token.strip() in {'|', '|&'}:
+            is_cmd_token = False
+          else:
+            is_cmd_token = False
+            
+        subshell_patterns = re.findall(r'\$\((.*?)\)|`(.*?)`', cmd_str)
+        for match in subshell_patterns:
+          for group in match:
+            if group:
+              err = check_cmd(group)
+              if err:
+                return err
+        return None
+
+      return check_cmd(command)
+
     def tool_run_command(self, command: str) -> str:
       """Execute a shell command, transitioning to background execution if it takes too long."""
       logger.info(f"Running shell command: '{command}'")
+      validation_err = self.validate_command_safety(command)
+      if validation_err:
+        logger.warning(f"Rejected command '{command}': {validation_err}")
+        return validation_err
       import subprocess
       import os
       import tempfile
