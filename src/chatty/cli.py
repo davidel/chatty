@@ -552,37 +552,47 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_result
     results = []
     ignore_patterns = load_ignore_patterns(sandbox_dir)
     
-    for root, dirs, files in os.walk(safe_p):
-      for d in list(dirs):
-        dir_path = os.path.join(root, d)
-        try:
-          safe_dir = get_safe_path(sandbox_dir, dir_path)
-          rel_dir = os.path.relpath(safe_dir, sandbox_dir)
-          if is_path_ignored(rel_dir, ignore_patterns):
+    if os.path.isfile(safe_p):
+      rel_path = os.path.relpath(safe_p, sandbox_dir)
+      if not is_path_ignored(rel_path, ignore_patterns):
+        with open(safe_p, 'r', encoding='utf-8', errors='ignore') as f:
+          for line_num, line in enumerate(f, 1):
+            if regex.search(line):
+              results.append(f"{rel_path}:{line_num}: {line.strip()}")
+              if len(results) >= max_results:
+                break
+    else:
+      for root, dirs, files in os.walk(safe_p):
+        for d in list(dirs):
+          dir_path = os.path.join(root, d)
+          try:
+            safe_dir = get_safe_path(sandbox_dir, dir_path)
+            rel_dir = os.path.relpath(safe_dir, sandbox_dir)
+            if is_path_ignored(rel_dir, ignore_patterns):
+              dirs.remove(d)
+          except PermissionError:
             dirs.remove(d)
-        except PermissionError:
-          dirs.remove(d)
-          
-      for file in files:
-        file_path = os.path.join(root, file)
-        try:
-          safe_file_path = get_safe_path(sandbox_dir, file_path)
-          rel_path = os.path.relpath(safe_file_path, sandbox_dir)
-          if is_path_ignored(rel_path, ignore_patterns):
-            continue
             
-          with open(safe_file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line_num, line in enumerate(f, 1):
-              if regex.search(line):
-                results.append(f"{rel_path}:{line_num}: {line.strip()}")
-                if len(results) >= max_results:
-                  break
-        except Exception:
-          continue
+        for file in files:
+          file_path = os.path.join(root, file)
+          try:
+            safe_file_path = get_safe_path(sandbox_dir, file_path)
+            rel_path = os.path.relpath(safe_file_path, sandbox_dir)
+            if is_path_ignored(rel_path, ignore_patterns):
+              continue
+              
+            with open(safe_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+              for line_num, line in enumerate(f, 1):
+                if regex.search(line):
+                  results.append(f"{rel_path}:{line_num}: {line.strip()}")
+                  if len(results) >= max_results:
+                    break
+          except Exception:
+            continue
+          if len(results) >= max_results:
+            break
         if len(results) >= max_results:
           break
-      if len(results) >= max_results:
-        break
           
     if len(results) >= max_results:
       return "\n".join(results) + f"\n\n[WARNING: Search results truncated to {max_results} matches. Please refine your regex pattern to filter more specifically.]"
@@ -1154,17 +1164,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "search_grep",
-            "description": "Search recursively inside files in the sandbox directory for a regular expression pattern.",
+            "description": "Search for a regular expression pattern inside files in the sandbox directory (recursively) or inside a specific file.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "The regex pattern to search for."
+                        "description": "The python-compatible regular expression pattern to search for."
                     },
                     "path": {
                         "type": "string",
-                        "description": "The relative directory path in the sandbox to start searching from. Defaults to '.'."
+                        "description": "The relative directory or file path in the sandbox to start searching from. Defaults to '.'."
                     }
                 },
                 "required": ["pattern"]
@@ -1508,6 +1518,8 @@ class ChatbotSession:
             "All paths provided to the tools will resolve relative to the sandbox directory.\n"
             "You are strictly prohibited from writing files outside the sandbox folder.\n"
             "For editing existing files, you should use the edit_lines tool (if you know the line numbers) or the patch_file tool (if replacing a unique text block) instead of overwriting the entire file with write_file. The edit_lines tool is highly recommended as it is completely immune to text-matching failures.\n"
+            "For searching regex patterns in the workspace or specific files, you MUST use the search_grep tool instead of running shell commands like 'grep' or 'find' via run_command. The search_grep tool supports standard python-compatible regex patterns (e.g. use '0F10|0E20|FF00' for alternation instead of basic grep '0F10\\|0E20\\|FF00') and can be run on both directories and single files.\n"
+            "To inspect specific line ranges or parts of a file, you MUST use the read_file tool with the start_line and end_line parameters, instead of executing command-line tools like 'sed', 'head', 'tail', or 'awk' via run_command.\n"
             "WARNING: When inspecting files using shell commands, avoid using `cat -A` or `cat -E`. These commands append a dollar sign (`$`) to the end of every line as a line-end marker. The `$` character is NOT part of the file. Do NOT include `$` in replacement text when writing or editing files.\n"
             "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output. Perform other file tasks (read, patch, edit) while waiting.\n"
             "When compilation, testing, verification, or running tools (like verilator, python scripts, compilers) is needed, you MUST execute them directly using the run_command tool instead of instructing the user to run them manually.\n"

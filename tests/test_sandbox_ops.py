@@ -12,7 +12,8 @@ from chatty.cli import (
   tool_copy_file,
   tool_delete_file,
   tool_make_directory,
-  tool_get_file_info
+  tool_get_file_info,
+  tool_search_grep
 )
 
 class TestSandboxOps(unittest.TestCase):
@@ -189,6 +190,36 @@ class TestSandboxOps(unittest.TestCase):
     res = tool_get_file_info(self.sandbox_dir, bin_file)
     self.assertIn("Type: File", res)
     self.assertNotIn("Lines:", res)
+
+  def test_search_grep(self):
+    # Create test directory and files
+    os.makedirs(os.path.join(self.sandbox_dir, "subdir"))
+    
+    file1 = "file1.txt"
+    with open(os.path.join(self.sandbox_dir, file1), "w") as f:
+      f.write("hello world\nline with pattern 0F10\nend of file\n")
+      
+    file2 = "subdir/file2.txt"
+    with open(os.path.join(self.sandbox_dir, file2), "w") as f:
+      f.write("another line\npattern FF00 here\n")
+
+    # Test recursive search (directory)
+    res = tool_search_grep(self.sandbox_dir, "0F10|FF00", ".")
+    self.assertIn("file1.txt:2: line with pattern 0F10", res)
+    self.assertIn("subdir/file2.txt:2: pattern FF00 here", res)
+
+    # Test search in specific file
+    res = tool_search_grep(self.sandbox_dir, "0F10|FF00", "file1.txt")
+    self.assertIn("file1.txt:2: line with pattern 0F10", res)
+    self.assertNotIn("subdir/file2.txt", res)
+
+    # Test non-existent path
+    res = tool_search_grep(self.sandbox_dir, "pattern", "nonexistent.txt")
+    self.assertIn("Error: Path 'nonexistent.txt' does not exist.", res)
+
+    # Test no matches
+    res = tool_search_grep(self.sandbox_dir, "NOMATCH", "file1.txt")
+    self.assertEqual(res, "No matches found.")
 
 
 if __name__ == "__main__":
