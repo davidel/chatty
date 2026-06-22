@@ -1950,7 +1950,7 @@ class ChatbotSession:
         self.background_commands.clear()
         logger.info("Background commands cleanup finished.")
 
-    def prune_history(self) -> List[Dict[str, Any]]:
+    def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
       """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
       sys_prompt = self.get_active_system_prompt()
       system_msg = {"role": "system", "content": sys_prompt}
@@ -1999,7 +1999,8 @@ class ChatbotSession:
         pruned.insert(0, msg)
         accumulated_tokens += msg_tokens
         
-      logger.info(f"Pruning history: kept {len(pruned)} out of {total_msgs} messages (accumulated tokens: {accumulated_tokens})")
+      if log:
+        logger.info(f"Pruning history: kept {len(pruned)} out of {total_msgs} messages (accumulated tokens: {accumulated_tokens})")
       # Filter orphaned tool messages
       defined_ids = set()
       for msg in pruned:
@@ -2509,15 +2510,17 @@ class ChatbotSession:
     def get_rich_status_bar(self):
         """Returns a Rich Table rendering the status bar."""
         total_tokens = 0
-        for msg in self.messages:
-            content = msg.get("content") or ""
-            if msg.get("tool_calls"):
-                content += json.dumps(msg["tool_calls"])
-            if msg.get("tool_call_id"):
-                content += msg["tool_call_id"]
-            total_tokens += count_tokens(content) + 12
-
-        mode_str = "Multiline (Esc+Enter to submit)" if self.multiline_mode else "Single-line"
+        active_messages = self.prune_history(log=False)
+        if active_messages:
+            sys_msg = active_messages[0]
+            total_tokens += count_tokens(sys_msg.get("content") or "")
+            for msg in active_messages[1:]:
+                content = msg.get("content") or ""
+                if msg.get("tool_calls"):
+                    content += json.dumps(msg["tool_calls"])
+                if msg.get("tool_call_id"):
+                    content += msg["tool_call_id"]
+                total_tokens += count_tokens(content) + 12
 
         table = Table(
             show_header=False,
@@ -2534,7 +2537,7 @@ class ChatbotSession:
             f" [bold]Provider:[/bold] [green]{self.provider}[/green] |"
             f" [bold]Model:[/bold] [yellow]{self.model}[/yellow] |"
             f" [bold]Tokens:[/bold] {total_tokens}/{self.context_size} |"
-            f" [bold]Mode:[/bold] [cyan]{mode_str}[/cyan] |"
+            f" [bold]Loops:[/bold] [cyan]{self.max_loops}[/cyan] |"
             f" [bold]Sandbox:[/bold] {self.sandbox} "
         ))
         return table
@@ -2573,22 +2576,24 @@ class ChatbotSession:
         
         def get_bottom_toolbar():
             total_tokens = 0
-            for msg in self.messages:
-                content = msg.get("content") or ""
-                if msg.get("tool_calls"):
-                    content += json.dumps(msg["tool_calls"])
-                if msg.get("tool_call_id"):
-                    content += msg["tool_call_id"]
-                total_tokens += count_tokens(content) + 12
-            
-            mode_str = "Multiline (Esc+Enter to submit)" if self.multiline_mode else "Single-line"
+            active_messages = self.prune_history(log=False)
+            if active_messages:
+                sys_msg = active_messages[0]
+                total_tokens += count_tokens(sys_msg.get("content") or "")
+                for msg in active_messages[1:]:
+                    content = msg.get("content") or ""
+                    if msg.get("tool_calls"):
+                        content += json.dumps(msg["tool_calls"])
+                    if msg.get("tool_call_id"):
+                        content += msg["tool_call_id"]
+                    total_tokens += count_tokens(content) + 12
             
             return HTML(
               f" <b>Chatty CLI</b> |"
               f" <b>Provider:</b> <ansigreen>{self.provider}</ansigreen> |"
               f" <b>Model:</b> <ansiyellow>{self.model}</ansiyellow> |"
               f" <b>Tokens:</b> {total_tokens}/{self.context_size} |"
-              f" <b>Mode:</b> <ansicyan>{mode_str}</ansicyan> |"
+              f" <b>Loops:</b> <ansicyan>{self.max_loops}</ansicyan> |"
               f" <b>Sandbox:</b> {self.sandbox} "
             )
 
