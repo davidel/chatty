@@ -2233,6 +2233,9 @@ class ChatbotSession:
             self.messages.clear()
             console.print("[bold green]Conversation history cleared.[/bold green]")
             
+        elif cmd == "/compress":
+          self.compress_context()
+          
         elif cmd == "/help":
             self.show_help()
             
@@ -2326,6 +2329,69 @@ class ChatbotSession:
             
         return True
 
+    def compress_context(self):
+      """Summarizes the history, clears the context, and reloads the summary."""
+      if not self.messages:
+        console.print("[bold yellow]History is empty. Nothing to compress.[/bold yellow]")
+        return
+
+      # Prepare messages for summarization
+      active_messages = self.prune_history()
+      summary_instruction = (
+        "Summarize our progress, the current task we are focusing on, "
+        "any code modifications made so far, and the immediate next steps. "
+        "Keep the summary concise but preserve all technical details, filenames, "
+        "function names, paths, and key design decisions."
+      )
+      active_messages.append({"role": "user", "content": summary_instruction})
+
+      content_accumulated = ""
+      logger.info("Generating summary for /compress command")
+      try:
+        with Live(Panel("Connecting to LLM for summary...", title="Context Compression", border_style="yellow"),
+                  refresh_per_second=12, console=console) as live:
+          
+          stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=active_messages,
+            stream=True
+          )
+          
+          first_chunk = True
+          for chunk in stream:
+            if not chunk.choices:
+              continue
+            delta = chunk.choices[0].delta
+            
+            if delta.content:
+              if first_chunk:
+                live.update(Panel("", title="Context Summary", border_style="yellow"))
+                first_chunk = False
+              content_accumulated += delta.content
+              live.update(Panel(Markdown(content_accumulated), title="Context Summary", border_style="yellow"))
+        logger.info("Summary generation succeeded")
+      except Exception as e:
+        logger.exception("Error calling LLM API for context summary")
+        console.print(f"[bold red]Error calling API for summary:[/bold red] {str(e)}")
+        return
+
+      if not content_accumulated.strip():
+        console.print("[bold red]Failed to generate summary. Context was not cleared.[/bold red]")
+        return
+
+      # Clear and reload context
+      self.messages.clear()
+      self.messages.append({
+        "role": "user",
+        "content": "Summarize our progress and task context so far to optimize the context window."
+      })
+      self.messages.append({
+        "role": "assistant",
+        "content": content_accumulated
+      })
+      
+      console.print("[bold green]Conversation history cleared and recap reloaded.[/bold green]")
+
     def show_help(self):
         """Displays formatted CLI usage guide."""
         table = Table(title="Slash Commands", show_header=True, header_style="bold magenta")
@@ -2344,6 +2410,7 @@ class ChatbotSession:
         table.add_row("/history", "View message records and sizing details")
         table.add_row("/tools", "List available sandbox tools and schemas")
         table.add_row("/clear / /reset", "Clear conversation memory")
+        table.add_row("/compress", "Summarize history, clear context, and reload summary")
         table.add_row("/exit / /quit", "Exit the application")
         console.print(table)
 

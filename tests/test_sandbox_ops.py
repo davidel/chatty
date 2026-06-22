@@ -203,13 +203,18 @@ class TestSandboxOps(unittest.TestCase):
     with open(os.path.join(self.sandbox_dir, file2), "w") as f:
       f.write("another line\npattern FF00 here\n")
 
-    # Test recursive search (directory)
+    # Test recursive search without line numbers (default)
     res = tool_search_grep(self.sandbox_dir, "0F10|FF00", ".")
+    self.assertIn("file1.txt: line with pattern 0F10", res)
+    self.assertIn("subdir/file2.txt: pattern FF00 here", res)
+
+    # Test recursive search with line numbers
+    res = tool_search_grep(self.sandbox_dir, "0F10|FF00", ".", line_numbers=True)
     self.assertIn("file1.txt:2: line with pattern 0F10", res)
     self.assertIn("subdir/file2.txt:2: pattern FF00 here", res)
 
-    # Test search in specific file
-    res = tool_search_grep(self.sandbox_dir, "0F10|FF00", "file1.txt")
+    # Test search in specific file with line numbers
+    res = tool_search_grep(self.sandbox_dir, "0F10|FF00", "file1.txt", line_numbers=True)
     self.assertIn("file1.txt:2: line with pattern 0F10", res)
     self.assertNotIn("subdir/file2.txt", res)
 
