@@ -1196,7 +1196,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Execute a shell command. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to search files (use search_grep), find files (use locate_files), or view/inspect files (use read_file/get_file_info). Using commands like 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', or 'more' to search or view files directly will fail with an error.",
+            "description": "Execute a shell command. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to search files (use search_grep), find files (use locate_files), view/inspect files (use read_file/get_file_info), or count lines/words (use get_file_info). Using commands like 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', or 'more' to search or view files directly will fail with an error. Always use get_file_info instead of 'wc -l' to count lines in files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1251,7 +1251,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_file_info",
-            "description": "Get metadata info (size, last modified, type, and line count for text files) about a path inside the sandbox.",
+            "description": "Get metadata info (size, last modified, type, and line count for text files) about a path inside the sandbox. Use this tool instead of shell commands like 'wc' or 'wc -l' via run_command.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1533,7 +1533,7 @@ class ChatbotSession:
             "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), and checking background tasks (check_background_command).\n"
             "All paths provided to the tools will resolve relative to the sandbox directory.\n"
             "You are strictly prohibited from writing files outside the sandbox folder.\n"
-            "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error.\n"
+            "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
             "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output. Perform other file tasks (read, patch, edit) while waiting.\n"
             "When compilation, testing, verification, or running tools (like verilator, python scripts, compilers) is needed, you MUST execute them directly using the run_command tool instead of instructing the user to run them manually.\n"
             "Always use your tools proactively to solve tasks directly."
