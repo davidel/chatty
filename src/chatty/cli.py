@@ -2311,6 +2311,28 @@ class ChatbotSession:
                 self.system_prompt = arg
                 console.print("[bold green]System prompt updated.[/bold green]")
                 
+        elif cmd == "/load":
+          if not arg:
+            console.print("[bold red]Error: Usage: /load <file_path> [append|replace][/bold red]")
+          else:
+            parts = arg.strip().rsplit(maxsplit=1)
+            opt = "append"
+            file_path = arg.strip()
+            if len(parts) == 2 and parts[1].lower() in ("append", "replace"):
+              file_path = parts[0].strip()
+              opt = parts[1].lower()
+            file_path = os.path.expanduser(file_path)
+            try:
+              loaded_prompt = load_system_prompt_from_file(file_path)
+              if opt == "replace":
+                self.system_prompt = loaded_prompt
+                console.print(f"[bold green]System prompt replaced with content from {file_path}[/bold green]")
+              else:
+                self.system_prompt += f"\n\n{loaded_prompt}"
+                console.print(f"[bold green]Appended prompt content from {file_path} to system prompt.[/bold green]")
+            except Exception as e:
+              console.print(f"[bold red]Error loading prompt file: {str(e)}[/bold red]")
+              
         elif cmd == "/tools":
             self.show_tools()
             
@@ -2406,6 +2428,7 @@ class ChatbotSession:
         table.add_row("/loops [iterations]", "View or modify the max sequential tool loops limit")
         table.add_row("/api_key [key]", "Configure the OpenRouter API Key")
         table.add_row("/system [text]", "View or edit the system instructions")
+        table.add_row("/load <path> [append|replace]", "Load system prompt guidelines from a file")
         table.add_row("/multiline", "Toggle multiline prompt input (Alt+Enter to send)")
         table.add_row("/history", "View message records and sizing details")
         table.add_row("/tools", "List available sandbox tools and schemas")
