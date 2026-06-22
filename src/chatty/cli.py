@@ -2526,7 +2526,7 @@ class ChatbotSession:
             box=None,
             padding=0,
             expand=True,
-            style="on #222222 fg:#e0e0e0"
+            style="#e0e0e0 on #222222"
         )
         table.add_column()
         table.add_row(Text.from_markup(
