@@ -18,9 +18,11 @@ from chatty.cli import (
 
 class TestCutoffs(unittest.TestCase):
     def setUp(self):
+        self.old_cwd = os.getcwd()
         self.sandbox_dir = tempfile.mkdtemp()
 
     def tearDown(self):
+        os.chdir(self.old_cwd)
         shutil.rmtree(self.sandbox_dir)
 
     def test_truncate_output(self):

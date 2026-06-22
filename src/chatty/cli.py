@@ -1546,6 +1546,7 @@ class ChatbotSession:
         
         # Ensure sandbox exists
         os.makedirs(self.sandbox, exist_ok=True)
+        os.chdir(self.sandbox)
         
         # Initialize client
         self.init_client()

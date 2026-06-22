@@ -11,6 +11,7 @@ from chatty.cli import ChatbotSession
 
 class TestCommandSafety(unittest.TestCase):
   def setUp(self):
+    self.old_cwd = os.getcwd()
     self.sandbox_dir = tempfile.mkdtemp()
     self.session = ChatbotSession(
       provider="ollama",
@@ -20,7 +21,11 @@ class TestCommandSafety(unittest.TestCase):
     )
 
   def tearDown(self):
+    os.chdir(self.old_cwd)
     shutil.rmtree(self.sandbox_dir)
+
+  def test_sandbox_chdir(self):
+    self.assertEqual(os.path.realpath(os.getcwd()), os.path.realpath(self.sandbox_dir))
 
   def test_blocked_commands(self):
     blocked_commands = [
