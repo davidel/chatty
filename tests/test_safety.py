@@ -62,5 +62,11 @@ class TestCommandSafety(unittest.TestCase):
         err = self.session.validate_command_safety(cmd)
         self.assertIsNone(err, f"Command should be allowed: {cmd}")
 
+  def test_get_rich_status_bar(self):
+    self.session.messages.append({"role": "user", "content": "Hello"})
+    status_bar = self.session.get_rich_status_bar()
+    from rich.table import Table
+    self.assertIsInstance(status_bar, Table)
+
 if __name__ == "__main__":
   unittest.main()

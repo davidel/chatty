@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Tuple, Optional
 logger = logging.getLogger("chatty")
 
 # Rich imports for beautiful terminal output
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
@@ -2114,7 +2114,8 @@ class ChatbotSession:
             logger.info(f"Loop {loop_count + 1}/{max_tool_loops}: Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
             try:
                 # Live rendering console helper
-                with Live(Panel("Connecting to LLM...", title="Assistant", border_style="green"), 
+                panel = Panel("Connecting to LLM...", title="Assistant", border_style="green")
+                with Live(Group(panel, self.get_rich_status_bar()), 
                           refresh_per_second=12, console=console) as live:
                     
                     stream = self.client.chat.completions.create(
@@ -2133,10 +2134,11 @@ class ChatbotSession:
                         # Process streaming content
                         if delta.content:
                             if first_chunk:
-                                live.update(Panel("", title="Assistant", border_style="green"))
+                                panel = Panel("", title="Assistant", border_style="green")
                                 first_chunk = False
                             content_accumulated += delta.content
-                            live.update(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
+                            panel = Panel(Markdown(content_accumulated), title="Assistant", border_style="green")
+                            live.update(Group(panel, self.get_rich_status_bar()))
                             
                         # Process streaming tool calls
                         if delta.tool_calls:
@@ -2160,8 +2162,11 @@ class ChatbotSession:
                                         item["function"]["arguments"] += tc.function.arguments
                                         
                                 # Render loading indicator
-                                live.update(Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
-                                                  title="System", border_style="yellow"))
+                                panel = Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
+                                              title="System", border_style="yellow")
+                                live.update(Group(panel, self.get_rich_status_bar()))
+                    # Remove status bar before exiting Live context
+                    live.update(panel)
                 logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
             except Exception as e:
                 logger.exception("Error calling LLM API")
@@ -2219,13 +2224,16 @@ class ChatbotSession:
                     t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
                 else:
                     # Execute tool
-                    console.print(Panel(
+                    exec_panel = Panel(
                         f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
                         title="🔧 Executing Tool",
                         border_style="yellow"
-                    ))
-                    logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
-                    t_result = execute_tool(t_name, args_parsed, self)
+                    )
+                    with Live(Group(exec_panel, self.get_rich_status_bar()), refresh_per_second=12, console=console) as live:
+                        logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
+                        t_result = execute_tool(t_name, args_parsed, self)
+                        # Remove status bar before exiting Live context
+                        live.update(exec_panel)
                     
                 # Print result summary nicely
                 console.print(Panel(
@@ -2497,6 +2505,39 @@ class ChatbotSession:
             func = tool["function"]
             table.add_row(func["name"], func["description"])
         console.print(table)
+
+    def get_rich_status_bar(self):
+        """Returns a Rich Table rendering the status bar."""
+        total_tokens = 0
+        for msg in self.messages:
+            content = msg.get("content") or ""
+            if msg.get("tool_calls"):
+                content += json.dumps(msg["tool_calls"])
+            if msg.get("tool_call_id"):
+                content += msg["tool_call_id"]
+            total_tokens += count_tokens(content) + 12
+
+        mode_str = "Multiline (Esc+Enter to submit)" if self.multiline_mode else "Single-line"
+
+        table = Table(
+            show_header=False,
+            show_edge=False,
+            show_lines=False,
+            box=None,
+            padding=0,
+            expand=True,
+            style="on #222222 fg:#e0e0e0"
+        )
+        table.add_column()
+        table.add_row(Text.from_markup(
+            f" [bold]Chatty CLI[/bold] |"
+            f" [bold]Provider:[/bold] [green]{self.provider}[/green] |"
+            f" [bold]Model:[/bold] [yellow]{self.model}[/yellow] |"
+            f" [bold]Tokens:[/bold] {total_tokens}/{self.context_size} |"
+            f" [bold]Mode:[/bold] [cyan]{mode_str}[/cyan] |"
+            f" [bold]Sandbox:[/bold] {self.sandbox} "
+        ))
+        return table
 
     # --- CLI Input Loop ---
 
