@@ -23,6 +23,7 @@ from rich.table import Table
 from rich.live import Live
 from rich.text import Text
 from rich.columns import Columns
+from rich.markup import escape
 
 # Prompt toolkit for advanced input capabilities
 from prompt_toolkit import PromptSession
@@ -2218,7 +2219,7 @@ class ChatbotSession:
                 else:
                     # Execute tool
                     console.print(Panel(
-                        f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{json.dumps(args_parsed, indent=2)}[/yellow]",
+                        f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
                         title="🔧 Executing Tool",
                         border_style="yellow"
                     ))
@@ -2227,7 +2228,7 @@ class ChatbotSession:
                     
                 # Print result summary nicely
                 console.print(Panel(
-                    t_result,
+                    Text(t_result),
                     title="🔧 Tool Result",
                     border_style="dim yellow"
                 ))
@@ -2521,6 +2522,29 @@ class ChatbotSession:
             border_style="magenta"
         ))
         
+        def get_bottom_toolbar():
+            total_tokens = 0
+            for msg in self.messages:
+                content = msg.get("content") or ""
+                if msg.get("tool_calls"):
+                    content += json.dumps(msg["tool_calls"])
+                if msg.get("tool_call_id"):
+                    content += msg["tool_call_id"]
+                total_tokens += count_tokens(content) + 12
+            
+            mode_str = "Multiline (Esc+Enter to submit)" if self.multiline_mode else "Single-line"
+            
+            return HTML(
+                f"<style bg='ansibrightblack' fg='ansiwhite'>"
+                f" <b>Chatty CLI</b> |"
+                f" <b>Provider:</b> <ansigreen>{self.provider}</ansigreen> |"
+                f" <b>Model:</b> <ansiyellow>{self.model}</ansiyellow> |"
+                f" <b>Tokens:</b> {total_tokens}/{self.context_size} |"
+                f" <b>Mode:</b> <ansicyan>{mode_str}</ansicyan> |"
+                f" <b>Sandbox:</b> {self.sandbox} "
+                f"</style>"
+            )
+
         self.show_status()
         
         while True:
@@ -2536,7 +2560,8 @@ class ChatbotSession:
                 # Read user input
                 user_input = session.prompt(
                     HTML(prompt_html),
-                    multiline=self.multiline_mode
+                    multiline=self.multiline_mode,
+                    bottom_toolbar=get_bottom_toolbar
                 )
                 
                 # Check for empty input
