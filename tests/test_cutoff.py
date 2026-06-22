@@ -131,6 +131,57 @@ class TestCutoffs(unittest.TestCase):
         # Msg 2 (within active keep window of last 2 messages) should remain raw/untruncated
         self.assertEqual(msg2_pruned["content"], "y" * 200)
 
+    def test_openrouter_prompt_caching(self):
+        # 1. Test that static_skills is enabled by default for openrouter, and disabled for ollama
+        session_or = ChatbotSession(
+            provider="openrouter",
+            model="mock-model",
+            context_size=10000,
+            sandbox=self.sandbox_dir
+        )
+        self.assertTrue(session_or.static_skills)
+
+        session_ol = ChatbotSession(
+            provider="ollama",
+            model="mock-model",
+            context_size=10000,
+            sandbox=self.sandbox_dir
+        )
+        self.assertFalse(session_ol.static_skills)
+
+        # 2. Test that system prompt and active messages contain cache_control when provider is openrouter
+        session_or.messages.append({"role": "user", "content": "hello"})
+        session_or.messages.append({"role": "assistant", "content": "hi there"})
+        session_or.messages.append({"role": "user", "content": "how are you?"})
+
+        active_msgs = session_or.prune_history()
+        
+        # System message (first element) should have cache_control
+        self.assertEqual(active_msgs[0]["role"], "system")
+        self.assertEqual(active_msgs[0].get("cache_control"), {"type": "ephemeral"})
+
+        # Last two messages should have cache_control
+        self.assertEqual(active_msgs[-1]["role"], "user")
+        self.assertEqual(active_msgs[-1].get("cache_control"), {"type": "ephemeral"})
+
+        self.assertEqual(active_msgs[-2]["role"], "assistant")
+        self.assertEqual(active_msgs[-2].get("cache_control"), {"type": "ephemeral"})
+
+        # 3. Test that get_tools returns tools schema annotated with cache_control for openrouter
+        tools = session_or.get_tools()
+        self.assertIsNotNone(tools)
+        self.assertEqual(tools[-1].get("cache_control"), {"type": "ephemeral"})
+
+        # Ollama should NOT have cache_control on anything
+        session_ol.messages.append({"role": "user", "content": "hello"})
+        active_msgs_ol = session_ol.prune_history()
+        self.assertNotIn("cache_control", active_msgs_ol[0])
+        self.assertNotIn("cache_control", active_msgs_ol[-1])
+        
+        tools_ol = session_ol.get_tools()
+        if tools_ol:
+            self.assertNotIn("cache_control", tools_ol[-1])
+
     def test_session_logging(self):
         import logging
         log_filepath = os.path.join(self.sandbox_dir, "test_chatty.log")

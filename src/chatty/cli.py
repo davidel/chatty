@@ -1500,8 +1500,12 @@ def get_ollama_models(url: str) -> List[str]:
 # --- Chatbot Session Manager ---
 
 class ChatbotSession:
-    def __init__(self, provider: str, model: str, context_size: int, sandbox: str, api_key: str = None, url: str = None, max_loops: int = 20, system_prompt_override: str = None, prompt_mode: str = "replace", skills_paths: List[str] = None, max_read_chars: int = 40000, max_grep_results: int = 100, max_command_chars: int = 16000, max_history_tool_chars: int = 1000, history_keep_messages: int = 4, max_url_chars: int = 24000, max_dir_items: int = 200):
+    def __init__(self, provider: str, model: str, context_size: int, sandbox: str, api_key: str = None, url: str = None, max_loops: int = 20, system_prompt_override: str = None, prompt_mode: str = "replace", skills_paths: List[str] = None, max_read_chars: int = 40000, max_grep_results: int = 100, max_command_chars: int = 16000, max_history_tool_chars: int = 1000, history_keep_messages: int = 4, max_url_chars: int = 24000, max_dir_items: int = 200, static_skills: bool = None):
         self.provider = provider
+        if static_skills is None:
+            self.static_skills = (provider == "openrouter")
+        else:
+            self.static_skills = static_skills
         self.model = model
         self.context_size = context_size
         self.sandbox = os.path.abspath(sandbox)
@@ -1613,6 +1617,16 @@ class ChatbotSession:
 
     def get_active_system_prompt(self) -> str:
       """Returns system prompt integrated with dynamically activated skills."""
+      if self.static_skills:
+        if not self.skills:
+          return self.system_prompt
+        active_skills = []
+        for skill_name, skill in sorted(self.skills.items()):
+          meta = skill["metadata"]
+          active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+        skills_text = "\n\n".join(active_skills)
+        return f"{self.system_prompt}\n\n## Available Skills\n{skills_text}"
+
       active_skills = []
       active_names = []
       last_user_msg = ""
@@ -1938,6 +1952,8 @@ class ChatbotSession:
       """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
       sys_prompt = self.get_active_system_prompt()
       system_msg = {"role": "system", "content": sys_prompt}
+      if self.provider == "openrouter":
+        system_msg["cache_control"] = {"type": "ephemeral"}
       sys_tokens = count_tokens(sys_prompt)
       
       if sys_tokens >= self.context_size:
@@ -1997,6 +2013,12 @@ class ChatbotSession:
             continue
         final_pruned.append(msg)
         
+      if self.provider == "openrouter" and final_pruned:
+        final_pruned = [dict(msg) for msg in final_pruned]
+        final_pruned[-1]["cache_control"] = {"type": "ephemeral"}
+        if len(final_pruned) >= 2:
+          final_pruned[-2]["cache_control"] = {"type": "ephemeral"}
+          
       return [system_msg] + final_pruned
 
     def extract_tool_calls_from_text(self, text: str) -> List[Dict[str, Any]]:
@@ -2060,6 +2082,18 @@ class ChatbotSession:
                 
         return []
 
+    def get_tools(self) -> Optional[List[Dict[str, Any]]]:
+        """Returns list of tools, optionally annotated with cache_control for OpenRouter."""
+        if not TOOLS_SCHEMA:
+            return None
+        if self.provider == "openrouter":
+            tools = [dict(t) for t in TOOLS_SCHEMA]
+            if tools:
+                tools[-1] = dict(tools[-1])
+                tools[-1]["cache_control"] = {"type": "ephemeral"}
+            return tools
+        return TOOLS_SCHEMA
+
     def run_llm_cycle(self):
         """Executes a full inference cycle, resolving tool calls recursively."""
         self.load_skills()
@@ -2084,7 +2118,7 @@ class ChatbotSession:
                     stream = self.client.chat.completions.create(
                         model=self.model,
                         messages=active_messages,
-                        tools=TOOLS_SCHEMA,
+                        tools=self.get_tools(),
                         stream=True
                     )
                     
@@ -2617,6 +2651,12 @@ def main():
         help="Custom directories to search for skills. Can be specified multiple times."
     )
     parser.add_argument(
+        "--static-skills",
+        action="store_true",
+        default=None,
+        help="Load all available skills statically into the system prompt to maximize prompt caching (defaults to True for OpenRouter, False for Ollama)."
+    )
+    parser.add_argument(
         "--max-loops", "-l",
         type=int,
         default=20,
@@ -2748,7 +2788,8 @@ def main():
         max_history_tool_chars=args.max_history_tool_chars,
         history_keep_messages=args.history_keep_messages,
         max_url_chars=args.max_url_chars,
-        max_dir_items=args.max_dir_items
+        max_dir_items=args.max_dir_items,
+        static_skills=args.static_skills
     )
     
     chat_session.start_loop()
