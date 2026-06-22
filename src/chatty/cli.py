@@ -1529,6 +1529,7 @@ class ChatbotSession:
         
         # Internal state
         self.messages: List[Dict[str, Any]] = []
+        self.current_loop = 0
         default_prompt = (
             "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
             "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), and checking background tasks (check_background_command).\n"
@@ -2105,6 +2106,7 @@ class ChatbotSession:
         logger.info(f"Starting LLM cycle. Max sequential tool loops: {max_tool_loops}")
         
         while loop_count < max_tool_loops:
+            self.current_loop = loop_count + 1
             # Prepare message payloads based on limit settings
             active_messages = self.prune_history()
             
@@ -2258,6 +2260,7 @@ class ChatbotSession:
             
         if loop_count >= max_tool_loops:
             console.print("[bold red]Reached maximum sequential tool loop executions. Breaking cycle.[/bold red]")
+        self.current_loop = 0
 
     # --- Slash Commands Handling ---
 
@@ -2537,7 +2540,7 @@ class ChatbotSession:
             f" [bold]Provider:[/bold] [green]{self.provider}[/green] |"
             f" [bold]Model:[/bold] [yellow]{self.model}[/yellow] |"
             f" [bold]Tokens:[/bold] {total_tokens}/{self.context_size} |"
-            f" [bold]Loops:[/bold] [cyan]{self.max_loops}[/cyan] |"
+            f" [bold]Loops:[/bold] [cyan]{self.current_loop}/{self.max_loops}[/cyan] |"
             f" [bold]Sandbox:[/bold] {self.sandbox} "
         ))
         return table
@@ -2593,7 +2596,7 @@ class ChatbotSession:
               f" <b>Provider:</b> <ansigreen>{self.provider}</ansigreen> |"
               f" <b>Model:</b> <ansiyellow>{self.model}</ansiyellow> |"
               f" <b>Tokens:</b> {total_tokens}/{self.context_size} |"
-              f" <b>Loops:</b> <ansicyan>{self.max_loops}</ansicyan> |"
+              f" <b>Loops:</b> <ansicyan>{self.current_loop}/{self.max_loops}</ansicyan> |"
               f" <b>Sandbox:</b> {self.sandbox} "
             )
 

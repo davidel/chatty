@@ -214,5 +214,21 @@ class TestCutoffs(unittest.TestCase):
         finally:
             chatty_logger.removeHandler(handler)
 
+    def test_loop_status_bar(self):
+        session = ChatbotSession(
+            provider="ollama",
+            model="mock-model",
+            context_size=10000,
+            sandbox=self.sandbox_dir,
+            max_loops=20
+        )
+        self.assertEqual(session.current_loop, 0)
+        from rich.console import Console
+        c = Console(width=200, record=True)
+        c.print(session.get_rich_status_bar())
+        rendered = c.export_text()
+        rendered_clean = rendered.replace("\n", "").replace(" ", "")
+        self.assertIn("Loops:0/20", rendered_clean)
+
 if __name__ == "__main__":
     unittest.main()
