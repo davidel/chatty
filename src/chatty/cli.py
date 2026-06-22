@@ -30,6 +30,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import Style
 
 # Initialize global Rich console
 console = Console()
@@ -2510,7 +2511,14 @@ class ChatbotSession:
             
         # File history tracking
         history_file = os.path.expanduser("~/.agent_chat_history")
-        session = PromptSession(history=FileHistory(history_file), key_bindings=kb)
+        toolbar_style = Style.from_dict({
+          'bottom-toolbar': 'bg:#222222 fg:#e0e0e0 noreverse',
+        })
+        session = PromptSession(
+          history=FileHistory(history_file),
+          key_bindings=kb,
+          style=toolbar_style
+        )
         
         # Display starting banner
         console.print(Panel(
@@ -2535,14 +2543,12 @@ class ChatbotSession:
             mode_str = "Multiline (Esc+Enter to submit)" if self.multiline_mode else "Single-line"
             
             return HTML(
-                f"<style bg='ansibrightblack' fg='ansiwhite'>"
-                f" <b>Chatty CLI</b> |"
-                f" <b>Provider:</b> <ansigreen>{self.provider}</ansigreen> |"
-                f" <b>Model:</b> <ansiyellow>{self.model}</ansiyellow> |"
-                f" <b>Tokens:</b> {total_tokens}/{self.context_size} |"
-                f" <b>Mode:</b> <ansicyan>{mode_str}</ansicyan> |"
-                f" <b>Sandbox:</b> {self.sandbox} "
-                f"</style>"
+              f" <b>Chatty CLI</b> |"
+              f" <b>Provider:</b> <ansigreen>{self.provider}</ansigreen> |"
+              f" <b>Model:</b> <ansiyellow>{self.model}</ansiyellow> |"
+              f" <b>Tokens:</b> {total_tokens}/{self.context_size} |"
+              f" <b>Mode:</b> <ansicyan>{mode_str}</ansicyan> |"
+              f" <b>Sandbox:</b> {self.sandbox} "
             )
 
         self.show_status()
