@@ -97,5 +97,61 @@ class TestCommandSafety(unittest.TestCase):
     self.assertNotIn("FAIL: 1", res4)
     self.assertNotIn("FAIL: 3", res4)
 
+  def test_kill_process_and_background_command(self):
+    import unittest.mock as mock
+    import subprocess
+    
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired("sleep 100", 10)
+    mock_proc.pid = 12345
+    mock_proc.poll.return_value = None
+    
+    with mock.patch("subprocess.Popen", return_value=mock_proc):
+      res = self.session.tool_run_command("sleep 100")
+      self.assertIn("running in the background", res)
+      self.assertIn("Task ID: task_1", res)
+      
+      # Now check that task_1 is in background_commands
+      self.assertIn("task_1", self.session.background_commands)
+      
+      # Let's check status
+      status_res = self.session.tool_check_background_command("task_1")
+      self.assertIn("STILL RUNNING", status_res)
+      
+      # Now kill the process
+      with mock.patch("os.killpg") as mock_killpg:
+        kill_res = self.session.tool_kill_process("task_1")
+        self.assertIn("Successfully terminated background task 'task_1'", kill_res)
+        mock_killpg.assert_called_once_with(12345, 9) # signal.SIGKILL is 9
+          
+      # Ensure it was removed from background_commands
+      self.assertNotIn("task_1", self.session.background_commands)
+
+  def test_kill_process_already_exited(self):
+    import unittest.mock as mock
+    import subprocess
+    
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired("sleep 100", 10)
+    mock_proc.pid = 12345
+    mock_proc.poll.return_value = 0
+    
+    with mock.patch("subprocess.Popen", return_value=mock_proc):
+      res = self.session.tool_run_command("sleep 100")
+      self.assertIn("Task ID: task_1", res)
+      
+      # Kill the process
+      kill_res = self.session.tool_kill_process("task_1")
+      self.assertIn("had already exited with code 0", kill_res)
+        
+      self.assertNotIn("task_1", self.session.background_commands)
+
+  def test_blocked_kill_commands(self):
+    for cmd in ["kill 1234", "pkill -f server", "killall python"]:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to terminate processes", err)
+      self.assertIn("kill_process", err)
+
 if __name__ == "__main__":
   unittest.main()

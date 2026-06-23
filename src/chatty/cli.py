@@ -38,9 +38,6 @@ console = Console()
 
 # --- Subprocess wrapping and tracking ---
 import subprocess
-import threading
-
-_in_subprocess_wrap = threading.local()
 
 def preprocess_shell_string(cmd_str: str) -> str:
     operators = {"|", "&", ";", "<", ">", "(", ")"}
@@ -131,8 +128,12 @@ def parse_shell_commands(cmd_str: str) -> list:
                 
     return binaries
 
-def record_command_binaries(args):
+def record_command_binaries(args, session=None):
     if not args:
+        return
+    if session is None and "ChatbotSession" in globals():
+        session = getattr(ChatbotSession, "_active_session", None)
+    if not session:
         return
     
     binaries = []
@@ -148,50 +149,9 @@ def record_command_binaries(args):
         cmd_str = args.decode('utf-8', errors='ignore') if isinstance(args, bytes) else args
         binaries = parse_shell_commands(cmd_str)
         
-    if "ChatbotSession" in globals():
-        session = getattr(ChatbotSession, "_active_session", None)
-        if session:
-            for binary_name in binaries:
-                session.external_binaries_count += 1
-                session.external_binaries_breakdown[binary_name] = session.external_binaries_breakdown.get(binary_name, 0) + 1
-
-original_run = subprocess.run
-original_Popen = subprocess.Popen
-
-def wrapped_run(*args, **kwargs):
-    is_nested = getattr(_in_subprocess_wrap, "val", False)
-    if not is_nested:
-        _in_subprocess_wrap.val = True
-        try:
-            cmd_args = kwargs.get("args") if "args" in kwargs else (args[0] if args else None)
-            record_command_binaries(cmd_args)
-        except Exception:
-            pass
-    try:
-        res = original_run(*args, **kwargs)
-    finally:
-        if not is_nested:
-            _in_subprocess_wrap.val = False
-    return res
-
-def wrapped_Popen(*args, **kwargs):
-    is_nested = getattr(_in_subprocess_wrap, "val", False)
-    if not is_nested:
-        _in_subprocess_wrap.val = True
-        try:
-            cmd_args = kwargs.get("args") if "args" in kwargs else (args[0] if args else None)
-            record_command_binaries(cmd_args)
-        except Exception:
-            pass
-    try:
-        res = original_Popen(*args, **kwargs)
-    finally:
-        if not is_nested:
-            _in_subprocess_wrap.val = False
-    return res
-
-subprocess.run = wrapped_run
-subprocess.Popen = wrapped_Popen
+    for binary_name in binaries:
+        session.external_binaries_count += 1
+        session.external_binaries_breakdown[binary_name] = session.external_binaries_breakdown.get(binary_name, 0) + 1
 
 
 # --- Sandboxed File System Tools ---
@@ -503,6 +463,7 @@ def validate_file_syntax(path: str, content: str, sandbox_dir: str = None, compi
               cmd_args.extend(["-I", os.path.dirname(abs_p)])
         cmd_args.append(temp_name)
           
+        record_command_binaries(cmd_args)
         proc = subprocess.run(
           cmd_args,
           stdout=subprocess.PIPE,
@@ -555,6 +516,7 @@ def validate_file_syntax(path: str, content: str, sandbox_dir: str = None, compi
             cmd_args.extend(["-y", s_dir, f"-I{s_dir}"])
           cmd_args.extend(extra_files)
           cmd_args.append(temp_name)
+          record_command_binaries(cmd_args)
           proc = subprocess.run(
             cmd_args,
             stdout=subprocess.PIPE,
@@ -574,6 +536,7 @@ def validate_file_syntax(path: str, content: str, sandbox_dir: str = None, compi
             cmd_args.extend(["-y", s_dir, f"-I{s_dir}"])
           cmd_args.extend(extra_files)
           cmd_args.append(temp_name)
+          record_command_binaries(cmd_args)
           proc = subprocess.run(
             cmd_args,
             stdout=subprocess.PIPE,
@@ -613,6 +576,7 @@ def validate_file_syntax(path: str, content: str, sandbox_dir: str = None, compi
               elif os.path.isfile(abs_p):
                 cmd_args.append(f"-P{os.path.dirname(abs_p)}")
           cmd_args.append(temp_name)
+          record_command_binaries(cmd_args)
           proc = subprocess.run(
             cmd_args,
             stdout=subprocess.PIPE,
@@ -901,16 +865,24 @@ def tool_format_file(sandbox_dir: str, path: str) -> str:
     if ext == ".py":
       # Try black, ruff, yapf, autopep8
       if shutil.which("black"):
-        subprocess.run(["black", "-q", safe_p], capture_output=True, text=True)
+        cmd_args = ["black", "-q", safe_p]
+        record_command_binaries(cmd_args)
+        subprocess.run(cmd_args, capture_output=True, text=True)
         formatter_used = "black"
       elif shutil.which("ruff"):
-        subprocess.run(["ruff", "format", safe_p], capture_output=True, text=True)
+        cmd_args = ["ruff", "format", safe_p]
+        record_command_binaries(cmd_args)
+        subprocess.run(cmd_args, capture_output=True, text=True)
         formatter_used = "ruff format"
       elif shutil.which("yapf"):
-        subprocess.run(["yapf", "-i", safe_p], capture_output=True, text=True)
+        cmd_args = ["yapf", "-i", safe_p]
+        record_command_binaries(cmd_args)
+        subprocess.run(cmd_args, capture_output=True, text=True)
         formatter_used = "yapf"
       elif shutil.which("autopep8"):
-        subprocess.run(["autopep8", "-i", safe_p], capture_output=True, text=True)
+        cmd_args = ["autopep8", "-i", safe_p]
+        record_command_binaries(cmd_args)
+        subprocess.run(cmd_args, capture_output=True, text=True)
         formatter_used = "autopep8"
       else:
         return (
@@ -936,7 +908,9 @@ def tool_format_file(sandbox_dir: str, path: str) -> str:
       try:
         # We can try prettier first, as it preserves comments
         if shutil.which("prettier"):
-          subprocess.run(["prettier", "--write", safe_p], capture_output=True, text=True)
+          cmd_args = ["prettier", "--write", safe_p]
+          record_command_binaries(cmd_args)
+          subprocess.run(cmd_args, capture_output=True, text=True)
           formatter_used = "prettier"
           with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
             formatted_content = f.read()
@@ -949,7 +923,9 @@ def tool_format_file(sandbox_dir: str, path: str) -> str:
 
     elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java"):
       if shutil.which("clang-format"):
-        subprocess.run(["clang-format", "-i", safe_p], capture_output=True, text=True)
+        cmd_args = ["clang-format", "-i", safe_p]
+        record_command_binaries(cmd_args)
+        subprocess.run(cmd_args, capture_output=True, text=True)
         formatter_used = "clang-format"
         with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
           formatted_content = f.read()
@@ -958,7 +934,9 @@ def tool_format_file(sandbox_dir: str, path: str) -> str:
 
     elif ext == ".go":
       if shutil.which("gofmt"):
-        subprocess.run(["gofmt", "-w", safe_p], capture_output=True, text=True)
+        cmd_args = ["gofmt", "-w", safe_p]
+        record_command_binaries(cmd_args)
+        subprocess.run(cmd_args, capture_output=True, text=True)
         formatter_used = "gofmt"
         with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
           formatted_content = f.read()
@@ -967,7 +945,9 @@ def tool_format_file(sandbox_dir: str, path: str) -> str:
 
     elif ext in (".rs", ".rlib"):
       if shutil.which("rustfmt"):
-        subprocess.run(["rustfmt", safe_p], capture_output=True, text=True)
+        cmd_args = ["rustfmt", safe_p]
+        record_command_binaries(cmd_args)
+        subprocess.run(cmd_args, capture_output=True, text=True)
         formatter_used = "rustfmt"
         with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
           formatted_content = f.read()
@@ -976,7 +956,9 @@ def tool_format_file(sandbox_dir: str, path: str) -> str:
 
     elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md"):
       if shutil.which("prettier"):
-        subprocess.run(["prettier", "--write", safe_p], capture_output=True, text=True)
+        cmd_args = ["prettier", "--write", safe_p]
+        record_command_binaries(cmd_args)
+        subprocess.run(cmd_args, capture_output=True, text=True)
         formatter_used = "prettier"
         with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
           formatted_content = f.read()
@@ -1401,6 +1383,23 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "kill_process",
+            "description": "Terminate a process running in the background using its Task ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The Task ID of the background command to terminate (e.g. 'task_1')."
+                    }
+                },
+                "required": ["task_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "locate_files",
             "description": "Locate files recursively inside the sandbox directory matching a glob pattern.",
             "parameters": {
@@ -1575,6 +1574,11 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
     if not task_id:
       return "Error: Missing parameter 'task_id'."
     return session.tool_check_background_command(task_id)
+  elif name == "kill_process":
+    task_id = arguments.get("task_id")
+    if not task_id:
+      return "Error: Missing parameter 'task_id'."
+    return session.tool_kill_process(task_id)
   elif name == "locate_files":
     pattern = arguments.get("pattern")
     path = arguments.get("path", ".")
@@ -1727,11 +1731,11 @@ class ChatbotSession:
         self.current_loop = 0
         default_prompt = (
             "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
-            "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), and checking background tasks (check_background_command).\n"
+            "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), and terminating background processes (kill_process).\n"
             "All paths provided to the tools will resolve relative to the sandbox directory.\n"
             "You are strictly prohibited from writing files outside the sandbox folder.\n"
             "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
-            "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output. Perform other file tasks (read, patch, edit) while waiting.\n"
+            "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output, or terminate it by calling kill_process with the Task ID. Perform other file tasks (read, patch, edit) while waiting.\n"
             "To filter the output of run_command, use its optional 'output_filter' (regex), 'tail_lines', or 'head_lines' parameters rather than piping to grep or writing custom filtering scripts.\n"
             "When compilation, testing, verification, or running tools (like verilator, python scripts, compilers) is needed, you MUST execute them directly using the run_command tool instead of instructing the user to run them manually.\n"
             "Always use your tools proactively to solve tasks directly."
@@ -1972,6 +1976,11 @@ class ChatbotSession:
                 f"Error: Using 'find' in run_command is prohibited to locate files. "
                 "Please use the dedicated 'locate_files' tool instead."
               )
+            elif clean_token in {'kill', 'pkill', 'killall'}:
+              return (
+                f"Error: Using '{token}' in run_command is prohibited to terminate processes. "
+                "Please use the dedicated 'kill_process' tool instead."
+              )
             elif clean_token in {'cat', 'less', 'more'}:
               return (
                 f"Error: Using '{token}' in run_command is prohibited to view files. "
@@ -2034,6 +2043,7 @@ class ChatbotSession:
       try:
         stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
         stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+        record_command_binaries(command, self)
         proc = subprocess.Popen(
           command,
           shell=True,
@@ -2175,6 +2185,39 @@ class ChatbotSession:
                 f"Status: Task '{task_id}' FINISHED with exit code {status}.\n"
                 + ("\n".join(output) if output else "(No output generated)")
             )
+    def tool_kill_process(self, task_id: str) -> str:
+        """Terminate a background task/process by its Task ID."""
+        import os
+        import signal
+        logger.info(f"Terminating background task: '{task_id}'")
+        task = self.background_commands.get(task_id)
+        if not task:
+            logger.warning(f"Kill process failed: Task ID '{task_id}' not found")
+            return f"Error: Task ID '{task_id}' not found."
+        
+        proc = task["proc"]
+        status = proc.poll()
+        if status is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+                logger.info(f"Process group {proc.pid} terminated.")
+            except Exception as e:
+                logger.error(f"Failed to kill process group {proc.pid}: {e}")
+                return f"Error terminating process: {e}"
+            message = f"Successfully terminated background task '{task_id}'."
+        else:
+            message = f"Background task '{task_id}' had already exited with code {status}. Cleaned up resources."
+        
+        try:
+            task["stdout_file"].close()
+            task["stderr_file"].close()
+            os.unlink(task["stdout_path"])
+            os.unlink(task["stderr_path"])
+        except Exception:
+            pass
+            
+        del self.background_commands[task_id]
+        return message
 
     def cleanup_background_commands(self):
         """Kills all active background tasks and removes temporary files."""

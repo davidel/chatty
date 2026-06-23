@@ -42,19 +42,17 @@ class TestToolStats(unittest.TestCase):
         self.assertEqual(self.session.tool_calls_count.get("make_directory"), 2)
 
     def test_external_binary_tracking(self):
-        # Run a subprocess
-        subprocess.run(["echo", "hello test"])
+        # Run a command via session tool
+        self.session.tool_run_command("echo hello test")
         
         # Binary execution counts should reflect it
         self.assertEqual(self.session.external_binaries_count, 1)
         self.assertEqual(self.session.external_binaries_breakdown.get("echo"), 1)
 
-        # Run another subprocess (e.g. ls / dir)
-        # Check target OS or just execute a Python command
-        subprocess.run([sys.executable, "-c", "print('test')"])
+        # Run another command
+        self.session.tool_run_command("python -c \"print('test')\"")
         self.assertEqual(self.session.external_binaries_count, 2)
-        python_bin = os.path.basename(sys.executable)
-        self.assertEqual(self.session.external_binaries_breakdown.get(python_bin), 1)
+        self.assertEqual(self.session.external_binaries_breakdown.get("python"), 1)
 
     def test_slash_command_execution(self):
         # Execute the slash command /tool_stats via handle_command
