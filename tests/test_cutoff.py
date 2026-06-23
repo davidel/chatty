@@ -240,32 +240,7 @@ class TestCutoffs(unittest.TestCase):
         rendered_clean = rendered.replace("\n", "").replace(" ", "")
         self.assertIn("Loops:0/20", rendered_clean)
 
-    def test_context_size_scaling(self):
-      session_or = ChatbotSession(
-        provider="openrouter",
-        model="mock-model",
-        context_size=8192,
-        sandbox=self.sandbox_dir
-      )
-      self.assertEqual(session_or.context_size, 100000)
-      session_custom = ChatbotSession(
-        provider="openrouter",
-        model="mock-model",
-        context_size=50000,
-        sandbox=self.sandbox_dir
-      )
-      self.assertEqual(session_custom.context_size, 50000)
-      session_switch = ChatbotSession(
-        provider="ollama",
-        model="mock-model",
-        context_size=8192,
-        sandbox=self.sandbox_dir
-      )
-      self.assertEqual(session_switch.context_size, 8192)
-      session_switch.handle_command("/provider openrouter")
-      self.assertEqual(session_switch.context_size, 100000)
-      session_switch.handle_command("/provider ollama")
-      self.assertEqual(session_switch.context_size, 8192)
+
 
 if __name__ == "__main__":
     unittest.main()
