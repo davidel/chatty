@@ -60,6 +60,15 @@ class TestCutoffs(unittest.TestCase):
         self.assertIn("WARNING: File 'large.txt' is too large", res)
         self.assertEqual(res[:40], "a" * 40)
 
+    def test_tool_read_file_line_numbers(self):
+        filepath = os.path.join(self.sandbox_dir, "test.txt")
+        content = "line one\nline two\nline three\n"
+        with open(filepath, "w") as f:
+            f.write(content)
+
+        res = tool_read_file(self.sandbox_dir, "test.txt", start_line=2, end_line=3, line_numbers=True)
+        self.assertEqual(res, "2: line two\n3: line three\n")
+
     def test_tool_search_grep_limit(self):
         # Create a file with multiple matches
         filepath = os.path.join(self.sandbox_dir, "grep.txt")

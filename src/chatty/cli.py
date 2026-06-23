@@ -210,7 +210,7 @@ def tool_list_dir(sandbox_dir: str, path: str = ".", max_items: int = 200) -> st
     except Exception as e:
         return f"Error listing directory: {str(e)}"
 
-def tool_read_file(sandbox_dir: str, path: str, start_line: int = None, end_line: int = None, max_chars: int = 40000) -> str:
+def tool_read_file(sandbox_dir: str, path: str, start_line: int = None, end_line: int = None, max_chars: int = 40000, line_numbers: bool = False) -> str:
   """Read the contents of a file inside the sandbox, optionally specifying a 1-indexed line range."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -220,7 +220,7 @@ def tool_read_file(sandbox_dir: str, path: str, start_line: int = None, end_line
       return f"Error: Path '{path}' is not a file."
       
     with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-      if start_line is None and end_line is None:
+      if start_line is None and end_line is None and not line_numbers:
         content = f.read()
         if len(content) > max_chars:
           return content[:max_chars] + f"\n\n[WARNING: File '{path}' is too large ({len(content)} characters) and has been truncated. Use 'start_line' and 'end_line' parameters to read specific sections.]"
@@ -237,7 +237,15 @@ def tool_read_file(sandbox_dir: str, path: str, start_line: int = None, end_line
       if e < s or e > total_lines:
         return f"Error: end_line {end_line} is invalid (must be between start_line {s} and total file lines {total_lines})."
         
-      return "".join(lines[s-1:e])
+      selected_lines = lines[s-1:e]
+      if line_numbers:
+        content = "".join(f"{s + idx}: {line}" for idx, line in enumerate(selected_lines))
+      else:
+        content = "".join(selected_lines)
+        
+      if len(content) > max_chars:
+        content = content[:max_chars] + f"\n\n[WARNING: File '{path}' section is too large and has been truncated.]"
+      return content
   except Exception as e:
     return f"Error reading file: {str(e)}"
 
@@ -1290,6 +1298,10 @@ TOOLS_SCHEMA = [
                     "end_line": {
                         "type": "integer",
                         "description": "Optional ending line number to read (1-indexed, inclusive)."
+                    },
+                    "line_numbers": {
+                        "type": "boolean",
+                        "description": "Set to true to include 1-indexed line numbers at the beginning of each line (formatted as 'line_num: line_content'). Defaults to false."
                     }
                 },
                 "required": ["path"]
@@ -1543,7 +1555,8 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
       end_line = int(arguments.get("end_line")) if arguments.get("end_line") is not None else None
     except (ValueError, TypeError):
       return "Error: start_line and end_line must be valid integers."
-    return tool_read_file(session.sandbox, path, start_line, end_line, max_chars=session.max_read_chars)
+    line_numbers = bool(arguments.get("line_numbers")) if arguments.get("line_numbers") is not None else False
+    return tool_read_file(session.sandbox, path, start_line, end_line, max_chars=session.max_read_chars, line_numbers=line_numbers)
   elif name == "write_file":
     path = arguments.get("path")
     content = arguments.get("content")
@@ -1930,6 +1943,7 @@ class ChatbotSession:
                 default_headers={
                   "HTTP-Referer": "https://github.com/davidel/chatty",
                   "X-Title": "Chatty",
+                  "X-OpenRouter-Cache": "false"
                 }
             )
 
