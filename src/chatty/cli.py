@@ -2119,12 +2119,12 @@ class ChatbotSession:
         )
         try:
           proc.wait(timeout=10)
-          stdout_f.seek(0)
-          stderr_f.seek(0)
-          stdout = stdout_f.read()
-          stderr = stderr_f.read()
           stdout_f.close()
           stderr_f.close()
+          with open(stdout_f.name, 'r', errors='replace') as f:
+            stdout = f.read()
+          with open(stderr_f.name, 'r', errors='replace') as f:
+            stderr = f.read()
           try:
             os.unlink(stdout_f.name)
           except Exception:
