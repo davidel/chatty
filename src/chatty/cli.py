@@ -2417,6 +2417,7 @@ class ChatbotSession:
             self.current_loop = loop_count + 1
             # Prepare message payloads based on limit settings
             active_messages = self.prune_history()
+            logger.debug(f"LLM request payload messages: {json.dumps(active_messages, default=str)}")
             
             # Start LLM stream call
             tool_calls_accumulated = []
@@ -2488,6 +2489,10 @@ class ChatbotSession:
                     console.print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
                 
                 logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
+                if content_accumulated:
+                    logger.debug(f"Assistant response content: {content_accumulated}")
+                if tool_calls_accumulated:
+                    logger.debug(f"Assistant response tool calls: {tool_calls_accumulated}")
             except Exception as e:
                 logger.exception("Error calling LLM API")
                 console.print(f"[bold red]Error calling API:[/bold red] {str(e)}")
@@ -2564,6 +2569,7 @@ class ChatbotSession:
                 
                 truncated = "TRUNCATED" in t_result or "truncated" in t_result.lower() or "WARNING" in t_result
                 logger.info(f"Tool {t_name} (id={t_id}) completed. Result size: {len(t_result)} characters (truncated: {truncated})")
+                logger.debug(f"Tool {t_name} (id={t_id}) result content: {t_result}")
                 
                 # Record result for context
                 self.messages.append({
@@ -2728,6 +2734,7 @@ class ChatbotSession:
 
       # Prepare messages for summarization
       active_messages = self.prune_history()
+      logger.debug(f"Context compression request payload messages: {json.dumps(active_messages, default=str)}")
       summary_instruction = (
         "Summarize our progress, the current task we are focusing on, "
         "any code modifications made so far, and the immediate next steps. "
@@ -2761,6 +2768,8 @@ class ChatbotSession:
               content_accumulated += delta.content
               live.update(Panel(Markdown(content_accumulated), title="Context Summary", border_style="yellow"))
         logger.info("Summary generation succeeded")
+        if content_accumulated:
+            logger.debug(f"Generated summary: {content_accumulated}")
       except Exception as e:
         logger.exception("Error calling LLM API for context summary")
         console.print(f"[bold red]Error calling API for summary:[/bold red] {str(e)}")
