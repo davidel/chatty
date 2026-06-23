@@ -2085,6 +2085,10 @@ class ChatbotSession:
           task_id = f"task_{self.next_task_id}"
           self.next_task_id += 1
           logger.info(f"Command timed out. Transitioned to background. Task ID: {task_id}")
+          console.print(
+            f"\n[bold yellow]⚙️  Command took > 10s and is now running in the background. "
+            f"Task ID: {task_id}. Use '/status' or check_background_command to monitor progress.[/bold yellow]\n"
+          )
           self.background_commands[task_id] = {
             "proc": proc,
             "command": command,
@@ -2293,6 +2297,19 @@ class ChatbotSession:
         
       if log:
         logger.info(f"Pruning history: kept {len(pruned)} out of {total_msgs} messages (accumulated tokens: {accumulated_tokens})")
+        pruned_count = total_msgs - len(pruned)
+        if pruned_count > 0:
+          logger.warning(f"Context window limit reached. Pruned {pruned_count} messages from history.")
+          console.print(
+            f"\n[bold yellow]⚠️  Context Warning: {pruned_count} older message(s) were pruned from history "
+            f"to fit the context size limit ({self.context_size} tokens).[/bold yellow]"
+          )
+          # If the very first user prompt is no longer in the pruned message history
+          if self.messages and self.messages[0] not in pruned:
+            console.print(
+              "[bold red]⚠️  Critical: Your initial prompt/instructions have been pruned from context! "
+              "The AI may lose track of the overall goal. Consider running '/compress' to reload a summary recap.[/bold red]\n"
+            )
       # Filter orphaned tool messages
       defined_ids = set()
       for msg in pruned:
@@ -2420,10 +2437,14 @@ class ChatbotSession:
                     )
                     
                     first_chunk = True
+                    finish_reason = None
                     for chunk in stream:
                         if not chunk.choices:
                             continue
-                        delta = chunk.choices[0].delta
+                        choice = chunk.choices[0]
+                        delta = choice.delta
+                        if hasattr(choice, "finish_reason") and choice.finish_reason:
+                            finish_reason = choice.finish_reason
                         
                         # Process streaming content
                         if delta.content:
@@ -2461,6 +2482,11 @@ class ChatbotSession:
                                 live.update(Group(panel, self.get_rich_status_bar()))
                     # Remove status bar before exiting Live context
                     live.update(panel)
+                
+                if finish_reason == "length":
+                    logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")
+                    console.print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
+                
                 logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
             except Exception as e:
                 logger.exception("Error calling LLM API")
