@@ -102,12 +102,12 @@ class TestCommandSafety(unittest.TestCase):
     import subprocess
     
     mock_proc = mock.MagicMock()
-    mock_proc.wait.side_effect = subprocess.TimeoutExpired("sleep 100", 10)
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running_process 100", 10)
     mock_proc.pid = 12345
     mock_proc.poll.return_value = None
     
     with mock.patch("subprocess.Popen", return_value=mock_proc):
-      res = self.session.tool_run_command("sleep 100")
+      res = self.session.tool_run_command("long_running_process 100")
       self.assertIn("running in the background", res)
       self.assertIn("Task ID: task_1", res)
       
@@ -132,12 +132,12 @@ class TestCommandSafety(unittest.TestCase):
     import subprocess
     
     mock_proc = mock.MagicMock()
-    mock_proc.wait.side_effect = subprocess.TimeoutExpired("sleep 100", 10)
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running_process 100", 10)
     mock_proc.pid = 12345
     mock_proc.poll.return_value = 0
     
     with mock.patch("subprocess.Popen", return_value=mock_proc):
-      res = self.session.tool_run_command("sleep 100")
+      res = self.session.tool_run_command("long_running_process 100")
       self.assertIn("Task ID: task_1", res)
       
       # Kill the process
@@ -152,6 +152,29 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIsNotNone(err)
       self.assertIn("prohibited to terminate processes", err)
       self.assertIn("kill_process", err)
+
+  def test_blocked_sleep_commands(self):
+    for cmd in ["sleep 5", "sleep 10", "sleep 0.5"]:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to pause execution", err)
+      self.assertIn("sleep", err)
+
+  def test_sleep_tool_execution(self):
+    from chatty.cli import execute_tool, tool_sleep
+    # Test tool_sleep directly
+    res = tool_sleep(0.01)
+    self.assertIn("Successfully slept for 0.01 seconds", res)
+    
+    res = tool_sleep(-1)
+    self.assertIn("Error", res)
+    
+    res = tool_sleep(100)
+    self.assertIn("Error", res)
+
+    # Test via execute_tool
+    res = execute_tool("sleep", {"seconds": 0.02}, self.session)
+    self.assertIn("Successfully slept for 0.02 seconds", res)
 
 if __name__ == "__main__":
   unittest.main()

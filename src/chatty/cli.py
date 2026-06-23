@@ -1077,6 +1077,21 @@ def tool_make_directory(sandbox_dir: str, path: str) -> str:
     return f"Error creating directory: {str(e)}"
 
 
+def tool_sleep(seconds: float) -> str:
+  """Sleep for a specified number of seconds to wait for background operations to progress."""
+  import time
+  try:
+    sec = float(seconds)
+    if sec < 0:
+      return "Error: sleep duration cannot be negative."
+    if sec > 60:
+      return "Error: maximum sleep duration is 60 seconds."
+    time.sleep(sec)
+    return f"Successfully slept for {sec} seconds."
+  except Exception as e:
+    return f"Error sleeping: {str(e)}"
+
+
 # Define standard schemas for tools
 TOOLS_SCHEMA = [
   {
@@ -1338,7 +1353,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Execute a shell command, returning its stdout, stderr, and exit status code. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to search files (use search_grep), find files (use locate_files), view/inspect files (use read_file/get_file_info), or count lines/words (use get_file_info). Using commands like 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', or 'more' to search or view files directly will fail with an error. Always use get_file_info instead of 'wc -l' to count lines in files.",
+            "description": "Execute a shell command, returning its stdout, stderr, and exit status code. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to search files (use search_grep), find files (use locate_files), view/inspect files (use read_file/get_file_info), count lines/words (use get_file_info), or pause execution (use sleep). Using commands like 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', 'more', or 'sleep' directly will fail with an error. Always use get_file_info instead of 'wc -l' to count lines in files, and use the 'sleep' tool to pause execution.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1465,6 +1480,23 @@ TOOLS_SCHEMA = [
                         "description": "Optional custom command to run tests/linting (e.g., 'pytest tests/test_math.py', 'make test', or 'verilator --lint-only -y src -Isrc/include src/top.sv'). Specify any required include paths, library search paths, or source files directly in the command string."
                     }
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sleep",
+            "description": "Sleep for a specified number of seconds to wait for background operations to progress.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seconds": {
+                        "type": "number",
+                        "description": "The number of seconds to sleep."
+                    }
+                },
+                "required": ["seconds"]
             }
         }
     }
@@ -1595,6 +1627,15 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
     if not url:
       return "Error: Missing parameter 'url'."
     return tool_fetch_url(url, max_chars=session.max_url_chars)
+  elif name == "sleep":
+    seconds = arguments.get("seconds")
+    if seconds is None:
+      return "Error: Missing parameter 'seconds'."
+    try:
+      seconds = float(seconds)
+    except (ValueError, TypeError):
+      return "Error: seconds must be a valid number."
+    return tool_sleep(seconds)
   else:
     return f"Error: Tool '{name}' is not recognized."
 
@@ -1731,11 +1772,12 @@ class ChatbotSession:
         self.current_loop = 0
         default_prompt = (
             "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
-            "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), and terminating background processes (kill_process).\n"
+            "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), terminating background processes (kill_process), and sleeping/waiting (sleep).\n"
             "All paths provided to the tools will resolve relative to the sandbox directory.\n"
             "You are strictly prohibited from writing files outside the sandbox folder.\n"
             "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
-            "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output, or terminate it by calling kill_process with the Task ID. Perform other file tasks (read, patch, edit) while waiting.\n"
+            "CRITICAL: You are strictly prohibited from using the shell 'sleep' command inside run_command to pause execution. You MUST use the dedicated 'sleep' tool instead.\n"
+            "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output, or terminate it by calling kill_process with the Task ID. Perform other file tasks (read, patch, edit) or use the 'sleep' tool while waiting.\n"
             "To filter the output of run_command, use its optional 'output_filter' (regex), 'tail_lines', or 'head_lines' parameters rather than piping to grep or writing custom filtering scripts.\n"
             "When compilation, testing, verification, or running tools (like verilator, python scripts, compilers) is needed, you MUST execute them directly using the run_command tool instead of instructing the user to run them manually.\n"
             "Always use your tools proactively to solve tasks directly."
@@ -1990,6 +2032,11 @@ class ChatbotSession:
               return (
                 f"Error: Using '{token}' in run_command is prohibited to inspect files. "
                 "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
+              )
+            elif clean_token == 'sleep':
+              return (
+                "Error: Using 'sleep' in run_command is prohibited to pause execution. "
+                "Please use the dedicated 'sleep' tool instead."
               )
           
           if token.strip() in sequencers:
