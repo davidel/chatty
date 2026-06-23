@@ -1737,13 +1737,14 @@ def get_ollama_models(url: str) -> List[str]:
 class ChatbotSession:
     _active_session = None
 
-    def __init__(self, provider: str, model: str, context_size: int, sandbox: str, api_key: str = None, url: str = None, max_loops: int = 20, system_prompt_override: str = None, prompt_mode: str = "replace", skills_paths: List[str] = None, max_read_chars: int = 40000, max_grep_results: int = 100, max_command_chars: int = 16000, max_history_tool_chars: int = 1000, history_keep_messages: int = 4, max_url_chars: int = 24000, max_dir_items: int = 200, static_skills: bool = None):
+    def __init__(self, provider: str, model: str, context_size: int, sandbox: str, api_key: str = None, url: str = None, max_loops: int = 20, system_prompt_override: str = None, prompt_mode: str = "replace", skills_paths: List[str] = None, max_read_chars: int = 40000, max_grep_results: int = 100, max_command_chars: int = 16000, max_history_tool_chars: int = 1000, history_keep_messages: int = 4, max_url_chars: int = 24000, max_dir_items: int = 200, static_skills: bool = None, prompt_caching: bool = False):
         ChatbotSession._active_session = self
         self.tool_calls_count: Dict[str, int] = {}
         self.external_binaries_count = 0
         self.external_binaries_breakdown: Dict[str, int] = {}
         
         self.provider = provider
+        self.prompt_caching = prompt_caching
         if static_skills is None:
             self.static_skills = (provider == "openrouter")
         else:
@@ -2297,7 +2298,7 @@ class ChatbotSession:
       """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
       sys_prompt = self.get_active_system_prompt()
       system_msg = {"role": "system", "content": sys_prompt}
-      if self.provider == "openrouter":
+      if self.prompt_caching:
         system_msg["cache_control"] = {"type": "ephemeral"}
       sys_tokens = count_tokens(sys_prompt)
       
@@ -2372,7 +2373,7 @@ class ChatbotSession:
             continue
         final_pruned.append(msg)
         
-      if self.provider == "openrouter" and final_pruned:
+      if self.prompt_caching and final_pruned:
         final_pruned = [dict(msg) for msg in final_pruned]
         final_pruned[-1]["cache_control"] = {"type": "ephemeral"}
         if len(final_pruned) >= 2:
@@ -2445,7 +2446,7 @@ class ChatbotSession:
         """Returns list of tools, optionally annotated with cache_control for OpenRouter."""
         if not TOOLS_SCHEMA:
             return None
-        if self.provider == "openrouter":
+        if self.prompt_caching:
             tools = [dict(t) for t in TOOLS_SCHEMA]
             if tools:
                 tools[-1] = dict(tools[-1])
@@ -3151,6 +3152,12 @@ def main():
         help="Load all available skills statically into the system prompt to maximize prompt caching (defaults to True for OpenRouter, False for Ollama)."
     )
     parser.add_argument(
+        "--prompt-caching",
+        action="store_true",
+        default=False,
+        help="Explicitly enable prompt caching for compatible models (adds cache_control tagging, default: False)."
+    )
+    parser.add_argument(
         "--max-loops", "-l",
         type=int,
         default=20,
@@ -3283,7 +3290,8 @@ def main():
         history_keep_messages=args.history_keep_messages,
         max_url_chars=args.max_url_chars,
         max_dir_items=args.max_dir_items,
-        static_skills=args.static_skills
+        static_skills=args.static_skills,
+        prompt_caching=args.prompt_caching
     )
     
     chat_session.start_loop()

@@ -137,7 +137,8 @@ class TestCutoffs(unittest.TestCase):
             provider="openrouter",
             model="mock-model",
             context_size=10000,
-            sandbox=self.sandbox_dir
+            sandbox=self.sandbox_dir,
+            prompt_caching=True
         )
         self.assertTrue(session_or.static_skills)
 
