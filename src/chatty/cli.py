@@ -1363,6 +1363,18 @@ TOOLS_SCHEMA = [
                     "command": {
                         "type": "string",
                         "description": "The exact shell command to execute."
+                    },
+                    "output_filter": {
+                        "type": "string",
+                        "description": "Optional regular expression pattern. If specified, only lines from the output matching this pattern will be returned. Use this to filter large command outputs (e.g. to search for 'FAIL', 'Error', or specific test/log names) and prevent context window truncation."
+                    },
+                    "tail_lines": {
+                        "type": "integer",
+                        "description": "Optional. Only return the last N lines of the command output (similar to 'tail -n N'). Useful for viewing the end of long execution or build logs."
+                    },
+                    "head_lines": {
+                        "type": "integer",
+                        "description": "Optional. Only return the first N lines of the command output (similar to 'head -n N'). Useful for viewing startup logs, headers, or initial error messages."
                     }
                 },
                 "required": ["command"]
@@ -1544,7 +1556,20 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession"
     command = arguments.get("command")
     if not command:
       return "Error: Missing parameter 'command'."
-    return session.tool_run_command(command)
+    output_filter = arguments.get("output_filter")
+    tail_lines = arguments.get("tail_lines")
+    head_lines = arguments.get("head_lines")
+    if tail_lines is not None:
+      try:
+        tail_lines = int(tail_lines)
+      except (ValueError, TypeError):
+        return "Error: tail_lines must be a valid integer."
+    if head_lines is not None:
+      try:
+        head_lines = int(head_lines)
+      except (ValueError, TypeError):
+        return "Error: head_lines must be a valid integer."
+    return session.tool_run_command(command, output_filter=output_filter, tail_lines=tail_lines, head_lines=head_lines)
   elif name == "check_background_command":
     task_id = arguments.get("task_id")
     if not task_id:
@@ -1707,6 +1732,7 @@ class ChatbotSession:
             "You are strictly prohibited from writing files outside the sandbox folder.\n"
             "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
             "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output. Perform other file tasks (read, patch, edit) while waiting.\n"
+            "To filter the output of run_command, use its optional 'output_filter' (regex), 'tail_lines', or 'head_lines' parameters rather than piping to grep or writing custom filtering scripts.\n"
             "When compilation, testing, verification, or running tools (like verilator, python scripts, compilers) is needed, you MUST execute them directly using the run_command tool instead of instructing the user to run them manually.\n"
             "Always use your tools proactively to solve tasks directly."
         )
@@ -1975,9 +2001,9 @@ class ChatbotSession:
 
       return check_cmd(command)
 
-    def tool_run_command(self, command: str) -> str:
+    def tool_run_command(self, command: str, output_filter: Optional[str] = None, tail_lines: Optional[int] = None, head_lines: Optional[int] = None) -> str:
       """Execute a shell command, transitioning to background execution if it takes too long."""
-      logger.info(f"Running shell command: '{command}'")
+      logger.info(f"Running shell command: '{command}' (filter={output_filter}, tail={tail_lines}, head={head_lines})")
       validation_err = self.validate_command_safety(command)
       if validation_err:
         logger.warning(f"Rejected command '{command}': {validation_err}")
@@ -1985,6 +2011,24 @@ class ChatbotSession:
       import subprocess
       import os
       import tempfile
+      
+      def apply_filters(text: str) -> str:
+        if not text:
+          return text
+        lines = text.splitlines()
+        if output_filter:
+          import re
+          try:
+            pattern = re.compile(output_filter, re.IGNORECASE)
+            lines = [line for line in lines if pattern.search(line)]
+          except re.error as e:
+            return f"Error applying output_filter: {e}"
+        if head_lines is not None and head_lines > 0:
+          lines = lines[:head_lines]
+        if tail_lines is not None and tail_lines > 0:
+          lines = lines[-tail_lines:]
+        return "\n".join(lines)
+
       stdout_f = None
       stderr_f = None
       try:
@@ -2014,6 +2058,11 @@ class ChatbotSession:
             os.unlink(stderr_f.name)
           except Exception:
             pass
+          
+          if output_filter or tail_lines is not None or head_lines is not None:
+            stdout = apply_filters(stdout)
+            stderr = apply_filters(stderr)
+            
           output = []
           if stdout:
             output.append(f"Stdout:\n{truncate_output(stdout, max_chars=self.max_command_chars)}")
@@ -2032,7 +2081,10 @@ class ChatbotSession:
             "stdout_path": stdout_f.name,
             "stderr_path": stderr_f.name,
             "stdout_file": stdout_f,
-            "stderr_file": stderr_f
+            "stderr_file": stderr_f,
+            "output_filter": output_filter,
+            "tail_lines": tail_lines,
+            "head_lines": head_lines
           }
           return (
             f"Info: The command is taking longer than 10 seconds. It is now running in the background.\n"
@@ -2072,6 +2124,32 @@ class ChatbotSession:
         except Exception as e:
             stdout_content = f"Error reading output: {e}"
             stderr_content = ""
+            
+        output_filter = task.get("output_filter")
+        tail_lines = task.get("tail_lines")
+        head_lines = task.get("head_lines")
+        
+        def apply_filters(text: str) -> str:
+          if not text:
+            return text
+          lines = text.splitlines()
+          if output_filter:
+            import re
+            try:
+              pattern = re.compile(output_filter, re.IGNORECASE)
+              lines = [line for line in lines if pattern.search(line)]
+            except re.error as e:
+              return f"Error applying output_filter: {e}"
+          if head_lines is not None and head_lines > 0:
+            lines = lines[:head_lines]
+          if tail_lines is not None and tail_lines > 0:
+            lines = lines[-tail_lines:]
+          return "\n".join(lines)
+
+        if output_filter or tail_lines is not None or head_lines is not None:
+          stdout_content = apply_filters(stdout_content)
+          stderr_content = apply_filters(stderr_content)
+
         output = []
         if stdout_content:
             output.append(f"Stdout:\n{truncate_output(stdout_content, max_chars=self.max_command_chars)}")
