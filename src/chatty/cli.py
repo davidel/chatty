@@ -1338,7 +1338,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Execute a shell command. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to search files (use search_grep), find files (use locate_files), view/inspect files (use read_file/get_file_info), or count lines/words (use get_file_info). Using commands like 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', or 'more' to search or view files directly will fail with an error. Always use get_file_info instead of 'wc -l' to count lines in files.",
+            "description": "Execute a shell command, returning its stdout, stderr, and exit status code. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to search files (use search_grep), find files (use locate_files), view/inspect files (use read_file/get_file_info), or count lines/words (use get_file_info). Using commands like 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', or 'more' to search or view files directly will fail with an error. Always use get_file_info instead of 'wc -l' to count lines in files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1367,7 +1367,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "check_background_command",
-            "description": "Check the status and read the output of a command running in the background.",
+            "description": "Check the status, output, and exit status code of a command running in the background.",
             "parameters": {
                 "type": "object",
                 "properties": {
