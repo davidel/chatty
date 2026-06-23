@@ -1763,7 +1763,10 @@ class ChatbotSession:
         else:
             self.static_skills = static_skills
         self.model = model
-        self.context_size = context_size
+        if provider == "openrouter" and context_size == 8192:
+          self.context_size = 100000
+        else:
+          self.context_size = context_size
         self.sandbox = os.path.abspath(sandbox)
         self.api_key = api_key
         self.url = url
@@ -2492,57 +2495,81 @@ class ChatbotSession:
                 with Live(Group(panel, self.get_rich_status_bar()), 
                           refresh_per_second=12, console=console) as live:
                     
-                    stream = self.client.chat.completions.create(
-                        model=self.model,
-                        messages=active_messages,
-                        tools=self.get_tools(),
-                        stream=True
-                    )
-                    
-                    first_chunk = True
-                    finish_reason = None
-                    for chunk in stream:
-                        if not chunk.choices:
-                            continue
-                        choice = chunk.choices[0]
-                        delta = choice.delta
-                        if hasattr(choice, "finish_reason") and choice.finish_reason:
-                            finish_reason = choice.finish_reason
-                        
-                        # Process streaming content
-                        if delta.content:
-                            if first_chunk:
-                                panel = Panel("", title="Assistant", border_style="green")
-                                first_chunk = False
-                            content_accumulated += delta.content
+                    if self.provider == "openrouter":
+                        response = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=active_messages,
+                            tools=self.get_tools(),
+                            stream=False
+                        )
+                        message = response.choices[0].message
+                        content_accumulated = message.content or ""
+                        finish_reason = response.choices[0].finish_reason
+                        if message.tool_calls:
+                            for tc in message.tool_calls:
+                                tool_calls_accumulated.append({
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.function.name,
+                                        "arguments": tc.function.arguments
+                                    }
+                                })
+                        if content_accumulated:
                             panel = Panel(Markdown(content_accumulated), title="Assistant", border_style="green")
-                            live.update(Group(panel, self.get_rich_status_bar()))
+                            live.update(panel)
+                    else:
+                        stream = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=active_messages,
+                            tools=self.get_tools(),
+                            stream=True
+                        )
+                        
+                        first_chunk = True
+                        finish_reason = None
+                        for chunk in stream:
+                            if not chunk.choices:
+                                continue
+                            choice = chunk.choices[0]
+                            delta = choice.delta
+                            if hasattr(choice, "finish_reason") and choice.finish_reason:
+                                finish_reason = choice.finish_reason
                             
-                        # Process streaming tool calls
-                        if delta.tool_calls:
-                            first_chunk = False
-                            for tc in delta.tool_calls:
-                                idx = tc.index
-                                while len(tool_calls_accumulated) <= idx:
-                                    tool_calls_accumulated.append({
-                                        "id": None,
-                                        "type": "function",
-                                        "function": {"name": "", "arguments": ""}
-                                    })
-                                
-                                item = tool_calls_accumulated[idx]
-                                if tc.id:
-                                    item["id"] = tc.id
-                                if tc.function:
-                                    if tc.function.name:
-                                        item["function"]["name"] += tc.function.name
-                                    if tc.function.arguments:
-                                        item["function"]["arguments"] += tc.function.arguments
-                                        
-                                # Render loading indicator
-                                panel = Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
-                                              title="System", border_style="yellow")
+                            # Process streaming content
+                            if delta.content:
+                                if first_chunk:
+                                    panel = Panel("", title="Assistant", border_style="green")
+                                    first_chunk = False
+                                content_accumulated += delta.content
+                                panel = Panel(Markdown(content_accumulated), title="Assistant", border_style="green")
                                 live.update(Group(panel, self.get_rich_status_bar()))
+                                
+                            # Process streaming tool calls
+                            if delta.tool_calls:
+                                first_chunk = False
+                                for tc in delta.tool_calls:
+                                    idx = tc.index
+                                    while len(tool_calls_accumulated) <= idx:
+                                        tool_calls_accumulated.append({
+                                            "id": None,
+                                            "type": "function",
+                                            "function": {"name": "", "arguments": ""}
+                                        })
+                                    
+                                    item = tool_calls_accumulated[idx]
+                                    if tc.id:
+                                        item["id"] = tc.id
+                                    if tc.function:
+                                        if tc.function.name:
+                                            item["function"]["name"] += tc.function.name
+                                        if tc.function.arguments:
+                                            item["function"]["arguments"] += tc.function.arguments
+                                            
+                                    # Render loading indicator
+                                    panel = Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
+                                                  title="System", border_style="yellow")
+                                    live.update(Group(panel, self.get_rich_status_bar()))
                     # Remove status bar before exiting Live context
                     live.update(panel)
                 
@@ -2592,6 +2619,18 @@ class ChatbotSession:
                         }
                     })
                     
+            if self.provider == "openrouter":
+                extra_fields = ["reasoning", "reasoning_details", "thought_signature"]
+                for field in extra_fields:
+                    if "message" in locals() and message is not None:
+                        if hasattr(message, field):
+                            val = getattr(message, field)
+                            if val is not None:
+                                assistant_msg[field] = val
+                        elif isinstance(message, dict) and field in message:
+                            if message[field] is not None:
+                                assistant_msg[field] = message[field]
+                                
             self.messages.append(assistant_msg)
             
             # If no tools called, we're finished with this turn
@@ -2685,6 +2724,10 @@ class ChatbotSession:
             elif arg in ("ollama", "openrouter"):
                 self.provider = arg
                 self.init_client()
+                if arg == "openrouter" and self.context_size == 8192:
+                  self.context_size = 100000
+                elif arg == "ollama" and self.context_size == 100000:
+                  self.context_size = 8192
                 console.print(f"Switched provider to: [bold green]{self.provider}[/bold green]")
             else:
                 console.print("[bold red]Error: Provider must be 'ollama' or 'openrouter'.[/bold red]")
