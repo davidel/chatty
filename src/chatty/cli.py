@@ -35,6 +35,165 @@ from prompt_toolkit.styles import Style
 # Initialize global Rich console
 console = Console()
 
+
+# --- Subprocess wrapping and tracking ---
+import subprocess
+import threading
+
+_in_subprocess_wrap = threading.local()
+
+def preprocess_shell_string(cmd_str: str) -> str:
+    operators = {"|", "&", ";", "<", ">", "(", ")"}
+    res = []
+    in_single = False
+    in_double = False
+    escaped = False
+    for char in cmd_str:
+        if escaped:
+            res.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            res.append(char)
+            escaped = True
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            res.append(char)
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            res.append(char)
+            continue
+        if not in_single and not in_double and char in operators:
+            res.append(" " + char + " ")
+        else:
+            res.append(char)
+    return "".join(res)
+
+def parse_shell_commands(cmd_str: str) -> list:
+    import shlex
+    preprocessed = preprocess_shell_string(cmd_str)
+    try:
+        tokens = shlex.split(preprocessed, posix=True)
+    except Exception:
+        tokens = preprocessed.strip().split()
+        
+    binaries = []
+    
+    control_operators = {"|", "&&", "||", ";", "&", "\n", "(", ")"}
+    redirections = {">", "<", ">>", "<<", ">&", "<&"}
+    
+    state = "START"
+    
+    iterator = iter(tokens)
+    while True:
+        try:
+            token = next(iterator)
+        except StopIteration:
+            break
+            
+        if token in control_operators:
+            state = "START"
+            continue
+            
+        if state == "START":
+            is_redirect = False
+            for red in redirections:
+                if token == red or token.endswith(red):
+                    is_redirect = True
+                    break
+            
+            if is_redirect:
+                try:
+                    next(iterator)
+                except StopIteration:
+                    pass
+                continue
+                
+            if "=" in token and not token.startswith("="):
+                continue
+                
+            state = "ARG"
+            binaries.append(os.path.basename(token))
+        else:
+            is_redirect = False
+            for red in redirections:
+                if token == red or token.endswith(red):
+                    is_redirect = True
+                    break
+            if is_redirect:
+                try:
+                    next(iterator)
+                except StopIteration:
+                    pass
+                continue
+                
+    return binaries
+
+def record_command_binaries(args):
+    if not args:
+        return
+    
+    binaries = []
+    if isinstance(args, list):
+        if args:
+            first = args[0]
+            if isinstance(first, (str, bytes)):
+                name = first.decode('utf-8', errors='ignore') if isinstance(first, bytes) else first
+                binaries.append(os.path.basename(name))
+            else:
+                binaries.append(str(first))
+    elif isinstance(args, (str, bytes)):
+        cmd_str = args.decode('utf-8', errors='ignore') if isinstance(args, bytes) else args
+        binaries = parse_shell_commands(cmd_str)
+        
+    if "ChatbotSession" in globals():
+        session = getattr(ChatbotSession, "_active_session", None)
+        if session:
+            for binary_name in binaries:
+                session.external_binaries_count += 1
+                session.external_binaries_breakdown[binary_name] = session.external_binaries_breakdown.get(binary_name, 0) + 1
+
+original_run = subprocess.run
+original_Popen = subprocess.Popen
+
+def wrapped_run(*args, **kwargs):
+    is_nested = getattr(_in_subprocess_wrap, "val", False)
+    if not is_nested:
+        _in_subprocess_wrap.val = True
+        try:
+            cmd_args = kwargs.get("args") if "args" in kwargs else (args[0] if args else None)
+            record_command_binaries(cmd_args)
+        except Exception:
+            pass
+    try:
+        res = original_run(*args, **kwargs)
+    finally:
+        if not is_nested:
+            _in_subprocess_wrap.val = False
+    return res
+
+def wrapped_Popen(*args, **kwargs):
+    is_nested = getattr(_in_subprocess_wrap, "val", False)
+    if not is_nested:
+        _in_subprocess_wrap.val = True
+        try:
+            cmd_args = kwargs.get("args") if "args" in kwargs else (args[0] if args else None)
+            record_command_binaries(cmd_args)
+        except Exception:
+            pass
+    try:
+        res = original_Popen(*args, **kwargs)
+    finally:
+        if not is_nested:
+            _in_subprocess_wrap.val = False
+    return res
+
+subprocess.run = wrapped_run
+subprocess.Popen = wrapped_Popen
+
+
 # --- Sandboxed File System Tools ---
 
 def get_safe_path(sandbox_dir: str, target_path: str) -> str:
@@ -1302,6 +1461,10 @@ TOOLS_SCHEMA = [
 
 def execute_tool(name: str, arguments: Dict[str, Any], session: "ChatbotSession") -> str:
   """Executes the specified tool with arguments in the sandbox directory."""
+  if not hasattr(session, "tool_calls_count"):
+    session.tool_calls_count = {}
+  session.tool_calls_count[name] = session.tool_calls_count.get(name, 0) + 1
+
   if name == "move_file":
     src = arguments.get("src")
     dest = arguments.get("dest")
@@ -1502,7 +1665,14 @@ def get_ollama_models(url: str) -> List[str]:
 # --- Chatbot Session Manager ---
 
 class ChatbotSession:
+    _active_session = None
+
     def __init__(self, provider: str, model: str, context_size: int, sandbox: str, api_key: str = None, url: str = None, max_loops: int = 20, system_prompt_override: str = None, prompt_mode: str = "replace", skills_paths: List[str] = None, max_read_chars: int = 40000, max_grep_results: int = 100, max_command_chars: int = 16000, max_history_tool_chars: int = 1000, history_keep_messages: int = 4, max_url_chars: int = 24000, max_dir_items: int = 200, static_skills: bool = None):
+        ChatbotSession._active_session = self
+        self.tool_calls_count: Dict[str, int] = {}
+        self.external_binaries_count = 0
+        self.external_binaries_breakdown: Dict[str, int] = {}
+        
         self.provider = provider
         if static_skills is None:
             self.static_skills = (provider == "openrouter")
@@ -2291,6 +2461,9 @@ class ChatbotSession:
         elif cmd == "/status":
             self.show_status()
             
+        elif cmd == "/tool_stats":
+            self.show_tool_stats()
+            
         elif cmd == "/provider":
             if not arg:
                 console.print(f"Current provider: [bold cyan]{self.provider}[/bold cyan]")
@@ -2470,6 +2643,7 @@ class ChatbotSession:
         table.add_column("Description", style="white")
         table.add_row("/help", "Show this help screen")
         table.add_row("/status", "Display current session configuration")
+        table.add_row("/tool_stats", "Show statistics on tool and external binary calls")
         table.add_row("/provider [ollama|openrouter]", "View or switch the LLM backend provider")
         table.add_row("/model [name]", "View or switch the current LLM model")
         table.add_row("/sandbox [path]", "View or change the sandbox directory path")
@@ -2499,6 +2673,43 @@ class ChatbotSession:
         table.add_row("Total Messages", str(len(self.messages)))
         table.add_row("Multiline Input", "Enabled" if self.multiline_mode else "Disabled")
         console.print(table)
+
+    def show_tool_stats(self):
+        """Displays statistics on tool and external binary calls."""
+        # Tool calls table
+        tool_table = Table(title="Tool Execution Stats", show_header=True, header_style="bold yellow")
+        tool_table.add_column("Tool Name", style="cyan")
+        tool_table.add_column("Call Count", style="green", justify="right")
+        
+        sorted_tools = sorted(self.tool_calls_count.items(), key=lambda x: (-x[1], x[0]))
+        total_tool_calls = sum(self.tool_calls_count.values())
+        
+        for name, count in sorted_tools:
+            tool_table.add_row(name, str(count))
+        
+        if not sorted_tools:
+            tool_table.add_row("[dim]No tools called yet[/dim]", "0")
+        else:
+            tool_table.add_section()
+            tool_table.add_row("[bold]Total Tool Calls[/bold]", f"[bold]{total_tool_calls}[/bold]")
+            
+        # External binary table
+        bin_table = Table(title="External Binary Execution Stats", show_header=True, header_style="bold magenta")
+        bin_table.add_column("Binary Name", style="cyan")
+        bin_table.add_column("Call Count", style="green", justify="right")
+        
+        sorted_bins = sorted(self.external_binaries_breakdown.items(), key=lambda x: (-x[1], x[0]))
+        
+        for name, count in sorted_bins:
+            bin_table.add_row(name, str(count))
+            
+        if not sorted_bins:
+            bin_table.add_row("[dim]No external binaries executed yet[/dim]", "0")
+        else:
+            bin_table.add_section()
+            bin_table.add_row("[bold]Total Binary Calls[/bold]", f"[bold]{self.external_binaries_count}[/bold]")
+            
+        console.print(Columns([tool_table, bin_table], equal=False, expand=True))
 
     def show_tools(self):
         """Lists available filesystem functions."""
