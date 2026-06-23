@@ -241,6 +241,50 @@ class TestCutoffs(unittest.TestCase):
         self.assertIn("Loops:0/20", rendered_clean)
 
 
+class TestReasoningAccumulation(unittest.TestCase):
+  def test_reasoning_accumulation(self):
+    import unittest.mock as mock
+    from chatty.cli import ChatbotSession
+
+    session = ChatbotSession(
+      provider="openrouter",
+      model="google/gemini-2.5-flash",
+      context_size=10000,
+      sandbox="/tmp"
+    )
+
+    class MockDelta:
+      def __init__(self, content=None, tool_calls=None, reasoning=None, thought_signature=None):
+        self.content = content
+        self.tool_calls = tool_calls
+        self.reasoning = reasoning
+        self.thought_signature = thought_signature
+
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+
+    class MockChunk:
+      def __init__(self, choices):
+        self.choices = choices
+
+    mock_chunks = [
+      MockChunk([MockChoice(MockDelta(reasoning="Thinking... "))]),
+      MockChunk([MockChoice(MockDelta(reasoning="Indeed. ", thought_signature="sig123"))]),
+      MockChunk([MockChoice(MockDelta(content="Hello!"))])
+    ]
+
+    session.client = mock.Mock()
+    session.client.chat.completions.create.return_value = mock_chunks
+
+    session.run_llm_cycle()
+
+    last_msg = session.messages[-1]
+    self.assertEqual(last_msg["role"], "assistant")
+    self.assertEqual(last_msg["content"], "Hello!")
+    self.assertEqual(last_msg["reasoning"], "Thinking... Indeed. ")
+    self.assertEqual(last_msg["thought_signature"], "sig123")
+
 
 if __name__ == "__main__":
     unittest.main()

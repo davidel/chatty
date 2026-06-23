@@ -2483,6 +2483,12 @@ class ChatbotSession:
             # Start LLM stream call
             tool_calls_accumulated = []
             content_accumulated = ""
+            extra_fields_accumulated = {
+              "reasoning": None,
+              "reasoning_content": None,
+              "reasoning_details": None,
+              "thought_signature": None
+            }
             
             logger.info(f"Loop {loop_count + 1}/{max_tool_loops}: Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
             try:
@@ -2507,6 +2513,23 @@ class ChatbotSession:
                         delta = choice.delta
                         if hasattr(choice, "finish_reason") and choice.finish_reason:
                             finish_reason = choice.finish_reason
+                        
+                        # Extract any OpenRouter extra fields for reasoning/thought
+                        extra_fields = ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]
+                        for field in extra_fields:
+                          val = getattr(delta, field, None)
+                          if val is None and hasattr(delta, "model_extra") and delta.model_extra:
+                            val = delta.model_extra.get(field)
+                          if val is None and isinstance(delta, dict):
+                            val = delta.get(field)
+                            
+                          if val is not None:
+                            if extra_fields_accumulated[field] is None:
+                              extra_fields_accumulated[field] = val
+                            elif isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
+                              extra_fields_accumulated[field] += val
+                            else:
+                              extra_fields_accumulated[field] = val
                         
                         # Process streaming content
                         if delta.content:
@@ -2591,6 +2614,11 @@ class ChatbotSession:
                         }
                     })
                     
+            if self.provider == "openrouter":
+              for field, val in extra_fields_accumulated.items():
+                if val is not None:
+                  assistant_msg[field] = val
+                  
             self.messages.append(assistant_msg)
             
             # If no tools called, we're finished with this turn
