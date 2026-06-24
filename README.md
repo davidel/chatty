@@ -173,27 +173,6 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 
 ---
 
-## Syntax Verification & Dependencies
-
-Updating code via `write_file`, `patch_file`, or `edit_lines` calls the [validate_file_syntax](file:///tmp/chatty/src/chatty/cli.py#L413) helper before saving. If syntax errors occur, the tool blocks the file modifications and returns compiler/lint messages back to the model:
-1. **Python**: Parsed using the python standard `ast` compiler.
-2. **JSON & YAML**: Checked via `json.loads` and `yaml.safe_load`.
-3. **C & C++**: Syntactically validated using local compilation tools.
-4. **Verilog & SystemVerilog**: Checked using system-installed linting tools like `verilator` or `iverilog`.
-
-### Resolving Dependencies with `compile_paths`
-For languages that compile or check references across files (e.g., C/C++, Verilog), the write tools accept an optional `compile_paths` list parameter. You can specify header include folders, library directories, or explicit source dependencies relative to the sandbox:
-```json
-{
-  "path": "src/top.sv",
-  "search": "...old...",
-  "replace": "...new...",
-  "compile_paths": ["deps/my_dep.sv", "include/"]
-}
-```
-
----
-
 ## Extending Chatty with Skills
 
 **Skills** are modular system prompt extensions that can be imported to give the LLM custom domain knowledge. A skill is a subdirectory located inside a registered skill path containing a [SKILL.md](file:///tmp/chatty/src/chatty/skills/greetings/SKILL.md) file:

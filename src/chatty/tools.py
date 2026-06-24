@@ -18,7 +18,6 @@ from chatty.utils import (
   print_diff,
   tool_fetch_url
 )
-from chatty.syntax import validate_file_syntax
 
 
 def tool_list_dir(sandbox_dir: str, path: str = ".", max_items: int = 200) -> str:
@@ -160,11 +159,10 @@ def tool_get_file_info(sandbox_dir: str, path: str) -> str:
     return f"Error getting file info: {str(e)}"
 
 
-def tool_write_file(sandbox_dir: str, path: str, content: str, compile_paths: List[str] = None) -> str:
+def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
   """Write text content to a file inside the sandbox."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
-    is_valid, err_msg = validate_file_syntax(safe_p, content, sandbox_dir, compile_paths)
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     old_content = ""
@@ -182,8 +180,6 @@ def tool_write_file(sandbox_dir: str, path: str, content: str, compile_paths: Li
     if old_content:
       print_diff(rel_path, old_content, content)
       
-    if not is_valid:
-      return f"Warning: File '{rel_path}' was saved, but syntax validation reported potential issues. Please verify the code (e.g. by running tests):\n{err_msg}"
     return f"Successfully wrote to file '{rel_path}'."
   except Exception as e:
     return f"Error writing file: {str(e)}"
@@ -255,7 +251,7 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_result
     return f"Error searching files: {str(e)}"
 
 
-def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str, compile_paths: List[str] = None) -> str:
+def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> str:
   """Replace a specific unique block of text/code in a file with new content."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -295,22 +291,17 @@ def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str, comp
     else:
       new_content = updated_normalized
       
-    is_valid, err_msg = validate_file_syntax(safe_p, new_content, sandbox_dir, compile_paths)
-      
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.write(new_content)
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     print_diff(rel_path, content, new_content)
-    
-    if not is_valid:
-      return f"Warning: File '{rel_path}' was updated, but syntax validation reported potential issues. Please verify the code (e.g. by running tests):\n{err_msg}"
     return f"Successfully updated file '{rel_path}' using a target replacement patch."
   except Exception as e:
     return f"Error patching file: {str(e)}"
 
 
-def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int, replacement: str, compile_paths: List[str] = None) -> str:
+def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int, replacement: str) -> str:
   """Replace a range of lines in a file (1-indexed, inclusive) with new content."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -345,21 +336,13 @@ def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int,
     slice_end = end_line
     lines[slice_start:slice_end] = replacement_lines_formatted
     
-    new_content = "".join(lines)
-    is_valid, err_msg = validate_file_syntax(safe_p, new_content, sandbox_dir, compile_paths)
-      
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.writelines(lines)
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
-    print_diff(rel_path, original_content, new_content)
+    print_diff(rel_path, original_content, "".join(lines))
     replaced_count = end_line - start_line + 1
     inserted_count = len(replacement_lines_formatted)
-    
-    if not is_valid:
-      return (
-        f"Warning: File '{rel_path}' was updated, but syntax validation reported potential issues. Please verify the code (e.g. by running tests):\n{err_msg}"
-      )
     return (
       f"Successfully updated file '{rel_path}': replaced lines {start_line}-{end_line} "
       f"({replaced_count} lines) with {inserted_count} new lines."
@@ -722,13 +705,6 @@ TOOLS_SCHEMA = [
           "replace": {
             "type": "string",
             "description": "The new code/text to replace the search block with."
-          },
-          "compile_paths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Optional list of files or directories (relative to sandbox) containing compile-time dependencies, library search paths, or include paths needed for syntax verification."
           }
         },
         "required": ["path", "search", "replace"]
@@ -758,13 +734,6 @@ TOOLS_SCHEMA = [
           "replacement": {
             "type": "string",
             "description": "The new text/code content to insert in place of the specified lines."
-          },
-          "compile_paths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Optional list of files or directories (relative to sandbox) containing compile-time dependencies, library search paths, or include paths needed for syntax verification."
           }
         },
         "required": ["path", "start_line", "end_line", "replacement"]
@@ -831,13 +800,6 @@ TOOLS_SCHEMA = [
           "content": {
             "type": "string",
             "description": "The complete content to write into the file."
-          },
-          "compile_paths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Optional list of files or directories (relative to sandbox) containing compile-time dependencies, library search paths, or include paths needed for syntax verification."
           }
         },
         "required": ["path", "content"]
@@ -1069,21 +1031,18 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
   elif name == "write_file":
     path = arguments.get("path")
     content = arguments.get("content")
-    compile_paths = arguments.get("compile_paths")
     if not path or content is None:
       return "Error: Missing parameters 'path' and 'content'."
-    return tool_write_file(session.sandbox, path, content, compile_paths)
+    return tool_write_file(session.sandbox, path, content)
   elif name == "patch_file":
     path = arguments.get("path")
     search = arguments.get("search")
     replace = arguments.get("replace")
-    compile_paths = arguments.get("compile_paths")
     if not path or search is None or replace is None:
       return "Error: Missing parameters 'path', 'search', or 'replace'."
-    return tool_patch_file(session.sandbox, path, search, replace, compile_paths)
+    return tool_patch_file(session.sandbox, path, search, replace)
   elif name == "edit_lines":
     path = arguments.get("path")
-    compile_paths = arguments.get("compile_paths")
     try:
       start_line = int(arguments.get("start_line"))
       end_line = int(arguments.get("end_line"))
@@ -1092,7 +1051,7 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
     replacement = arguments.get("replacement")
     if not path or replacement is None:
       return "Error: Missing parameters 'path' or 'replacement'."
-    return tool_edit_lines(session.sandbox, path, start_line, end_line, replacement, compile_paths)
+    return tool_edit_lines(session.sandbox, path, start_line, end_line, replacement)
   elif name == "format_file":
     path = arguments.get("path")
     if not path:
