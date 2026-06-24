@@ -301,6 +301,92 @@ def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> s
     return f"Error patching file: {str(e)}"
 
 
+def tool_multi_patch(sandbox_dir: str, path: str, patches: List[Dict[str, str]]) -> str:
+  """Apply multiple non-contiguous exact text replacements to a file inside the sandbox."""
+  try:
+    safe_p = get_safe_path(sandbox_dir, path)
+    if not os.path.exists(safe_p):
+      return f"Error: File '{path}' does not exist. Use write_file to create new files."
+    if not os.path.isfile(safe_p):
+      return f"Error: Path '{path}' is not a file."
+
+    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+      content = f.read()
+
+    normalized_content = content.replace("\r\n", "\n")
+    patch_ranges = []
+
+    for idx, patch in enumerate(patches):
+      if not isinstance(patch, dict):
+        return f"Error: Patch at index {idx} must be an object/dictionary."
+      search = patch.get("search")
+      replace = patch.get("replace")
+      if search is None or replace is None:
+        return f"Error: Patch at index {idx} is missing 'search' or 'replace' key."
+
+      normalized_search = search.replace("\r\n", "\n")
+      normalized_replace = replace.replace("\r\n", "\n")
+
+      if normalized_search not in normalized_content:
+        return (
+          f"Error: The search block in patch {idx + 1} was not found in '{path}'. "
+          "Make sure you specify the search text exactly including leading whitespace and indentation. "
+          "Note: Line endings (CRLF vs LF) are automatically normalized and ignored."
+        )
+
+      occurrences = normalized_content.count(normalized_search)
+      if occurrences > 1:
+        return (
+          f"Error: Found {occurrences} occurrences of the search block in patch {idx + 1} inside '{path}'. "
+          "Please provide more context lines to make the search block unique."
+        )
+
+      start_char = normalized_content.find(normalized_search)
+      end_char = start_char + len(normalized_search)
+
+      patch_ranges.append({
+        "index": idx,
+        "start": start_char,
+        "end": end_char,
+        "search": normalized_search,
+        "replace": normalized_replace
+      })
+
+    # Check for overlaps
+    sorted_ranges = sorted(patch_ranges, key=lambda x: x["start"])
+    for i in range(len(sorted_ranges) - 1):
+      if sorted_ranges[i]["end"] > sorted_ranges[i + 1]["start"]:
+        return (
+          f"Error: Overlapping patches detected. "
+          f"Patch {sorted_ranges[i]['index'] + 1} overlaps with Patch {sorted_ranges[i+1]['index'] + 1}."
+        )
+
+    # Apply replacements from end to start to avoid shifting indices
+    updated_normalized = normalized_content
+    sorted_ranges_desc = sorted(patch_ranges, key=lambda x: x["start"], reverse=True)
+
+    for r in sorted_ranges_desc:
+      start = r["start"]
+      end = r["end"]
+      rep = r["replace"]
+      updated_normalized = updated_normalized[:start] + rep + updated_normalized[end:]
+
+    # Restore original dominant line ending style
+    if "\r\n" in content:
+      new_content = updated_normalized.replace("\n", "\r\n")
+    else:
+      new_content = updated_normalized
+
+    with open(safe_p, 'w', encoding='utf-8') as f:
+      f.write(new_content)
+
+    rel_path = os.path.relpath(safe_p, sandbox_dir)
+    print_diff(rel_path, content, new_content)
+    return f"Successfully updated file '{rel_path}' by applying {len(patches)} patches."
+  except Exception as e:
+    return f"Error multi-patching file: {str(e)}"
+
+
 def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int, replacement: str) -> str:
   """Replace a range of lines in a file (1-indexed, inclusive) with new content."""
   try:
@@ -714,6 +800,41 @@ TOOLS_SCHEMA = [
   {
     "type": "function",
     "function": {
+      "name": "multi_patch",
+      "description": "Apply multiple non-contiguous exact text replacements to a file. The operation is atomic: if any patch fails to match uniquely, the entire operation is aborted.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The file path relative to the sandbox root."
+          },
+          "patches": {
+            "type": "array",
+            "description": "The list of patches to apply. Patches are matched against the original file content.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "search": {
+                  "type": "string",
+                  "description": "The exact block of code/text to replace. Must be unique in the original file."
+                },
+                "replace": {
+                  "type": "string",
+                  "description": "The code/text to replace the search block with."
+                }
+              },
+              "required": ["search", "replace"]
+            }
+          }
+        },
+        "required": ["path", "patches"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "edit_lines",
       "description": "Replace a range of lines in a file (1-indexed, inclusive) with new content. This tool is highly recommended for editing existing files because it uses line numbers (which you can get from 'search_grep' or 'read_file') and is completely immune to text-matching failures.",
       "parameters": {
@@ -871,6 +992,10 @@ TOOLS_SCHEMA = [
           "task_id": {
             "type": "string",
             "description": "The Task ID returned by run_command (e.g. 'task_1')."
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Optional. The number of seconds to wait/block for the background task to complete. If the task is still running after this timeout, the status will show that it is still running."
           }
         },
         "required": ["task_id"]
@@ -1041,6 +1166,12 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
     if not path or search is None or replace is None:
       return "Error: Missing parameters 'path', 'search', or 'replace'."
     return tool_patch_file(session.sandbox, path, search, replace)
+  elif name == "multi_patch":
+    path = arguments.get("path")
+    patches = arguments.get("patches")
+    if not path or not isinstance(patches, list):
+      return "Error: Missing parameter 'path' or 'patches' must be a list of patch objects."
+    return tool_multi_patch(session.sandbox, path, patches)
   elif name == "edit_lines":
     path = arguments.get("path")
     try:
@@ -1086,7 +1217,13 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
     task_id = arguments.get("task_id")
     if not task_id:
       return "Error: Missing parameter 'task_id'."
-    return session.tool_check_background_command(task_id)
+    timeout = arguments.get("timeout")
+    if timeout is not None:
+      try:
+        timeout = float(timeout)
+      except (ValueError, TypeError):
+        return "Error: timeout must be a valid number."
+    return session.tool_check_background_command(task_id, timeout=timeout)
   elif name == "kill_process":
     task_id = arguments.get("task_id")
     if not task_id:

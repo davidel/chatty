@@ -75,10 +75,11 @@ class ChatbotSession:
     self.current_loop = 0
     default_prompt = (
       "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
-      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), terminating background processes (kill_process), and sleeping/waiting (sleep).\n"
+      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), applying multiple patches (multi_patch), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), terminating background processes (kill_process), and sleeping/waiting (sleep).\n"
       "All paths provided to the tools will resolve relative to the sandbox directory.\n"
       "You are strictly prohibited from writing files outside the sandbox folder.\n"
       "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
+      "CRITICAL: For performing search-and-replace edits (similar to 'sed'), you MUST use 'multi_patch' (for multiple non-contiguous exact replacements) or 'edit_lines' (for specific line number ranges) instead of using 'sed' or custom scripts in run_command.\n"
       "CRITICAL: You are strictly prohibited from using the shell 'sleep' command inside run_command to pause execution. You MUST use the dedicated 'sleep' tool instead.\n"
       "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output, or terminate it by calling kill_process with the Task ID. Perform other file tasks (read, patch, edit) or use the 'sleep' tool while waiting.\n"
       "To filter the output of run_command, use its optional 'output_filter' (regex), 'tail_lines', or 'head_lines' parameters rather than piping to grep or writing custom filtering scripts.\n"
@@ -328,10 +329,15 @@ class ChatbotSession:
               f"Error: Using '{token}' in run_command is prohibited to view files. "
               "Please use the dedicated 'read_file' tool instead."
             )
-          elif clean_token in {'head', 'tail', 'sed', 'awk'}:
+          elif clean_token in {'head', 'tail', 'awk'}:
             return (
               f"Error: Using '{token}' in run_command is prohibited to inspect files. "
               "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
+            )
+          elif clean_token == 'sed':
+            return (
+              "Error: Using 'sed' in run_command is prohibited. "
+              "Please use the dedicated 'multi_patch' tool (for multiple exact replacements) or 'edit_lines' tool instead."
             )
           elif clean_token == 'sleep':
             return (
@@ -465,14 +471,27 @@ class ChatbotSession:
           pass
       return f"Error executing command: {str(e)}"
 
-  def tool_check_background_command(self, task_id: str) -> str:
+  def tool_check_background_command(self, task_id: str, timeout: Optional[float] = None) -> str:
     """Check status of a background task and read its currently accumulated stdout and stderr."""
-    logger.info(f"Checking status of background task: '{task_id}'")
+    logger.info(f"Checking status of background task: '{task_id}' (timeout={timeout})")
     task = self.background_commands.get(task_id)
     if not task:
       logger.warning(f"Check background task failed: Task ID '{task_id}' not found")
       return f"Error: Task ID '{task_id}' not found."
     proc = task["proc"]
+
+    # If timeout is specified, wait for the process to complete or timeout to expire
+    timed_out_while_waiting = False
+    if timeout is not None and timeout > 0:
+      import time
+      start_time = time.time()
+      while proc.poll() is None:
+        elapsed = time.time() - start_time
+        if elapsed >= timeout:
+          timed_out_while_waiting = True
+          break
+        time.sleep(min(0.2, timeout - elapsed))
+
     status = proc.poll()
     try:
       with open(task["stdout_path"], 'r', errors='replace') as f:
@@ -514,10 +533,11 @@ class ChatbotSession:
       output.append(f"Stderr:\n{truncate_output(stderr_content, max_chars=self.max_command_chars)}")
     if status is None:
       logger.info(f"Task '{task_id}' is STILL RUNNING.")
-      return (
-        f"Status: Task '{task_id}' is STILL RUNNING.\n"
-        + ("\n".join(output) if output else "(No output generated yet)")
-      )
+      status_msg = f"Status: Task '{task_id}' is STILL RUNNING"
+      if timeout is not None and timeout > 0 and timed_out_while_waiting:
+        status_msg += f" (the check timed out after {timeout} seconds)"
+      status_msg += ".\n"
+      return status_msg + ("\n".join(output) if output else "(No output generated yet)")
     else:
       logger.info(f"Task '{task_id}' FINISHED with exit code {status}.")
       try:

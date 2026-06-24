@@ -146,6 +146,41 @@ class TestCommandSafety(unittest.TestCase):
         
       self.assertNotIn("task_1", self.session.background_commands)
 
+  def test_check_background_command_timeout(self):
+    import unittest.mock as mock
+    import subprocess
+    
+    # Mock a process that stays running (poll returns None)
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running", 10)
+    mock_proc.pid = 12345
+    mock_proc.poll.return_value = None
+    
+    with mock.patch("subprocess.Popen", return_value=mock_proc):
+      res = self.session.tool_run_command("long_running")
+      self.assertIn("Task ID: task_1", res)
+      
+      # Check status with timeout=0.1
+      # Since poll.return_value is always None, it will time out
+      status_res = self.session.tool_check_background_command("task_1", timeout=0.1)
+      self.assertIn("STILL RUNNING", status_res)
+      self.assertIn("timed out after 0.1 seconds", status_res)
+      
+      # Now, let's test where it finishes during the wait
+      # We can mock poll() to return None first, then 0
+      # (using side_effect=[None, None, 0, 0, 0])
+      mock_proc.poll.side_effect = [None, None, 0, 0, 0]
+      # Clear the existing background commands so task_2 can be created
+      self.session.background_commands.clear()
+      self.session.next_task_id = 2
+      
+      res = self.session.tool_run_command("long_running_completes")
+      self.assertIn("Task ID: task_2", res)
+      
+      status_res = self.session.tool_check_background_command("task_2", timeout=0.5)
+      self.assertIn("FINISHED with exit code 0", status_res)
+      self.assertNotIn("timed out", status_res)
+
   def test_blocked_kill_commands(self):
     for cmd in ["kill 1234", "pkill -f server", "killall python"]:
       err = self.session.validate_command_safety(cmd)

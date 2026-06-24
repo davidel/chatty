@@ -13,7 +13,8 @@ from chatty.tools import (
   tool_delete_file,
   tool_make_directory,
   tool_get_file_info,
-  tool_search_grep
+  tool_search_grep,
+  tool_multi_patch
 )
 
 class TestSandboxOps(unittest.TestCase):
@@ -225,6 +226,52 @@ class TestSandboxOps(unittest.TestCase):
     # Test no matches
     res = tool_search_grep(self.sandbox_dir, "NOMATCH", "file1.txt")
     self.assertEqual(res, "No matches found.")
+
+  def test_multi_patch(self):
+    test_file = "test_multi.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write("def func_a():\n  x = 1\n  return x\n\ndef func_b():\n  y = 2\n  return y\n")
+
+    # Happy path: non-overlapping, unique patches
+    patches = [
+      {"search": "  x = 1\n  return x", "replace": "  x = 10\n  return x + 1"},
+      {"search": "  y = 2\n  return y", "replace": "  y = 20\n  return y + 2"}
+    ]
+    res = tool_multi_patch(self.sandbox_dir, test_file, patches)
+    self.assertIn("Successfully updated file", res)
+    with open(file_path, "r") as f:
+      content = f.read()
+    self.assertIn("x = 10", content)
+    self.assertIn("return x + 1", content)
+    self.assertIn("y = 20", content)
+    self.assertIn("return y + 2", content)
+
+    # Error path: non-existent file
+    res = tool_multi_patch(self.sandbox_dir, "nonexistent.py", patches)
+    self.assertIn("Error: File 'nonexistent.py' does not exist", res)
+
+    # Error path: search block not found
+    bad_patches = [{"search": "not found here", "replace": "something"}]
+    res = tool_multi_patch(self.sandbox_dir, test_file, bad_patches)
+    self.assertIn("Error: The search block in patch 1 was not found", res)
+
+    # Error path: duplicate search blocks (non-unique)
+    with open(file_path, "w") as f:
+      f.write("duplicate\nduplicate\n")
+    dup_patches = [{"search": "duplicate", "replace": "replaced"}]
+    res = tool_multi_patch(self.sandbox_dir, test_file, dup_patches)
+    self.assertIn("Error: Found 2 occurrences of the search block in patch 1", res)
+
+    # Error path: overlapping patches
+    with open(file_path, "w") as f:
+      f.write("line 1\nline 2\nline 3\n")
+    overlap_patches = [
+      {"search": "line 1\nline 2", "replace": "replaced 1"},
+      {"search": "line 2\nline 3", "replace": "replaced 2"}
+    ]
+    res = tool_multi_patch(self.sandbox_dir, test_file, overlap_patches)
+    self.assertIn("Error: Overlapping patches detected", res)
 
 
 if __name__ == "__main__":
