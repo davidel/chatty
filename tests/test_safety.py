@@ -211,5 +211,11 @@ class TestCommandSafety(unittest.TestCase):
     res = execute_tool("sleep", {"seconds": 0.02}, self.session)
     self.assertIn("Successfully slept for 0.02 seconds", res)
 
+    # Test sleep prohibited when background tasks are active
+    self.session.background_commands["task_1"] = {"dummy": True}
+    res = execute_tool("sleep", {"seconds": 0.02}, self.session)
+    self.assertIn("prohibited while background tasks", res)
+    del self.session.background_commands["task_1"]
+
 if __name__ == "__main__":
   unittest.main()

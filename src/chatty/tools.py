@@ -1599,7 +1599,7 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "sleep",
-      "description": "Sleep for a specified number of seconds to wait for background operations to progress.",
+      "description": "Sleep for a specified number of seconds. Do NOT use this tool to wait for background commands/tasks to progress or finish; instead, use 'check_background_command' with the 'timeout' parameter.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1808,6 +1808,13 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
       return "Error: Missing parameter 'url'."
     return tool_fetch_url(url, max_chars=session.max_url_chars)
   elif name == "sleep":
+    if session and getattr(session, "background_commands", None):
+      active_tasks = list(session.background_commands.keys())
+      return (
+        f"Error: Using the 'sleep' tool is prohibited while background tasks ({', '.join(active_tasks)}) are active. "
+        "To wait for background commands to progress or finish, you MUST call 'check_background_command' "
+        "with the 'timeout' parameter instead."
+      )
     seconds = arguments.get("seconds")
     if seconds is None:
       return "Error: Missing parameter 'seconds'."
