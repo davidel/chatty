@@ -41,7 +41,11 @@ class TestCommandSafety(unittest.TestCase):
       "more file.txt",
       "cat << 'EOF' > file.txt",
       "echo $(cat file.txt)",
-      "echo `cat file.txt`"
+      "echo `cat file.txt`",
+      "pytest | grep Failed",
+      "ninja test | head -n 20",
+      "git diff | grep 'pattern'",
+      "make run_all 2>&1 | grep -E \"SIM_OUT|SIM_RC\" | head -5"
     ]
     for cmd in blocked_commands:
       with self.subTest(cmd=cmd):
@@ -51,11 +55,11 @@ class TestCommandSafety(unittest.TestCase):
 
   def test_allowed_commands(self):
     allowed_commands = [
-      "pytest | grep Failed",
-      "ninja test | head -n 20",
+      "pytest",
+      "ninja test",
       "python -c 'import sys; print(sys.version)'",
       "make test",
-      "git diff | grep 'pattern'"
+      "git diff"
     ]
     for cmd in allowed_commands:
       with self.subTest(cmd=cmd):

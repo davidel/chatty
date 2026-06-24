@@ -347,10 +347,8 @@ class ChatbotSession:
               "Please use the dedicated 'sleep' tool instead."
             )
         
-        if token.strip() in sequencers:
+        if token.strip() in sequencers or token.strip() in {'|', '|&'}:
           is_cmd_token = True
-        elif token.strip() in {'|', '|&'}:
-          is_cmd_token = False
         else:
           is_cmd_token = False
           
