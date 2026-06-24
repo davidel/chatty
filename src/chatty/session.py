@@ -370,6 +370,17 @@ class ChatbotSession:
               "Error: Using 'sleep' in run_command is prohibited to pause execution. "
               "Please use the dedicated 'sleep' tool instead."
             )
+          elif clean_token == 'wc':
+            if pipe_count == 0:
+              return (
+                "Error: Using 'wc' in run_command is prohibited to count lines, words, or bytes in files. "
+                "Please use the dedicated 'get_file_info' tool instead."
+              )
+            else:
+              return (
+                "Error: Using 'wc' directly in run_command is prohibited to count lines. "
+                "Please use dedicated tools like 'get_file_info' or 'locate_files' to check file/directory information instead."
+              )
           elif clean_token == 'cp':
             return (
               f"Error: Using '{token}' in run_command is prohibited to copy files or directories. "

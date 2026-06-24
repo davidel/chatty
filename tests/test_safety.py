@@ -126,6 +126,27 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("prohibited to filter output", err)
       self.assertIn("output_filter", err)
 
+  def test_wc_messages(self):
+    bare_wcs = [
+      "wc file.txt",
+      "wc -l file.txt"
+    ]
+    for cmd in bare_wcs:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to count lines, words, or bytes in files", err)
+      self.assertIn("get_file_info", err)
+
+    piped_wcs = [
+      "ls test/test_programs/test_*.asm | wc -l",
+      "git status | wc -l"
+    ]
+    for cmd in piped_wcs:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to count lines", err)
+      self.assertIn("get_file_info", err)
+
   def test_get_rich_status_bar(self):
     self.session.messages.append({"role": "user", "content": "Hello"})
     status_bar = self.session.get_rich_status_bar()
