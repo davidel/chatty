@@ -338,11 +338,28 @@ class ChatbotSession:
               f"Error: Using '{token}' in run_command is prohibited to view files. "
               "Please use the dedicated 'read_file' tool instead."
             )
-          elif clean_token in {'head', 'tail', 'awk'}:
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to inspect files. "
-              "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
-            )
+          elif clean_token in {'head', 'tail'}:
+            if pipe_count == 0:
+              return (
+                f"Error: Using '{token}' in run_command is prohibited to inspect files. "
+                "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
+              )
+            else:
+              return (
+                f"Error: Using '{token}' directly in run_command is prohibited to filter output. "
+                "Please use the 'head_lines' or 'tail_lines' parameter of run_command instead."
+              )
+          elif clean_token == 'awk':
+            if pipe_count == 0:
+              return (
+                f"Error: Using 'awk' in run_command is prohibited to inspect files. "
+                "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
+              )
+            else:
+              return (
+                f"Error: Using 'awk' directly in run_command is prohibited to filter output. "
+                "Please use the 'output_filter', 'head_lines', or 'tail_lines' parameters of run_command instead."
+              )
           elif clean_token == 'sed':
             return (
               "Error: Using 'sed' in run_command is prohibited. "

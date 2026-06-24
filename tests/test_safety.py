@@ -89,6 +89,38 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("output_filter", err)
       self.assertIn("check_background_command", err)
 
+  def test_head_tail_awk_messages(self):
+    bare_cmds = [
+      "head file.txt",
+      "tail file.txt",
+      "awk '{print $1}' file.txt"
+    ]
+    for cmd in bare_cmds:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to inspect files", err)
+      self.assertIn("read_file", err)
+
+    piped_head_tail = [
+      "pytest | head -n 20",
+      "make run_all | tail -5",
+    ]
+    for cmd in piped_head_tail:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to filter output", err)
+      self.assertIn("head_lines", err)
+      self.assertIn("tail_lines", err)
+
+    piped_awk = [
+      "git log | awk '{print $1}'",
+    ]
+    for cmd in piped_awk:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to filter output", err)
+      self.assertIn("output_filter", err)
+
   def test_get_rich_status_bar(self):
     self.session.messages.append({"role": "user", "content": "Hello"})
     status_bar = self.session.get_rich_status_bar()
