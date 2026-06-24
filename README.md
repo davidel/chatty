@@ -145,14 +145,16 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 
 ## Sandboxed File System Tools
 
-The chatbot uses function-calling to interface with the sandbox workspace. Directly invoking command-line file manipulation programs (e.g. `cat`, `grep`, `find`) in `run_command` is blocked by safety filters in [validate_command_safety](file:///tmp/chatty/src/chatty/cli.py#L1946). The agent is required to use the appropriate structured tools:
+The chatbot uses function-calling to interface with the sandbox workspace. Directly invoking command-line file manipulation programs (e.g. `cat`, `grep`, `find`) in `run_command` is blocked by safety filters in [validate_command_safety](file:///tmp/chatty/src/chatty/session.py#L293). The agent is required to use the appropriate structured tools:
 
 ### File Manipulation Tools
 - **`list_dir`**: Explores directories inside the sandbox. Truncates output above `--max-dir-items` to prevent token flooding.
 - **`read_file`**: Reads text files. Accepts optional `start_line` and `end_line` parameters (1-indexed) and honors `--max-read-chars`.
 - **`write_file`**: Writes full text contents to a file. Triggers automated syntax checking.
 - **`patch_file`**: Replaces a unique specific block of code. Safest tool for small, contiguous code changes.
+- **`multi_patch`**: Replaces multiple non-contiguous exact blocks of code atomically.
 - **`edit_lines`**: Modifies a specific line range (1-indexed, inclusive) with new text. Immune to text-matching failures.
+- **`multi_edit_lines`**: Modifies multiple non-contiguous line ranges atomically using line numbers.
 - **`format_file`**: Styles source files using formatters: `black`/`ruff` for Python, `clang-format` for C/C++, `prettier` for frontend, or custom JSON/YAML encoders. Displays diff results.
 - **`move_file`**: Renames or moves files and directories safely inside the sandbox boundaries.
 - **`copy_file`**: Recursively copies file system structures.
@@ -166,6 +168,10 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`locate_files`**: Finds files recursively matching glob configurations (e.g., `**/*.py`).
 - **`run_tests`**: Runs test scripts (`pytest`, `npm test`, custom targets).
 
+### Web & Information Retrieval
+- **`search_web`**: Searches the web for a query and returns titles, URLs, and snippets.
+- **`fetch_url`**: Fetches the text content of a public URL (converting HTML to clean text).
+
 ### Command & Background Execution
 - **`run_command`**: Runs shell commands from the sandbox directory.
   - *Safety Restrictions*: Monitored by safety checks to block commands that attempt directory escapes, or attempt to circumvent tool guidelines by calling commands like `cat`, `grep`, `find`, `sed`, `awk`, `less`, `more`, `wc`, `kill`, `pkill`, `killall`, `cp`, `mv`, `rm`, `rmdir`, `mkdir`.
@@ -173,6 +179,8 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
   - *Asynchronous Process Execution*: Commands that block or run indefinitely are automatically backgrounded by the session, returning a `Task ID` (e.g., `task_1`).
 - **`check_background_command`**: Inspects status or reads output of background processes using their `task_id`.
 - **`kill_process`**: Kills a running background subprocess.
+- **`sleep`**: Pauses execution for a specified number of seconds.
+- **`ask_question`**: Prompts the user with a question or selectable options to confirm decisions or resolve ambiguity.
 
 ---
 
