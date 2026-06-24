@@ -20,6 +20,66 @@ from chatty.utils import (
 )
 
 
+def make_file_preview(safe_p: str, highlight_ranges: List[Tuple[int, int]], context_lines: int = 5) -> str:
+  """Generates a line-numbered preview of the file.
+
+  If the file has <= 100 lines, shows the whole file with line numbers.
+  Otherwise, shows context around the specified highlight ranges.
+  """
+  try:
+    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+      lines = f.readlines()
+
+    total_lines = len(lines)
+    if total_lines <= 100:
+      preview_content = "".join(f"{idx + 1}: {line}" for idx, line in enumerate(lines))
+      return f"File '{os.path.basename(safe_p)}' now has {total_lines} lines:\n```\n{preview_content}```"
+
+    # Large file, compile windows
+    show_lines = set()
+    for start, end in highlight_ranges:
+      s = max(1, start - context_lines)
+      e = min(total_lines, end + context_lines)
+      for i in range(s, e + 1):
+        show_lines.add(i)
+
+    sorted_show = sorted(list(show_lines))
+    if not sorted_show:
+      return f"File '{os.path.basename(safe_p)}' now has {total_lines} lines."
+
+    chunks = []
+    current_chunk = []
+    for line_num in sorted_show:
+      if not current_chunk:
+        current_chunk.append(line_num)
+      elif line_num == current_chunk[-1] + 1:
+        current_chunk.append(line_num)
+      else:
+        chunks.append(current_chunk)
+        current_chunk = [line_num]
+    if current_chunk:
+      chunks.append(current_chunk)
+
+    preview_parts = []
+    last_end = 0
+    for chunk in chunks:
+      start = chunk[0]
+      end = chunk[-1]
+      if start > last_end + 1:
+        preview_parts.append(f"... (lines {last_end+1}-{start-1} truncated) ...\n")
+      chunk_str = "".join(f"{num}: {lines[num-1]}" for num in chunk)
+      preview_parts.append(chunk_str)
+      last_end = end
+
+    if last_end < total_lines:
+      preview_parts.append(f"... (lines {last_end+1}-{total_lines} truncated) ...\n")
+
+    preview_content = "".join(preview_parts)
+    return f"File '{os.path.basename(safe_p)}' now has {total_lines} lines. Preview of changed sections:\n```\n{preview_content}```"
+  except Exception as e:
+    return f"File updated, but failed to generate preview: {str(e)}"
+
+
 def tool_list_dir(sandbox_dir: str, path: str = ".", max_items: int = 200) -> str:
   """List the contents of a directory path inside the sandbox."""
   try:
@@ -296,7 +356,14 @@ def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> s
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     print_diff(rel_path, content, new_content)
-    return f"Successfully updated file '{rel_path}' using a target replacement patch."
+    
+    start_char = normalized_content.find(normalized_search)
+    start_line = normalized_content[:start_char].count('\n') + 1
+    new_lines_count = len(normalized_replace.split('\n'))
+    end_line = start_line + new_lines_count - 1
+    
+    preview = make_file_preview(safe_p, [(start_line, end_line)])
+    return f"Successfully updated file '{rel_path}' using a target replacement patch.\n\n{preview}"
   except Exception as e:
     return f"Error patching file: {str(e)}"
 
@@ -382,7 +449,20 @@ def tool_multi_patch(sandbox_dir: str, path: str, patches: List[Dict[str, str]])
 
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     print_diff(rel_path, content, new_content)
-    return f"Successfully updated file '{rel_path}' by applying {len(patches)} patches."
+    
+    sorted_ranges = sorted(patch_ranges, key=lambda x: x["start"])
+    shift = 0
+    new_highlight_ranges = []
+    for r in sorted_ranges:
+      new_start_char = r["start"] + shift
+      new_start_line = updated_normalized[:new_start_char].count('\n') + 1
+      new_lines_count = len(r["replace"].split('\n'))
+      new_end_line = new_start_line + new_lines_count - 1
+      new_highlight_ranges.append((new_start_line, new_end_line))
+      shift += len(r["replace"]) - len(r["search"])
+      
+    preview = make_file_preview(safe_p, new_highlight_ranges)
+    return f"Successfully updated file '{rel_path}' by applying {len(patches)} patches.\n\n{preview}"
   except Exception as e:
     return f"Error multi-patching file: {str(e)}"
 
@@ -429,15 +509,150 @@ def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int,
     print_diff(rel_path, original_content, "".join(lines))
     replaced_count = end_line - start_line + 1
     inserted_count = len(replacement_lines_formatted)
+    
+    new_end_line = start_line + max(0, inserted_count - 1) if inserted_count > 0 else start_line
+    preview = make_file_preview(safe_p, [(start_line, new_end_line)])
     return (
       f"Successfully updated file '{rel_path}': replaced lines {start_line}-{end_line} "
-      f"({replaced_count} lines) with {inserted_count} new lines."
+      f"({replaced_count} lines) with {inserted_count} new lines.\n\n{preview}"
     )
   except Exception as e:
     return f"Error editing lines: {str(e)}"
 
 
-def tool_format_file(sandbox_dir: str, path: str) -> str:
+def tool_multi_edit_lines(sandbox_dir: str, path: str, edits: List[Dict[str, Any]]) -> str:
+  """Apply multiple line range edits to a file inside the sandbox.
+
+  All start_line and end_line coordinates are 1-indexed, inclusive, and refer to
+  the original file content before any edits are applied. The edits must not
+  overlap.
+  """
+  try:
+    safe_p = get_safe_path(sandbox_dir, path)
+    if not os.path.exists(safe_p):
+      return f"Error: File '{path}' does not exist. Use write_file to create new files."
+    if not os.path.isfile(safe_p):
+      return f"Error: Path '{path}' is not a file."
+
+    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+      lines = f.readlines()
+
+    original_content = "".join(lines)
+    total_lines = len(lines)
+
+    # Validate and parse edits
+    parsed_edits = []
+    for idx, edit in enumerate(edits):
+      if not isinstance(edit, dict):
+        return f"Error: Edit at index {idx} must be an object/dictionary."
+      start_line = edit.get("start_line")
+      end_line = edit.get("end_line")
+      replacement = edit.get("replacement")
+      if start_line is None or end_line is None or replacement is None:
+        return f"Error: Edit at index {idx} is missing 'start_line', 'end_line', or 'replacement'."
+      try:
+        start_line = int(start_line)
+        end_line = int(end_line)
+      except (ValueError, TypeError):
+        return f"Error: Edit at index {idx} start_line and end_line must be valid integers."
+
+      if start_line < 1 or start_line > total_lines:
+        return f"Error: Edit {idx + 1} start_line {start_line} is out of range. The file '{path}' has {total_lines} lines."
+      if end_line < start_line or end_line > total_lines:
+        return f"Error: Edit {idx + 1} end_line {end_line} is invalid (must be between start_line {start_line} and total file lines {total_lines})."
+
+      parsed_edits.append({
+        "index": idx,
+        "start": start_line,
+        "end": end_line,
+        "replacement": replacement
+      })
+
+    # Check for overlaps
+    sorted_edits = sorted(parsed_edits, key=lambda x: x["start"])
+    for i in range(len(sorted_edits) - 1):
+      if sorted_edits[i]["end"] >= sorted_edits[i + 1]["start"]:
+        return (
+          f"Error: Overlapping edits detected. "
+          f"Edit {sorted_edits[i]['index'] + 1} (lines {sorted_edits[i]['start']}-{sorted_edits[i]['end']}) "
+          f"overlaps with Edit {sorted_edits[i+1]['index'] + 1} (lines {sorted_edits[i+1]['start']}-{sorted_edits[i+1]['end']})."
+        )
+
+    has_crlf = any("\r\n" in line for line in lines)
+    suffix = "\r\n" if has_crlf else "\n"
+
+    # Modify the lines list from bottom to top (reverse sorted_edits)
+    sorted_desc = sorted(parsed_edits, key=lambda x: x["start"], reverse=True)
+    updated_lines = list(lines)
+
+    for edit in sorted_desc:
+      start = edit["start"]
+      end = edit["end"]
+      rep = edit["replacement"]
+
+      if rep == "":
+        rep_lines_formatted = []
+      else:
+        rep_normalized = rep.replace("\r\n", "\n")
+        rep_lines = rep_normalized.split("\n")
+        if rep_normalized.endswith("\n") and len(rep_lines) > 1 and rep_lines[-1] == "":
+          rep_lines = rep_lines[:-1]
+        rep_lines_formatted = [line + suffix for line in rep_lines]
+
+      slice_start = start - 1
+      slice_end = end
+      updated_lines[slice_start:slice_end] = rep_lines_formatted
+
+    new_content = "".join(updated_lines)
+    with open(safe_p, 'w', encoding='utf-8') as f:
+      f.writelines(updated_lines)
+
+    # Calculate highlight ranges in the updated file
+    sorted_asc = sorted(parsed_edits, key=lambda x: x["start"])
+    line_shift = 0
+    new_highlight_ranges = []
+    for edit in sorted_asc:
+      start = edit["start"]
+      end = edit["end"]
+      rep = edit["replacement"]
+
+      if rep == "":
+        rep_lines_count = 0
+      else:
+        rep_normalized = rep.replace("\r\n", "\n")
+        rep_lines = rep_normalized.split("\n")
+        if rep_normalized.endswith("\n") and len(rep_lines) > 1 and rep_lines[-1] == "":
+          rep_lines = rep_lines[:-1]
+        rep_lines_count = len(rep_lines)
+
+      new_start = start + line_shift
+      new_end = new_start + rep_lines_count - 1
+      if rep_lines_count > 0:
+        new_highlight_ranges.append((new_start, new_end))
+      else:
+        new_highlight_ranges.append((new_start, new_start))
+
+      line_shift += rep_lines_count - (end - start + 1)
+
+    rel_path = os.path.relpath(safe_p, sandbox_dir)
+    print_diff(rel_path, original_content, new_content)
+    preview = make_file_preview(safe_p, new_highlight_ranges)
+
+    return f"Successfully updated file '{rel_path}' by applying {len(edits)} line range edits.\n\n{preview}"
+  except Exception as e:
+    return f"Error multi-editing lines: {str(e)}"
+
+
+def get_available_formatters() -> List[str]:
+  """Returns a list of formatting tools currently available on the system path."""
+  formatters = []
+  for tool in ["black", "ruff", "clang-format", "prettier", "gofmt", "rustfmt", "yapf", "autopep8"]:
+    if shutil.which(tool):
+      formatters.append(tool)
+  return formatters
+
+
+def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_path: str = None) -> str:
   """Automatically format a source code file using the appropriate formatter."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
@@ -452,121 +667,152 @@ def tool_format_file(sandbox_dir: str, path: str) -> str:
       old_content = f.read()
 
     ext = os.path.splitext(safe_p)[1].lower()
-    formatted_content = None
-    formatter_used = ""
+    
+    # 1. Resolve custom configuration file path if specified
+    config_abs_path = None
+    if config_path:
+      config_abs_path = get_safe_path(sandbox_dir, config_path)
+      if not os.path.exists(config_abs_path):
+        return f"Error: Configuration file '{config_path}' does not exist."
 
-    if ext == ".py":
-      # Try black, ruff, yapf, autopep8
-      if shutil.which("black"):
-        cmd_args = ["black", "-q", safe_p]
-        record_command_binaries(cmd_args)
-        subprocess.run(cmd_args, capture_output=True, text=True)
-        formatter_used = "black"
-      elif shutil.which("ruff"):
-        cmd_args = ["ruff", "format", safe_p]
-        record_command_binaries(cmd_args)
-        subprocess.run(cmd_args, capture_output=True, text=True)
-        formatter_used = "ruff format"
-      elif shutil.which("yapf"):
-        cmd_args = ["yapf", "-i", safe_p]
-        record_command_binaries(cmd_args)
-        subprocess.run(cmd_args, capture_output=True, text=True)
-        formatter_used = "yapf"
-      elif shutil.which("autopep8"):
-        cmd_args = ["autopep8", "-i", safe_p]
-        record_command_binaries(cmd_args)
-        subprocess.run(cmd_args, capture_output=True, text=True)
-        formatter_used = "autopep8"
+    # 2. Determine which formatter to use
+    chosen_formatter = None
+    if formatter:
+      formatter_lower = formatter.lower()
+      if not shutil.which(formatter_lower):
+        if formatter_lower in ("built-in-json", "built-in-yaml", "built-in"):
+          chosen_formatter = formatter_lower
+        else:
+          return f"Error: Formatter '{formatter}' is not installed or not found in system path."
       else:
-        return (
-          f"Error: No Python formatter found (black, ruff, yapf, or autopep8). "
-          f"Please run a command like 'pip install black' or 'pip install ruff' in the project environment."
-        )
-      
-      # For formatters running in-place, read updated file
-      with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-        formatted_content = f.read()
+        chosen_formatter = formatter_lower
+    else:
+      # Auto-select based on file extension
+      if ext == ".py":
+        for tool in ["black", "ruff", "yapf", "autopep8"]:
+          if shutil.which(tool):
+            chosen_formatter = tool
+            break
+        if not chosen_formatter:
+          return "Error: No Python formatter found (black, ruff, yapf, or autopep8)."
+      elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java", ".sv", ".svh", ".v"):
+        if shutil.which("clang-format"):
+          chosen_formatter = "clang-format"
+        else:
+          return "Error: clang-format is not installed on the system."
+      elif ext == ".go":
+        if shutil.which("gofmt"):
+          chosen_formatter = "gofmt"
+        else:
+          return "Error: gofmt is not installed on the system."
+      elif ext in (".rs", ".rlib"):
+        if shutil.which("rustfmt"):
+          chosen_formatter = "rustfmt"
+        else:
+          return "Error: rustfmt is not installed on the system."
+      elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md", ".json", ".yaml", ".yml"):
+        if shutil.which("prettier"):
+          chosen_formatter = "prettier"
+        elif ext == ".json":
+          chosen_formatter = "built-in-json"
+        elif ext in (".yaml", ".yml"):
+          chosen_formatter = "built-in-yaml"
+        else:
+          return "Error: prettier is not installed on the system."
+      else:
+        return f"Error: No formatter configured for files with extension '{ext}'."
 
-    elif ext == ".json":
+    # 3. Run the chosen formatter command
+    formatted_content = None
+    formatter_used = chosen_formatter
+
+    if chosen_formatter == "black":
+      cmd_args = ["black", "-q"]
+      if config_abs_path:
+        cmd_args.extend(["--config", config_abs_path])
+      cmd_args.append(safe_p)
+      record_command_binaries(cmd_args)
+      subprocess.run(cmd_args, capture_output=True, text=True)
+
+    elif chosen_formatter == "ruff":
+      cmd_args = ["ruff", "format"]
+      if config_abs_path:
+        cmd_args.extend(["--config", config_abs_path])
+      cmd_args.append(safe_p)
+      record_command_binaries(cmd_args)
+      subprocess.run(cmd_args, capture_output=True, text=True)
+
+    elif chosen_formatter == "clang-format":
+      cmd_args = ["clang-format", "-i"]
+      if config_abs_path:
+        cmd_args.append(f"-style=file:{config_abs_path}")
+      cmd_args.append(safe_p)
+      record_command_binaries(cmd_args)
+      subprocess.run(cmd_args, capture_output=True, text=True)
+
+    elif chosen_formatter == "prettier":
+      cmd_args = ["prettier", "--write"]
+      if config_abs_path:
+        cmd_args.extend(["--config", config_abs_path])
+      cmd_args.append(safe_p)
+      record_command_binaries(cmd_args)
+      subprocess.run(cmd_args, capture_output=True, text=True)
+
+    elif chosen_formatter == "gofmt":
+      cmd_args = ["gofmt", "-w", safe_p]
+      record_command_binaries(cmd_args)
+      subprocess.run(cmd_args, capture_output=True, text=True)
+
+    elif chosen_formatter == "rustfmt":
+      cmd_args = ["rustfmt"]
+      if config_abs_path:
+        cmd_args.extend(["--config-path", config_abs_path])
+      cmd_args.append(safe_p)
+      record_command_binaries(cmd_args)
+      subprocess.run(cmd_args, capture_output=True, text=True)
+
+    elif chosen_formatter == "yapf":
+      cmd_args = ["yapf", "-i"]
+      if config_abs_path:
+        cmd_args.extend(["--style", config_abs_path])
+      cmd_args.append(safe_p)
+      record_command_binaries(cmd_args)
+      subprocess.run(cmd_args, capture_output=True, text=True)
+
+    elif chosen_formatter == "autopep8":
+      cmd_args = ["autopep8", "-i"]
+      if config_abs_path:
+        cmd_args.extend(["--global-config", config_abs_path])
+      cmd_args.append(safe_p)
+      record_command_binaries(cmd_args)
+      subprocess.run(cmd_args, capture_output=True, text=True)
+
+    elif chosen_formatter in ("built-in-json", "built-in"):
       try:
         data = json.loads(old_content)
         formatted_content = json.dumps(data, indent=2) + "\n"
-        formatter_used = "built-in json.dumps"
+        formatter_used = "built-in JSON formatter"
       except json.JSONDecodeError as e:
         return f"Error parsing JSON: {str(e)}"
 
-    elif ext in (".yaml", ".yml"):
+    elif chosen_formatter in ("built-in-yaml", "built-in"):
       import yaml
       try:
-        # We can try prettier first, as it preserves comments
-        if shutil.which("prettier"):
-          cmd_args = ["prettier", "--write", safe_p]
-          record_command_binaries(cmd_args)
-          subprocess.run(cmd_args, capture_output=True, text=True)
-          formatter_used = "prettier"
-          with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-            formatted_content = f.read()
-        else:
-          data = yaml.safe_load(old_content)
-          formatted_content = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
-          formatter_used = "built-in PyYAML (note: comments may have been stripped)"
+        data = yaml.safe_load(old_content)
+        formatted_content = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+        formatter_used = "built-in PyYAML formatter"
       except Exception as e:
         return f"Error formatting YAML: {str(e)}"
 
-    elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java"):
-      if shutil.which("clang-format"):
-        cmd_args = ["clang-format", "-i", safe_p]
-        record_command_binaries(cmd_args)
-        subprocess.run(cmd_args, capture_output=True, text=True)
-        formatter_used = "clang-format"
-        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-          formatted_content = f.read()
-      else:
-        return "Error: clang-format is not installed on the system."
-
-    elif ext == ".go":
-      if shutil.which("gofmt"):
-        cmd_args = ["gofmt", "-w", safe_p]
-        record_command_binaries(cmd_args)
-        subprocess.run(cmd_args, capture_output=True, text=True)
-        formatter_used = "gofmt"
-        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-          formatted_content = f.read()
-      else:
-        return "Error: gofmt is not installed on the system."
-
-    elif ext in (".rs", ".rlib"):
-      if shutil.which("rustfmt"):
-        cmd_args = ["rustfmt", safe_p]
-        record_command_binaries(cmd_args)
-        subprocess.run(cmd_args, capture_output=True, text=True)
-        formatter_used = "rustfmt"
-        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-          formatted_content = f.read()
-      else:
-        return "Error: rustfmt is not installed on the system."
-
-    elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md"):
-      if shutil.which("prettier"):
-        cmd_args = ["prettier", "--write", safe_p]
-        record_command_binaries(cmd_args)
-        subprocess.run(cmd_args, capture_output=True, text=True)
-        formatter_used = "prettier"
-        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-          formatted_content = f.read()
-      else:
-        return "Error: prettier is not installed on the system."
-
     else:
-      return f"Error: No formatter configured for files with extension '{ext}'."
+      return f"Error: Unsupported formatter '{chosen_formatter}'."
 
-    # If formatted content was generated programmatically (JSON, YAML fallback), write it back
+    # 4. Save and return results
     if formatted_content is not None and formatted_content != old_content:
       with open(safe_p, 'w', encoding='utf-8') as f:
         f.write(formatted_content)
 
     if formatted_content is None:
-      # If formatted_content was read back from disk after in-place formatting
       with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
         formatted_content = f.read()
 
@@ -971,13 +1217,21 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "format_file",
-      "description": "Format a source code file using the appropriate formatter (e.g. black/ruff for Python, clang-format for C/C++, prettier for JS/TS/HTML/CSS/MD, or built-in json/yaml tools). Shows a diff of changes.",
+      "description": "Format a source code file using the appropriate formatter (e.g. black/ruff for Python, clang-format for C/C++/SystemVerilog/Verilog, prettier for JS/TS/HTML/CSS/MD, or built-in json/yaml tools). Shows a diff of changes.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
             "description": "The file path relative to the sandbox root."
+          },
+          "formatter": {
+            "type": "string",
+            "description": "Optional name of the formatter tool to use (e.g. 'clang-format', 'black', 'ruff', 'prettier', etc.). If omitted, chatty will auto-select the best available tool based on file extension."
+          },
+          "config_path": {
+            "type": "string",
+            "description": "Optional path to the tool-specific configuration file relative to the sandbox root (e.g. '.clang-format', 'pyproject.toml', 'prettier.config.js', etc.)."
           }
         },
         "required": ["path"]
@@ -1070,6 +1324,45 @@ TOOLS_SCHEMA = [
           }
         },
         "required": ["path", "start_line", "end_line", "replacement"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "multi_edit_lines",
+      "description": "Apply multiple non-contiguous line range edits to a file. The operation is atomic: if any edit fails (e.g. invalid line range or overlapping range), the entire operation is aborted. All line numbers (start_line and end_line) are 1-indexed, inclusive, and refer to the ORIGINAL content of the file before any edits are applied.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The file path relative to the sandbox root."
+          },
+          "edits": {
+            "type": "array",
+            "description": "The list of line range edits to apply. Edits refer to the original file content and must not overlap.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start_line": {
+                  "type": "integer",
+                  "description": "The starting line number of the range to replace in the original file (1-indexed, inclusive)."
+                },
+                "end_line": {
+                  "type": "integer",
+                  "description": "The ending line number of the range to replace in the original file (1-indexed, inclusive)."
+                },
+                "replacement": {
+                  "type": "string",
+                  "description": "The new text/code content to insert in place of the specified line range."
+                }
+              },
+              "required": ["start_line", "end_line", "replacement"]
+            }
+          }
+        },
+        "required": ["path", "edits"]
       }
     }
   },
@@ -1444,11 +1737,19 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
     if not path or replacement is None:
       return "Error: Missing parameters 'path' or 'replacement'."
     return tool_edit_lines(session.sandbox, path, start_line, end_line, replacement)
+  elif name == "multi_edit_lines":
+    path = arguments.get("path")
+    edits = arguments.get("edits")
+    if not path or not isinstance(edits, list):
+      return "Error: Missing parameter 'path' or 'edits' must be a list of edit objects."
+    return tool_multi_edit_lines(session.sandbox, path, edits)
   elif name == "format_file":
     path = arguments.get("path")
+    formatter = arguments.get("formatter")
+    config_path = arguments.get("config_path")
     if not path:
       return "Error: Missing parameter 'path'."
-    return tool_format_file(session.sandbox, path)
+    return tool_format_file(session.sandbox, path, formatter, config_path)
   elif name == "search_grep":
     pattern = arguments.get("pattern")
     path = arguments.get("path", ".")

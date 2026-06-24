@@ -288,5 +288,90 @@ class TestReasoningAccumulation(unittest.TestCase):
     self.assertEqual(last_msg["thought_signature"], "sig123")
 
 
+class TestToolResultJsonWrapping(unittest.TestCase):
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = tempfile.mkdtemp()
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
+    shutil.rmtree(self.sandbox_dir)
+
+  def test_tool_result_json_wrapping(self):
+    import unittest.mock as mock
+    import json
+    from chatty.session import ChatbotSession
+
+    session = ChatbotSession(
+      provider="openrouter",
+      model="google/gemini-2.5-flash",
+      context_size=10000,
+      sandbox=self.sandbox_dir,
+      max_loops=2
+    )
+
+    class MockFunction:
+      def __init__(self, name, arguments):
+        self.name = name
+        self.arguments = arguments
+
+    class MockToolCall:
+      def __init__(self, id, function):
+        self.id = id
+        self.function = function
+        self.index = 0
+
+    class MockDelta:
+      def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+        self.finish_reason = "tool_calls"
+
+    class MockChunk:
+      def __init__(self, choices):
+        self.choices = choices
+
+    mock_tool_call = MockToolCall(
+      id="call_read_file_test",
+      function=MockFunction(name="read_file", arguments='{"path": "test.txt"}')
+    )
+
+    # Create the file first so read_file succeeds
+    filepath = os.path.join(self.sandbox_dir, "test.txt")
+    with open(filepath, "w") as f:
+      f.write("module fp_sub {\n  assign x = 1;\n}")
+
+    mock_chunks = [
+      MockChunk([MockChoice(MockDelta(tool_calls=[mock_tool_call]))])
+    ]
+
+    session.client = mock.Mock()
+    session.client.chat.completions.create.return_value = mock_chunks
+
+    mock_chunks_second = [
+      MockChunk([MockChoice(MockDelta(content="Done!"))])
+    ]
+
+    # Make create return different values on sequential calls
+    session.client.chat.completions.create.side_effect = [mock_chunks, mock_chunks_second]
+
+    session.run_llm_cycle()
+
+    tool_msgs = [m for m in session.messages if m.get("role") == "tool"]
+    self.assertEqual(len(tool_msgs), 1)
+    tool_msg = tool_msgs[0]
+    self.assertEqual(tool_msg["name"], "read_file")
+    self.assertEqual(tool_msg["tool_call_id"], "call_read_file_test")
+
+    # The content must be valid JSON and contain the file content wrapped under the "output" key
+    parsed_content = json.loads(tool_msg["content"])
+    self.assertIn("output", parsed_content)
+    self.assertIn("module fp_sub", parsed_content["output"])
+
+
 if __name__ == "__main__":
     unittest.main()

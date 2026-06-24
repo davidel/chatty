@@ -62,5 +62,44 @@ class TestFormatFile(unittest.TestCase):
                 content = f.read()
             self.assertIn("int a = 1 + 2;", content)
 
+    def test_format_sv_using_clang_format(self):
+        # Create unformatted SystemVerilog
+        sv_path = os.path.join(self.sandbox_dir, "test.sv")
+        with open(sv_path, "w") as f:
+            f.write("module test; logic clk; always_ff @(posedge clk) begin a<=b; end endmodule")
+
+        # Run formatter
+        result = tool_format_file(self.sandbox_dir, "test.sv")
+
+        # Since clang-format is installed on the system, it should format
+        if "is not installed" not in result:
+            self.assertIn("Successfully formatted", result)
+            with open(sv_path, "r") as f:
+                content = f.read()
+            self.assertIn("always_ff @(posedge clk) begin", content)
+
+    def test_format_sv_with_config_path(self):
+        # Create unformatted SystemVerilog
+        sv_path = os.path.join(self.sandbox_dir, "test.sv")
+        with open(sv_path, "w") as f:
+            f.write("module test; logic clk; always_ff @(posedge clk) begin a<=b; end endmodule")
+
+        # Create config file
+        config_path = os.path.join(self.sandbox_dir, ".my-custom-format")
+        with open(config_path, "w") as f:
+            f.write("Language: Verilog\nIndentWidth: 4\n")
+
+        # Run formatter with specified tool and config path
+        result = tool_format_file(self.sandbox_dir, "test.sv", formatter="clang-format", config_path=".my-custom-format")
+
+        # Since clang-format is installed on the system, it should format
+        if "is not installed" not in result:
+            self.assertIn("Successfully formatted", result)
+            with open(sv_path, "r") as f:
+                content = f.read()
+            # It should have 4-space indentation for the body
+            self.assertIn("    always_ff @(posedge clk)", content)
+
+
 if __name__ == "__main__":
     unittest.main()

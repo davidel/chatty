@@ -292,3 +292,25 @@ def tool_fetch_url(url: str, max_chars: int = 24000) -> str:
     return full_text
   except Exception as e:
     return f"Error fetching URL: {str(e)}"
+
+
+def sanitize_tool_output(text: str) -> str:
+  """Sanitizes tool output to prevent issues with JSON serialization and API gateways.
+
+  Removes null bytes and replaces other control characters (except newline, carriage
+  return, and tab) with their escaped or readable representation.
+  """
+  if not isinstance(text, str):
+    return text
+  # Remove null bytes entirely as they are blocked by many WAFs and JSON parsers
+  text = text.replace("\x00", "\\x00")
+  # Replace other control characters (0x00-0x1F, except \n, \r, \t)
+  # to avoid JSON escaping issues in some gateways
+  def replace_control(match):
+    char = match.group(0)
+    return f"\\u{ord(char):04x}"
+
+  # Match characters in range 0x00-0x1F except 0x09 (\t), 0x0A (\n), 0x0D (\r)
+  control_chars_re = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+  return control_chars_re.sub(replace_control, text)
+

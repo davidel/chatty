@@ -28,7 +28,8 @@ from chatty.utils import (
   get_ollama_models,
   load_system_prompt_from_file,
   parse_frontmatter,
-  record_command_binaries
+  record_command_binaries,
+  sanitize_tool_output
 )
 from chatty.tools import execute_tool, TOOLS_SCHEMA
 
@@ -75,11 +76,12 @@ class ChatbotSession:
     self.current_loop = 0
     default_prompt = (
       "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
-      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), patching files (patch_file), applying multiple patches (multi_patch), editing line ranges (edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), terminating background processes (kill_process), and sleeping/waiting (sleep).\n"
+      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), formatting files (format_file), patching files (patch_file), applying multiple patches (multi_patch), editing line ranges (edit_lines), applying multiple line range edits (multi_edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), terminating background processes (kill_process), and sleeping/waiting (sleep).\n"
       "All paths provided to the tools will resolve relative to the sandbox directory.\n"
       "You are strictly prohibited from writing files outside the sandbox folder.\n"
       "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
-      "CRITICAL: For performing search-and-replace edits (similar to 'sed'), you MUST use 'multi_patch' (for multiple non-contiguous exact replacements) or 'edit_lines' (for specific line number ranges) instead of using 'sed' or custom scripts in run_command.\n"
+      "CRITICAL: For performing search-and-replace edits (similar to 'sed'), you MUST use 'multi_patch' (for multiple non-contiguous exact replacements), 'edit_lines' (for a single line number range), or 'multi_edit_lines' (for multiple non-contiguous line range edits) instead of using 'sed' or custom scripts in run_command.\n"
+      "CRITICAL: When you need to reformat source code files or enforce layout/style guidelines (such as indentation, line-splitting, or spacing), you MUST use the dedicated 'format_file' tool instead of manually editing the files using 'edit_lines', 'patch_file', or 'multi_patch'.\n"
       "CRITICAL: You are strictly prohibited from using the shell 'sleep' command inside run_command to pause execution. You MUST use the dedicated 'sleep' tool instead.\n"
       "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output later by calling check_background_command with the Task ID to get progress or final output, or terminate it by calling kill_process with the Task ID. Perform other file tasks (read, patch, edit) or use the 'sleep' tool while waiting.\n"
       "To filter the output of run_command, use its optional 'output_filter' (regex), 'tail_lines', or 'head_lines' parameters rather than piping to grep or writing custom filtering scripts.\n"
@@ -337,7 +339,7 @@ class ChatbotSession:
           elif clean_token == 'sed':
             return (
               "Error: Using 'sed' in run_command is prohibited. "
-              "Please use the dedicated 'multi_patch' tool (for multiple exact replacements) or 'edit_lines' tool instead."
+              "Please use the dedicated 'multi_patch' tool (for multiple exact replacements), 'edit_lines' (for a single line number range), or 'multi_edit_lines' tool instead."
             )
           elif clean_token == 'sleep':
             return (
@@ -696,77 +698,127 @@ class ChatbotSession:
     return [system_msg] + final_pruned
 
   def extract_tool_calls_from_text(self, text: str) -> List[Dict[str, Any]]:
-    """
-    Attempts to parse JSON tool calls from plain text content when the LLM returns
-    JSON tool calls as a plain text string instead of using structured tool_calls fields.
+    """Attempts to parse JSON tool calls from plain text content when the LLM returns
+
+    JSON tool calls as a plain text string instead of using structured
+    tool_calls fields.
     """
     text = text.strip()
-    
-    # Check if the entire text is a JSON object
-    try:
-      data = json.loads(text)
-      if isinstance(data, dict):
-        if "name" in data and "arguments" in data:
-          args = data["arguments"]
+
+    def parse_single_dict_tool_call(data: Any) -> Optional[Dict[str, Any]]:
+      if not isinstance(data, dict):
+        return None
+      if "name" in data and "arguments" in data:
+        args = data["arguments"]
+        args_str = json.dumps(args) if isinstance(args, dict) else str(args)
+        return {
+          "id": "call_text_parsed",
+          "type": "function",
+          "function": {
+            "name": data["name"],
+            "arguments": args_str
+          }
+        }
+      elif data.get("type") == "function" and "function" in data:
+        func = data["function"]
+        if isinstance(func, dict) and "name" in func and "arguments" in func:
+          args = func["arguments"]
           args_str = json.dumps(args) if isinstance(args, dict) else str(args)
-          return [{
+          return {
             "id": "call_text_parsed",
             "type": "function",
             "function": {
-              "name": data["name"],
+              "name": func["name"],
               "arguments": args_str
             }
-          }]
-        elif data.get("type") == "function" and "function" in data:
-          func = data["function"]
-          if "name" in func and "arguments" in func:
-            args = func["arguments"]
-            args_str = json.dumps(args) if isinstance(args, dict) else str(args)
-            return [{
-              "id": "call_text_parsed",
-              "type": "function",
-              "function": {
-                "name": func["name"],
-                "arguments": args_str
-              }
-            }]
+          }
+      return None
+
+    # 1. Check if the entire text is a JSON object
+    try:
+      data = json.loads(text, strict=False)
+      tool_call = parse_single_dict_tool_call(data)
+      if tool_call:
+        return [tool_call]
     except Exception:
       pass
-        
-    # Search for a JSON object block using first '{' and last '}'
-    first_idx = text.find('{')
-    last_idx = text.rfind('}')
-    if first_idx != -1 and last_idx != -1 and last_idx > first_idx:
-      potential_json = text[first_idx:last_idx+1]
+
+    # 2. Try parsing code blocks
+    import re
+    code_blocks = re.findall(r'```(?:json)?\s*(.*?)\s*```', text, re.DOTALL)
+    for block in code_blocks:
       try:
-        data = json.loads(potential_json)
-        if isinstance(data, dict) and "name" in data and "arguments" in data:
-          args = data["arguments"]
-          args_str = json.dumps(args) if isinstance(args, dict) else str(args)
-          return [{
-            "id": "call_text_parsed",
-            "type": "function",
-            "function": {
-              "name": data["name"],
-              "arguments": args_str
-            }
-          }]
+        data = json.loads(block.strip(), strict=False)
+        tool_call = parse_single_dict_tool_call(data)
+        if tool_call:
+          return [tool_call]
       except Exception:
         pass
-            
+
+    # 3. Try parsing nested braces using brace tracking
+    n = len(text)
+    for i in range(n):
+      if text[i] == '{':
+        brace_count = 0
+        in_string = False
+        escaped = False
+        for j in range(i, n):
+          char = text[j]
+          if in_string:
+            if escaped:
+              escaped = False
+            elif char == '\\':
+              escaped = True
+            elif char == '"':
+              in_string = False
+          else:
+            if char == '"':
+              in_string = True
+            elif char == '{':
+              brace_count += 1
+            elif char == '}':
+              brace_count -= 1
+              if brace_count == 0:
+                potential = text[i:j+1]
+                try:
+                  data = json.loads(potential, strict=False)
+                  tool_call = parse_single_dict_tool_call(data)
+                  if tool_call:
+                    return [tool_call]
+                except Exception:
+                  pass
+                break
+
     return []
+
 
   def get_tools(self) -> Optional[List[Dict[str, Any]]]:
     """Returns list of tools, optionally annotated with cache_control for OpenRouter."""
     if not TOOLS_SCHEMA:
       return None
+
+    from chatty.tools import get_available_formatters
+    available = get_available_formatters()
+    available_str = ", ".join(available) if available else "none detected"
+
+    tools = []
+    for t in TOOLS_SCHEMA:
+      t_copy = dict(t)
+      if t_copy["function"]["name"] == "format_file":
+        t_copy["function"] = dict(t_copy["function"])
+        t_copy["function"]["description"] = (
+          "Format a source code file using the appropriate formatter. Shows a diff of changes. "
+          f"Detected available formatters on this system: {available_str}. "
+          "You can optionally specify a custom formatter and the path to a tool-specific rules/configuration file."
+        )
+      tools.append(t_copy)
+
     if self.prompt_caching:
-      tools = [dict(t) for t in TOOLS_SCHEMA]
       if tools:
         tools[-1] = dict(tools[-1])
         tools[-1]["cache_control"] = {"type": "ephemeral"}
       return tools
-    return TOOLS_SCHEMA
+    return tools
 
   def run_llm_cycle(self):
     """Executes a full inference cycle, resolving tool calls recursively."""
@@ -965,11 +1017,16 @@ class ChatbotSession:
         logger.debug(f"Tool {t_name} (id={t_id}) result content: {t_result}")
         
         # Record result for context
+        # We wrap tool output in a JSON object to prevent issues with gateways/models
+        # trying to parse raw code/braces as invalid JSON.
+        t_result_sanitized = sanitize_tool_output(t_result)
+        wrapped_content = json.dumps({"output": t_result_sanitized})
+
         self.messages.append({
           "role": "tool",
           "tool_call_id": t_id,
           "name": t_name,
-          "content": t_result
+          "content": wrapped_content
         })
           
       loop_count += 1

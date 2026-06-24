@@ -273,6 +273,114 @@ class TestSandboxOps(unittest.TestCase):
     res = tool_multi_patch(self.sandbox_dir, test_file, overlap_patches)
     self.assertIn("Error: Overlapping patches detected", res)
 
+  def test_make_file_preview_small(self):
+    from chatty.tools import make_file_preview
+    test_file = "preview_small.txt"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    content = "line1\nline2\nline3\n"
+    with open(file_path, "w") as f:
+      f.write(content)
+    
+    res = make_file_preview(file_path, [(1, 1)])
+    self.assertIn("File 'preview_small.txt' now has 3 lines:", res)
+    self.assertIn("1: line1", res)
+    self.assertIn("2: line2", res)
+
+  def test_make_file_preview_large(self):
+    from chatty.tools import make_file_preview
+    test_file = "preview_large.txt"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    content = "".join(f"line{i}\n" for i in range(1, 150))
+    with open(file_path, "w") as f:
+      f.write(content)
+      
+    res = make_file_preview(file_path, [(50, 52)], context_lines=2)
+    self.assertIn("now has 149 lines", res)
+    self.assertIn("... (lines 1-47 truncated) ...", res)
+    self.assertIn("48: line48", res)
+    self.assertIn("52: line52", res)
+    self.assertIn("54: line54", res)
+    self.assertIn("... (lines 55-149 truncated) ...", res)
+
+  def test_tool_edit_lines_with_preview(self):
+    from chatty.tools import tool_edit_lines
+    test_file = "edit_preview.txt"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write("a\nb\nc\nd\ne\n")
+      
+    res = tool_edit_lines(self.sandbox_dir, test_file, 2, 4, "x\ny")
+    self.assertIn("Successfully updated file", res)
+    self.assertIn("now has 4 lines", res)
+    self.assertIn("2: x\n3: y", res)
+
+  def test_tool_patch_file_with_preview(self):
+    from chatty.tools import tool_patch_file
+    test_file = "patch_preview.txt"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write("a\nb\nc\nd\ne\n")
+      
+    res = tool_patch_file(self.sandbox_dir, test_file, "b\nc\nd", "x\ny")
+    self.assertIn("Successfully updated file", res)
+    self.assertIn("now has 4 lines", res)
+    self.assertIn("2: x\n3: y", res)
+
+  def test_tool_multi_edit_lines(self):
+    from chatty.tools import tool_multi_edit_lines
+    test_file = "multi_edit.txt"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write("line1\nline2\nline3\nline4\nline5\n")
+      
+    edits = [
+      {"start_line": 2, "end_line": 2, "replacement": "new2"},
+      {"start_line": 4, "end_line": 4, "replacement": "new4_a\nnew4_b"}
+    ]
+    res = tool_multi_edit_lines(self.sandbox_dir, test_file, edits)
+    self.assertIn("Successfully updated file", res)
+    with open(file_path, "r") as f:
+      content = f.read()
+    self.assertEqual(content, "line1\nnew2\nline3\nnew4_a\nnew4_b\nline5\n")
+
+  def test_extract_tool_calls_from_text(self):
+    from chatty.session import ChatbotSession
+    # Create mock session
+    session = ChatbotSession(
+      provider="openrouter",
+      model="mock",
+      context_size=8192,
+      sandbox=self.sandbox_dir
+    )
+    
+    # Test text containing SystemVerilog code with curly braces and nested JSON with newlines
+    sample_text = (
+      "Let's fix always_comb begin rd_data = {a, b}; end.\n"
+      "Here is the tool call:\n"
+      "```json\n"
+      "{\n"
+      "  \"name\": \"multi_edit_lines\",\n"
+      "  \"arguments\": {\n"
+      "    \"path\": \"src/vector_regfile.sv\",\n"
+      "    \"edits\": [\n"
+      "      {\n"
+      "        \"start_line\": 20,\n"
+      "        \"end_line\": 25,\n"
+      "        \"replacement\": \"assign a = {b, c};\"\n"
+      "      }\n"
+      "    ]\n"
+      "  }\n"
+      "}\n"
+      "```"
+    )
+    
+    parsed = session.extract_tool_calls_from_text(sample_text)
+    self.assertEqual(len(parsed), 1)
+    self.assertEqual(parsed[0]["function"]["name"], "multi_edit_lines")
+    self.assertIn("src/vector_regfile.sv", parsed[0]["function"]["arguments"])
+
 
 if __name__ == "__main__":
   unittest.main()
+
+
