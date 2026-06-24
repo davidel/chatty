@@ -66,6 +66,29 @@ class TestCommandSafety(unittest.TestCase):
         err = self.session.validate_command_safety(cmd)
         self.assertIsNone(err, f"Command should be allowed: {cmd}")
 
+  def test_grep_messages(self):
+    bare_greps = [
+      "grep -rn 'opcode' .",
+      "cd /tmp/vpu && grep -n 'opcode' SOME_PATH | head -30"
+    ]
+    for cmd in bare_greps:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to search files", err)
+      self.assertIn("search_grep", err)
+
+    piped_greps = [
+      "pytest | grep Failed",
+      "git diff | grep 'pattern'",
+      "cd /tmp/vpu && make run_all 2>&1 | grep \"\\[.*/41\\]\""
+    ]
+    for cmd in piped_greps:
+      err = self.session.validate_command_safety(cmd)
+      self.assertIsNotNone(err)
+      self.assertIn("prohibited to filter output", err)
+      self.assertIn("output_filter", err)
+      self.assertIn("check_background_command", err)
+
   def test_get_rich_status_bar(self):
     self.session.messages.append({"role": "user", "content": "Hello"})
     status_bar = self.session.get_rich_status_bar()

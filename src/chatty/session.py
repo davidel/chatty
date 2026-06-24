@@ -306,16 +306,23 @@ class ChatbotSession:
         
       sequencers = {'&&', '||', ';', '&', '(', '{', ')', '}'}
       is_cmd_token = True
+      pipe_count = 0
       
       for token in tokens:
         if is_cmd_token:
           clean_token = os.path.basename(token.strip().lower())
           
           if clean_token in {'grep', 'egrep', 'fgrep', 'rgrep'}:
-            return (
-              f"Error: Using '{token}' directly in run_command is prohibited to search files. "
-              "Please use the dedicated 'search_grep' tool instead."
-            )
+            if pipe_count == 0:
+              return (
+                f"Error: Using '{token}' directly in run_command is prohibited to search files. "
+                "Please use the dedicated 'search_grep' tool instead."
+              )
+            else:
+              return (
+                f"Error: Using '{token}' directly in run_command is prohibited to filter output. "
+                "Please use the 'output_filter' parameter of run_command instead (which is also supported by its wait-for-termination counterpart, check_background_command)."
+              )
           elif clean_token == 'find':
             return (
               f"Error: Using 'find' in run_command is prohibited to locate files. "
@@ -347,8 +354,12 @@ class ChatbotSession:
               "Please use the dedicated 'sleep' tool instead."
             )
         
-        if token.strip() in sequencers or token.strip() in {'|', '|&'}:
+        if token.strip() in {'|', '|&'}:
           is_cmd_token = True
+          pipe_count += 1
+        elif token.strip() in sequencers:
+          is_cmd_token = True
+          pipe_count = 0
         else:
           is_cmd_token = False
           
