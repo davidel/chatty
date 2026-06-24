@@ -165,8 +165,6 @@ def tool_write_file(sandbox_dir: str, path: str, content: str, compile_paths: Li
   try:
     safe_p = get_safe_path(sandbox_dir, path)
     is_valid, err_msg = validate_file_syntax(safe_p, content, sandbox_dir, compile_paths)
-    if not is_valid:
-      return f"Error: Syntax verification failed. File was not saved.\n{err_msg}"
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     old_content = ""
@@ -184,6 +182,8 @@ def tool_write_file(sandbox_dir: str, path: str, content: str, compile_paths: Li
     if old_content:
       print_diff(rel_path, old_content, content)
       
+    if not is_valid:
+      return f"Warning: File '{rel_path}' was saved, but syntax validation reported potential issues. Please verify the code (e.g. by running tests):\n{err_msg}"
     return f"Successfully wrote to file '{rel_path}'."
   except Exception as e:
     return f"Error writing file: {str(e)}"
@@ -296,14 +296,15 @@ def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str, comp
       new_content = updated_normalized
       
     is_valid, err_msg = validate_file_syntax(safe_p, new_content, sandbox_dir, compile_paths)
-    if not is_valid:
-      return f"Error: Syntax verification failed for updated file content. Patch was not applied.\n{err_msg}"
       
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.write(new_content)
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     print_diff(rel_path, content, new_content)
+    
+    if not is_valid:
+      return f"Warning: File '{rel_path}' was updated, but syntax validation reported potential issues. Please verify the code (e.g. by running tests):\n{err_msg}"
     return f"Successfully updated file '{rel_path}' using a target replacement patch."
   except Exception as e:
     return f"Error patching file: {str(e)}"
@@ -346,8 +347,6 @@ def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int,
     
     new_content = "".join(lines)
     is_valid, err_msg = validate_file_syntax(safe_p, new_content, sandbox_dir, compile_paths)
-    if not is_valid:
-      return f"Error: Syntax verification failed for updated file content. Line edits were not applied.\n{err_msg}"
       
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.writelines(lines)
@@ -356,6 +355,11 @@ def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int,
     print_diff(rel_path, original_content, new_content)
     replaced_count = end_line - start_line + 1
     inserted_count = len(replacement_lines_formatted)
+    
+    if not is_valid:
+      return (
+        f"Warning: File '{rel_path}' was updated, but syntax validation reported potential issues. Please verify the code (e.g. by running tests):\n{err_msg}"
+      )
     return (
       f"Successfully updated file '{rel_path}': replaced lines {start_line}-{end_line} "
       f"({replaced_count} lines) with {inserted_count} new lines."
