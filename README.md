@@ -132,6 +132,8 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/api_key` | `[key]` | Configure your OpenRouter cloud client token dynamically. |
 | `/system` | `[text]` | Inspect or update the base system prompt instructions directly. |
 | `/load` | `<path> [append\|replace]` | Read system instructions from a local YAML or text file, appending or replacing. |
+| `/save_session` | `<path>` | Save the whole status of the current conversation/session to a JSON file. |
+| `/load_session` | `<path>` | Load a saved conversation/session status from a JSON file. |
 | `/multiline` | None | Toggle multiline mode. When enabled, use `Alt+Enter` or `Esc+Enter` to submit. |
 | `/history` | None | Renders message records, estimated token counts, roles, and tool calls. |
 | `/tools` | None | Lists available sandboxed tools and their schema definitions. |

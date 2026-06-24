@@ -820,6 +820,113 @@ class ChatbotSession:
       return tools
     return tools
 
+  def _log_llm_request(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None) -> None:
+    """Logs detailed information about the LLM request in DEBUG mode."""
+    if not logger.isEnabledFor(logging.DEBUG):
+      return
+
+    # Mask headers
+    headers = getattr(self.client, "default_headers", {})
+    masked_headers = {}
+    for k, v in headers.items():
+      if k.lower() in ("authorization", "api-key", "x-api-key"):
+        if isinstance(v, str):
+          if len(v) > 12:
+            masked_headers[k] = v[:8] + "..." + v[-4:]
+          else:
+            masked_headers[k] = "..."
+        else:
+          masked_headers[k] = "..."
+      else:
+        masked_headers[k] = v
+
+    # Mask API key
+    api_key = getattr(self.client, "api_key", None)
+    masked_key = "None"
+    if api_key:
+      if len(api_key) > 12:
+        masked_key = api_key[:8] + "..." + api_key[-4:]
+      else:
+        masked_key = "..."
+
+    logger.debug("=== LLM Request Details ===")
+    logger.debug(f"Provider: {self.provider}")
+    logger.debug(f"Model: {self.model}")
+    logger.debug(f"Base URL: {getattr(self.client, 'base_url', 'Unknown')}")
+    logger.debug(f"API Key: {masked_key}")
+    logger.debug(f"Default Headers: {masked_headers}")
+    logger.debug(f"Timeout: {getattr(self.client, 'timeout', 'Default')}")
+    logger.debug(f"Max Retries: {getattr(self.client, 'max_retries', 'Default')}")
+    logger.debug(f"Request Messages ({len(messages)}):")
+    try:
+      logger.debug(json.dumps(messages, indent=2, default=str))
+    except Exception as e:
+      logger.debug(f"Error serializing request messages: {e}")
+      logger.debug(str(messages))
+
+    if tools:
+      logger.debug(f"Request Tools ({len(tools)}):")
+      try:
+        logger.debug(json.dumps(tools, indent=2, default=str))
+      except Exception as e:
+        logger.debug(f"Error serializing request tools: {e}")
+        logger.debug(str(tools))
+    else:
+      logger.debug("Request Tools: None")
+    logger.debug("===========================")
+
+  def _log_llm_response_summary(
+    self,
+    content_accumulated: str,
+    tool_calls_accumulated: List[Dict[str, Any]],
+    extra_fields_accumulated: Dict[str, Any],
+    finish_reason: Optional[str] = None,
+    usage: Optional[Any] = None,
+    response_model: Optional[str] = None,
+    system_fingerprint: Optional[str] = None,
+    chunk_id: Optional[str] = None
+  ) -> None:
+    """Logs detailed summary of the LLM response in DEBUG mode."""
+    if not logger.isEnabledFor(logging.DEBUG):
+      return
+
+    logger.debug("=== LLM Response Details ===")
+    logger.debug(f"Chunk ID: {chunk_id}")
+    logger.debug(f"Response Model: {response_model}")
+    logger.debug(f"System Fingerprint: {system_fingerprint}")
+    logger.debug(f"Finish Reason: {finish_reason}")
+
+    if usage:
+      if hasattr(usage, "prompt_tokens"):
+        logger.debug(f"Usage: prompt_tokens={usage.prompt_tokens}, completion_tokens={usage.completion_tokens}, total_tokens={usage.total_tokens}")
+      elif isinstance(usage, dict):
+        logger.debug(f"Usage: prompt_tokens={usage.get('prompt_tokens')}, completion_tokens={usage.get('completion_tokens')}, total_tokens={usage.get('total_tokens')}")
+      else:
+        logger.debug(f"Usage: {usage}")
+    else:
+      logger.debug("Usage: Not provided/available")
+
+    for field, val in extra_fields_accumulated.items():
+      if val is not None:
+        logger.debug(f"Extra Field ({field}): {val}")
+
+    if content_accumulated:
+      logger.debug(f"Assistant response content ({len(content_accumulated)} chars):")
+      logger.debug(content_accumulated)
+    else:
+      logger.debug("Assistant response content: None")
+
+    if tool_calls_accumulated:
+      logger.debug(f"Assistant response tool calls ({len(tool_calls_accumulated)}):")
+      try:
+        logger.debug(json.dumps(tool_calls_accumulated, indent=2, default=str))
+      except Exception as e:
+        logger.debug(f"Error serializing tool calls: {e}")
+        logger.debug(str(tool_calls_accumulated))
+    else:
+      logger.debug("Assistant response tool calls: None")
+    logger.debug("============================")
+
   def run_llm_cycle(self):
     """Executes a full inference cycle, resolving tool calls recursively."""
     self.load_skills()
@@ -831,7 +938,6 @@ class ChatbotSession:
       self.current_loop = loop_count + 1
       # Prepare message payloads based on limit settings
       active_messages = self.prune_history()
-      logger.debug(f"LLM request payload messages: {json.dumps(active_messages, default=str)}")
       
       # Start LLM stream call
       tool_calls_accumulated = []
@@ -850,16 +956,51 @@ class ChatbotSession:
         with Live(Group(panel, self.get_rich_status_bar()), 
                   refresh_per_second=12, console=console) as live:
           
-          stream = self.client.chat.completions.create(
-            model=self.model,
-            messages=active_messages,
-            tools=self.get_tools(),
-            stream=True
-          )
+          # Log request details in DEBUG mode
+          self._log_llm_request(active_messages, self.get_tools())
           
+          # Try calling with stream_options={"include_usage": True}
+          try:
+            stream = self.client.chat.completions.create(
+              model=self.model,
+              messages=active_messages,
+              tools=self.get_tools(),
+              stream=True,
+              stream_options={"include_usage": True}
+            )
+          except Exception as e:
+            logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
+            stream = self.client.chat.completions.create(
+              model=self.model,
+              messages=active_messages,
+              tools=self.get_tools(),
+              stream=True
+            )
+          
+          first_metadata_chunk = True
           first_chunk = True
           finish_reason = None
+          usage_metadata = None
+          chunk_id = None
+          resp_model = None
+          sys_fp = None
           for chunk in stream:
+            # Capture usage if present
+            if hasattr(chunk, "usage") and chunk.usage:
+              usage_metadata = chunk.usage
+            elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+              usage_metadata = chunk.model_extra["usage"]
+
+            # Log metadata on first chunk
+            if first_metadata_chunk:
+              chunk_id = getattr(chunk, "id", None)
+              resp_model = getattr(chunk, "model", None)
+              sys_fp = getattr(chunk, "system_fingerprint", None)
+              logger.debug(
+                f"LLM response started. Chunk ID: {chunk_id}, Model: {resp_model}, System Fingerprint: {sys_fp}"
+              )
+              first_metadata_chunk = False
+
             if not chunk.choices:
               continue
             choice = chunk.choices[0]
@@ -916,7 +1057,7 @@ class ChatbotSession:
                       
                 # Render loading indicator
                 panel = Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
-                              title="System", border_style="yellow")
+                               title="System", border_style="yellow")
                 live.update(Group(panel, self.get_rich_status_bar()))
           # Remove status bar before exiting Live context
           live.update(panel)
@@ -926,10 +1067,16 @@ class ChatbotSession:
           console.print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
         
         logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
-        if content_accumulated:
-          logger.debug(f"Assistant response content: {content_accumulated}")
-        if tool_calls_accumulated:
-          logger.debug(f"Assistant response tool calls: {tool_calls_accumulated}")
+        self._log_llm_response_summary(
+          content_accumulated=content_accumulated,
+          tool_calls_accumulated=tool_calls_accumulated,
+          extra_fields_accumulated=extra_fields_accumulated,
+          finish_reason=finish_reason,
+          usage=usage_metadata,
+          response_model=resp_model,
+          system_fingerprint=sys_fp,
+          chunk_id=chunk_id
+        )
       except Exception as e:
         logger.exception("Error calling LLM API")
         console.print(f"[bold red]Error calling API:[/bold red] {str(e)}")
@@ -1156,6 +1303,81 @@ class ChatbotSession:
         except Exception as e:
           console.print(f"[bold red]Error loading prompt file: {str(e)}[/bold red]")
               
+    elif cmd in ("/save", "/save_session"):
+      if not arg:
+        console.print("[bold red]Error: Usage: /save_session <file_path>[/bold red]")
+      else:
+        file_path = os.path.expanduser(arg.strip())
+        if not os.path.isabs(file_path):
+          file_path = os.path.join(self.sandbox, file_path)
+        dir_name = os.path.dirname(file_path)
+        if dir_name:
+          os.makedirs(dir_name, exist_ok=True)
+        session_data = {
+          "provider": self.provider,
+          "model": self.model,
+          "context_size": self.context_size,
+          "sandbox": self.sandbox,
+          "max_loops": self.max_loops,
+          "system_prompt": self.system_prompt,
+          "messages": self.messages,
+          "tool_calls_count": self.tool_calls_count,
+          "external_binaries_count": self.external_binaries_count,
+          "external_binaries_breakdown": self.external_binaries_breakdown,
+        }
+        if self.api_key:
+          session_data["api_key"] = self.api_key
+        if self.url:
+          session_data["url"] = self.url
+        try:
+          with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(session_data, f, indent=2, default=str)
+          console.print(f"[bold green]Session saved successfully to {file_path}[/bold green]")
+        except Exception as e:
+          console.print(f"[bold red]Error saving session: {str(e)}[/bold red]")
+              
+    elif cmd == "/load_session":
+      if not arg:
+        console.print("[bold red]Error: Usage: /load_session <file_path>[/bold red]")
+      else:
+        file_path = os.path.expanduser(arg.strip())
+        if not os.path.isabs(file_path):
+          file_path = os.path.join(self.sandbox, file_path)
+        try:
+          with open(file_path, "r", encoding="utf-8") as f:
+            session_data = json.load(f)
+          if "provider" in session_data:
+            self.provider = session_data["provider"]
+          if "model" in session_data:
+            self.model = session_data["model"]
+          if "context_size" in session_data:
+            self.context_size = session_data["context_size"]
+          if "sandbox" in session_data:
+            sandbox_path = os.path.abspath(session_data["sandbox"])
+            if os.path.exists(sandbox_path):
+              self.sandbox = sandbox_path
+          if "max_loops" in session_data:
+            self.max_loops = session_data["max_loops"]
+          if "system_prompt" in session_data:
+            self.system_prompt = session_data["system_prompt"]
+          if "messages" in session_data:
+            self.messages = session_data["messages"]
+          if "tool_calls_count" in session_data:
+            self.tool_calls_count = session_data["tool_calls_count"]
+          if "external_binaries_count" in session_data:
+            self.external_binaries_count = session_data["external_binaries_count"]
+          if "external_binaries_breakdown" in session_data:
+            self.external_binaries_breakdown = session_data["external_binaries_breakdown"]
+          if "api_key" in session_data:
+            self.api_key = session_data["api_key"]
+          if "url" in session_data:
+            self.url = session_data["url"]
+          self.init_client()
+          self.load_skills()
+          console.print(f"[bold green]Session loaded successfully from {file_path}[/bold green]")
+        except Exception as e:
+          console.print(f"[bold red]Error loading session: {str(e)}[/bold red]")
+              
     elif cmd == "/tools":
       self.show_tools()
       
@@ -1182,7 +1404,6 @@ class ChatbotSession:
 
     # Prepare messages for summarization
     active_messages = self.prune_history()
-    logger.debug(f"Context compression request payload messages: {json.dumps(active_messages, default=str)}")
     summary_instruction = (
       "Summarize our progress, the current task we are focusing on, "
       "any code modifications made so far, and the immediate next steps. "
@@ -1191,33 +1412,79 @@ class ChatbotSession:
     )
     active_messages.append({"role": "user", "content": summary_instruction})
 
+    # Log request details in DEBUG mode
+    self._log_llm_request(active_messages, None)
+
     content_accumulated = ""
     logger.info("Generating summary for /compress command")
     try:
       with Live(Panel("Connecting to LLM for summary...", title="Context Compression", border_style="yellow"),
                 refresh_per_second=12, console=console) as live:
         
-        stream = self.client.chat.completions.create(
-          model=self.model,
-          messages=active_messages,
-          stream=True
-        )
+        try:
+          stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=active_messages,
+            stream=True,
+            stream_options={"include_usage": True}
+          )
+        except Exception as e:
+          logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
+          stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=active_messages,
+            stream=True
+          )
         
-        first_chunk = True
+        first_metadata_chunk = True
+        first_content_chunk = True
+        usage_metadata = None
+        chunk_id = None
+        resp_model = None
+        sys_fp = None
+        finish_reason = None
         for chunk in stream:
+          # Capture usage if present
+          if hasattr(chunk, "usage") and chunk.usage:
+            usage_metadata = chunk.usage
+          elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+            usage_metadata = chunk.model_extra["usage"]
+
+          # Log metadata on first chunk
+          if first_metadata_chunk:
+            chunk_id = getattr(chunk, "id", None)
+            resp_model = getattr(chunk, "model", None)
+            sys_fp = getattr(chunk, "system_fingerprint", None)
+            logger.debug(
+              f"LLM context compression response started. Chunk ID: {chunk_id}, Model: {resp_model}, System Fingerprint: {sys_fp}"
+            )
+            first_metadata_chunk = False
+
           if not chunk.choices:
             continue
-          delta = chunk.choices[0].delta
+          choice = chunk.choices[0]
+          delta = choice.delta
+          if hasattr(choice, "finish_reason") and choice.finish_reason:
+            finish_reason = choice.finish_reason
           
           if delta.content:
-            if first_chunk:
+            if first_content_chunk:
               live.update(Panel("", title="Context Summary", border_style="yellow"))
-              first_chunk = False
+              first_content_chunk = False
             content_accumulated += delta.content
             live.update(Panel(Markdown(content_accumulated), title="Context Summary", border_style="yellow"))
+            
       logger.info("Summary generation succeeded")
-      if content_accumulated:
-        logger.debug(f"Generated summary: {content_accumulated}")
+      self._log_llm_response_summary(
+        content_accumulated=content_accumulated,
+        tool_calls_accumulated=[],
+        extra_fields_accumulated={},
+        finish_reason=finish_reason,
+        usage=usage_metadata,
+        response_model=resp_model,
+        system_fingerprint=sys_fp,
+        chunk_id=chunk_id
+      )
     except Exception as e:
       logger.exception("Error calling LLM API for context summary")
       console.print(f"[bold red]Error calling API for summary:[/bold red] {str(e)}")
@@ -1256,6 +1523,8 @@ class ChatbotSession:
     table.add_row("/api_key [key]", "Configure the OpenRouter API Key")
     table.add_row("/system [text]", "View or edit the system instructions")
     table.add_row("/load <path> [append|replace]", "Load system prompt guidelines from a file")
+    table.add_row("/save_session <path>", "Save the entire session status to a JSON file")
+    table.add_row("/load_session <path>", "Load a saved session status from a JSON file")
     table.add_row("/multiline", "Toggle multiline prompt input (Alt+Enter to send)")
     table.add_row("/history", "View message records and sizing details")
     table.add_row("/tools", "List available sandbox tools and schemas")
