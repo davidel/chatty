@@ -156,7 +156,8 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`format_file`**: Styles source files using formatters: `black`/`ruff` for Python, `clang-format` for C/C++, `prettier` for frontend, or custom JSON/YAML encoders. Displays diff results.
 - **`move_file`**: Renames or moves files and directories safely inside the sandbox boundaries.
 - **`copy_file`**: Recursively copies file system structures.
-- **`delete_file`**: Permanently removes files or directories.
+- **`delete_file`**: Permanently removes a file. Fails on directories.
+- **`delete_directory`**: Permanently removes a directory (optionally recursively).
 - **`make_directory`**: Recursively builds directory trees.
 - **`get_file_info`**: Retrieves file system metadata (modification dates, sizes, line counts for text documents).
 
@@ -167,7 +168,7 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 
 ### Command & Background Execution
 - **`run_command`**: Runs shell commands from the sandbox directory.
-  - *Safety Restrictions*: Monitored by safety checks to block commands that attempt directory escapes, or attempt to circumvent tool guidelines by calling commands like `cat`, `grep`, `find`, `sed`, `awk`, `less`, `more`, `wc`, `kill`, `pkill`, `killall`.
+  - *Safety Restrictions*: Monitored by safety checks to block commands that attempt directory escapes, or attempt to circumvent tool guidelines by calling commands like `cat`, `grep`, `find`, `sed`, `awk`, `less`, `more`, `wc`, `kill`, `pkill`, `killall`, `cp`, `mv`, `rm`, `rmdir`, `mkdir`.
   - *Output Controls*: Supports `output_filter` (regex matching), `head_lines`, and `tail_lines` parameters to prevent token overflow.
   - *Asynchronous Process Execution*: Commands that block or run indefinitely are automatically backgrounded by the session, returning a `Task ID` (e.g., `task_1`).
 - **`check_background_command`**: Inspects status or reads output of background processes using their `task_id`.

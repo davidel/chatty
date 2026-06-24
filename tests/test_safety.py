@@ -45,7 +45,12 @@ class TestCommandSafety(unittest.TestCase):
       "pytest | grep Failed",
       "ninja test | head -n 20",
       "git diff | grep 'pattern'",
-      "make run_all 2>&1 | grep -E \"SIM_OUT|SIM_RC\" | head -5"
+      "make run_all 2>&1 | grep -E \"SIM_OUT|SIM_RC\" | head -5",
+      "cp a.txt b.txt",
+      "mv a.txt b.txt",
+      "rm a.txt",
+      "rmdir mydir",
+      "mkdir mydir"
     ]
     for cmd in blocked_commands:
       with self.subTest(cmd=cmd):
@@ -239,6 +244,21 @@ class TestCommandSafety(unittest.TestCase):
       status_res = self.session.tool_check_background_command("task_2", timeout=0.5)
       self.assertIn("FINISHED with exit code 0", status_res)
       self.assertNotIn("timed out", status_res)
+
+  def test_blocked_file_ops_commands(self):
+    file_ops_checks = [
+      ("cp a.txt b.txt", "prohibited to copy files or directories", "copy_file"),
+      ("mv a.txt b.txt", "prohibited to move or rename files or directories", "move_file"),
+      ("rm a.txt", "prohibited to delete files or directories", "delete_file"),
+      ("rmdir mydir", "prohibited to delete directories", "delete_directory"),
+      ("mkdir mydir", "prohibited to create directories", "make_directory"),
+    ]
+    for cmd, msg_part, tool_name in file_ops_checks:
+      with self.subTest(cmd=cmd):
+        err = self.session.validate_command_safety(cmd)
+        self.assertIsNotNone(err)
+        self.assertIn(msg_part, err)
+        self.assertIn(tool_name, err)
 
   def test_blocked_kill_commands(self):
     for cmd in ["kill 1234", "pkill -f server", "killall python"]:

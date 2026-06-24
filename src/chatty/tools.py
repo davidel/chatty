@@ -874,22 +874,51 @@ def tool_copy_file(sandbox_dir: str, src: str, dest: str) -> str:
 
 
 def tool_delete_file(sandbox_dir: str, path: str) -> str:
-  """Delete a file or directory inside the sandbox."""
+  """Delete a file inside the sandbox. Fails if the path is a directory."""
   try:
     safe_path = get_safe_path(sandbox_dir, path)
     
     if not os.path.exists(safe_path):
       return f"Error: Path '{path}' does not exist."
       
-    rel_path = os.path.relpath(safe_path, sandbox_dir)
     if os.path.isdir(safe_path):
-      shutil.rmtree(safe_path)
-      return f"Successfully deleted directory '{rel_path}'."
-    else:
-      os.remove(safe_path)
-      return f"Successfully deleted file '{rel_path}'."
+      return f"Error: Path '{path}' is a directory. Use 'delete_directory' instead."
+      
+    rel_path = os.path.relpath(safe_path, sandbox_dir)
+    os.remove(safe_path)
+    return f"Successfully deleted file '{rel_path}'."
   except Exception as e:
-    return f"Error deleting file/directory: {str(e)}"
+    return f"Error deleting file: {str(e)}"
+
+
+def tool_delete_directory(sandbox_dir: str, path: str, recursive: bool = False) -> str:
+  """Delete a directory inside the sandbox."""
+  try:
+    safe_path = get_safe_path(sandbox_dir, path)
+    
+    if not os.path.exists(safe_path):
+      return f"Error: Path '{path}' does not exist."
+      
+    if not os.path.isdir(safe_path):
+      return f"Error: Path '{path}' is a file. Use 'delete_file' instead."
+      
+    rel_path = os.path.relpath(safe_path, sandbox_dir)
+    
+    if not recursive:
+      try:
+        contents = os.listdir(safe_path)
+        if contents:
+          return f"Error: Directory '{rel_path}' is not empty. Set recursive=True to delete it and all its contents."
+      except Exception:
+        pass
+        
+    if recursive:
+      shutil.rmtree(safe_path)
+    else:
+      os.rmdir(safe_path)
+    return f"Successfully deleted directory '{rel_path}'."
+  except Exception as e:
+    return f"Error deleting directory: {str(e)}"
 
 
 def tool_make_directory(sandbox_dir: str, path: str) -> str:
@@ -1183,13 +1212,34 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "delete_file",
-      "description": "Delete a file or directory inside the sandboxed file system.",
+      "description": "Delete a file inside the sandboxed file system. Fails if the path is a directory.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "The path to the file or directory to delete relative to the sandbox root."
+            "description": "The path to the file to delete relative to the sandbox root."
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_directory",
+      "description": "Delete a directory inside the sandboxed file system.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The path to the directory to delete relative to the sandbox root."
+          },
+          "recursive": {
+            "type": "boolean",
+            "description": "If true, deletes the directory and all of its contents recursively. If false, fails if the directory is not empty. Defaults to false."
           }
         },
         "required": ["path"]
@@ -1687,6 +1737,12 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
     if not path:
       return "Error: Missing parameter 'path'."
     return tool_delete_file(session.sandbox, path)
+  elif name == "delete_directory":
+    path = arguments.get("path")
+    if not path:
+      return "Error: Missing parameter 'path'."
+    recursive = bool(arguments.get("recursive", False))
+    return tool_delete_directory(session.sandbox, path, recursive)
   elif name == "make_directory":
     path = arguments.get("path")
     if not path:

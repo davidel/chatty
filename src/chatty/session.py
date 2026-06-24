@@ -76,10 +76,10 @@ class ChatbotSession:
     self.current_loop = 0
     default_prompt = (
       "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
-      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), formatting files (format_file), patching files (patch_file), applying multiple patches (multi_patch), editing line ranges (edit_lines), applying multiple line range edits (multi_edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), terminating background processes (kill_process), and sleeping (sleep).\n"
+      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), copying files/directories (copy_file), moving/renaming files/directories (move_file), deleting files (delete_file), deleting directories (delete_directory), creating directories (make_directory), formatting files (format_file), patching files (patch_file), applying multiple patches (multi_patch), editing line ranges (edit_lines), applying multiple line range edits (multi_edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), terminating background processes (kill_process), and sleeping (sleep).\n"
       "All paths provided to the tools will resolve relative to the sandbox directory.\n"
       "You are strictly prohibited from writing files outside the sandbox folder.\n"
-      "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
+      "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info, copy_file, move_file, delete_file, delete_directory, make_directory) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more, cp, mv, rm, rmdir, mkdir) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
       "CRITICAL: For performing search-and-replace edits (similar to 'sed'), you MUST use 'multi_patch' (for multiple non-contiguous exact replacements), 'edit_lines' (for a single line number range), or 'multi_edit_lines' (for multiple non-contiguous line range edits) instead of using 'sed' or custom scripts in run_command.\n"
       "CRITICAL: When you need to reformat source code files or enforce layout/style guidelines (such as indentation, line-splitting, or spacing), you MUST use the dedicated 'format_file' tool instead of manually editing the files using 'edit_lines', 'patch_file', or 'multi_patch'.\n"
       "CRITICAL: You are strictly prohibited from using the shell 'sleep' command inside run_command to pause execution. You MUST use the dedicated 'sleep' tool instead.\n"
@@ -369,6 +369,31 @@ class ChatbotSession:
             return (
               "Error: Using 'sleep' in run_command is prohibited to pause execution. "
               "Please use the dedicated 'sleep' tool instead."
+            )
+          elif clean_token == 'cp':
+            return (
+              f"Error: Using '{token}' in run_command is prohibited to copy files or directories. "
+              "Please use the dedicated 'copy_file' tool instead."
+            )
+          elif clean_token == 'mv':
+            return (
+              f"Error: Using '{token}' in run_command is prohibited to move or rename files or directories. "
+              "Please use the dedicated 'move_file' tool instead."
+            )
+          elif clean_token == 'rm':
+            return (
+              f"Error: Using '{token}' in run_command is prohibited to delete files or directories. "
+              "Please use the dedicated 'delete_file' (for files) or 'delete_directory' (for directories) tool instead."
+            )
+          elif clean_token == 'rmdir':
+            return (
+              f"Error: Using '{token}' in run_command is prohibited to delete directories. "
+              "Please use the dedicated 'delete_directory' tool instead."
+            )
+          elif clean_token == 'mkdir':
+            return (
+              f"Error: Using '{token}' in run_command is prohibited to create directories. "
+              "Please use the dedicated 'make_directory' tool instead."
             )
         
         if token.strip() in {'|', '|&'}:

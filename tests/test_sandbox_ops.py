@@ -11,6 +11,7 @@ from chatty.tools import (
   tool_move_file,
   tool_copy_file,
   tool_delete_file,
+  tool_delete_directory,
   tool_make_directory,
   tool_get_file_info,
   tool_search_grep,
@@ -128,19 +129,19 @@ class TestSandboxOps(unittest.TestCase):
     with open(file_path, "w") as f:
       f.write("delete")
 
+    # Create directory to test failure
+    dir_path = os.path.join(self.sandbox_dir, "delete_dir")
+    os.makedirs(dir_path)
+
+    # Test delete file on directory (should fail)
+    res = tool_delete_file(self.sandbox_dir, "delete_dir")
+    self.assertIn("is a directory", res)
+    self.assertTrue(os.path.exists(dir_path))
+
     # Delete file
     res = tool_delete_file(self.sandbox_dir, "delete_me.txt")
     self.assertIn("Successfully deleted file", res)
     self.assertFalse(os.path.exists(file_path))
-
-    # Create directory to delete
-    dir_path = os.path.join(self.sandbox_dir, "delete_dir")
-    os.makedirs(dir_path)
-
-    # Delete directory
-    res = tool_delete_file(self.sandbox_dir, "delete_dir")
-    self.assertIn("Successfully deleted directory", res)
-    self.assertFalse(os.path.exists(dir_path))
 
     # Test delete non-existent file
     res = tool_delete_file(self.sandbox_dir, "nonexistent.txt")
@@ -148,6 +149,46 @@ class TestSandboxOps(unittest.TestCase):
 
     # Test sandbox traversal
     res = tool_delete_file(self.sandbox_dir, "../outside.txt")
+    self.assertIn("Access Denied", res)
+
+  def test_delete_directory(self):
+    # Create empty directory to delete
+    dir_path = os.path.join(self.sandbox_dir, "empty_dir")
+    os.makedirs(dir_path)
+
+    # Create non-empty directory
+    nested_dir_path = os.path.join(self.sandbox_dir, "nested_dir")
+    os.makedirs(nested_dir_path)
+    file_path = os.path.join(nested_dir_path, "file.txt")
+    with open(file_path, "w") as f:
+      f.write("hello")
+
+    # Test delete directory on a file (should fail)
+    res = tool_delete_directory(self.sandbox_dir, "nested_dir/file.txt")
+    self.assertIn("is a file", res)
+    self.assertTrue(os.path.exists(file_path))
+
+    # Test delete non-empty directory without recursive (should fail)
+    res = tool_delete_directory(self.sandbox_dir, "nested_dir", recursive=False)
+    self.assertIn("is not empty", res)
+    self.assertTrue(os.path.exists(nested_dir_path))
+
+    # Test delete empty directory
+    res = tool_delete_directory(self.sandbox_dir, "empty_dir")
+    self.assertIn("Successfully deleted directory", res)
+    self.assertFalse(os.path.exists(dir_path))
+
+    # Test delete non-empty directory with recursive=True
+    res = tool_delete_directory(self.sandbox_dir, "nested_dir", recursive=True)
+    self.assertIn("Successfully deleted directory", res)
+    self.assertFalse(os.path.exists(nested_dir_path))
+
+    # Test delete non-existent directory
+    res = tool_delete_directory(self.sandbox_dir, "nonexistent_dir")
+    self.assertIn("does not exist", res)
+
+    # Test sandbox traversal
+    res = tool_delete_directory(self.sandbox_dir, "../outside_dir")
     self.assertIn("Access Denied", res)
 
   def test_get_file_info(self):
