@@ -7,14 +7,16 @@ import sys
 # Ensure src is in python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from chatty.cli import (
+from chatty.tools import (
     tool_list_dir,
     tool_read_file,
-    tool_search_grep,
+    tool_search_grep
+)
+from chatty.utils import (
     tool_fetch_url,
-    ChatbotSession,
     truncate_output
 )
+from chatty.session import ChatbotSession
 
 class TestCutoffs(unittest.TestCase):
     def setUp(self):
@@ -244,7 +246,7 @@ class TestCutoffs(unittest.TestCase):
 class TestReasoningAccumulation(unittest.TestCase):
   def test_reasoning_accumulation(self):
     import unittest.mock as mock
-    from chatty.cli import ChatbotSession
+    from chatty.session import ChatbotSession
 
     session = ChatbotSession(
       provider="openrouter",

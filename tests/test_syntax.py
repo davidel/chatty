@@ -7,7 +7,7 @@ import sys
 # Ensure src is in python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from chatty.cli import validate_file_syntax
+from chatty.syntax import validate_file_syntax
 
 class TestSyntaxValidation(unittest.TestCase):
     def setUp(self):

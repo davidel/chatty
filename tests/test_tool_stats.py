@@ -8,7 +8,8 @@ import subprocess
 # Ensure src is in python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from chatty.cli import ChatbotSession, execute_tool
+from chatty.session import ChatbotSession
+from chatty.tools import execute_tool
 
 class TestToolStats(unittest.TestCase):
     def setUp(self):
@@ -64,7 +65,7 @@ class TestToolStats(unittest.TestCase):
         # Run a shell pipeline with redirection and builtins
         # cd dir && make || echo 'failed'
         # Both cd and echo should be tracked
-        from chatty.cli import record_command_binaries
+        from chatty.utils import record_command_binaries
         record_command_binaries("(cd dir && make) || echo 'failed'")
         
         self.assertEqual(self.session.external_binaries_count, 3)

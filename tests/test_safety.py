@@ -7,7 +7,7 @@ import sys
 # Ensure src is in python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from chatty.cli import ChatbotSession
+from chatty.session import ChatbotSession
 
 class TestCommandSafety(unittest.TestCase):
   def setUp(self):
@@ -161,7 +161,7 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("sleep", err)
 
   def test_sleep_tool_execution(self):
-    from chatty.cli import execute_tool, tool_sleep
+    from chatty.tools import execute_tool, tool_sleep
     # Test tool_sleep directly
     res = tool_sleep(0.01)
     self.assertIn("Successfully slept for 0.01 seconds", res)

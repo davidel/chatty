@@ -7,7 +7,7 @@ import sys
 # Ensure src is in python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from chatty.cli import (
+from chatty.tools import (
   tool_move_file,
   tool_copy_file,
   tool_delete_file,
