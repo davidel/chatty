@@ -938,16 +938,20 @@ class ChatbotSession:
           t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
         else:
           # Execute tool
-          exec_panel = Panel(
-            f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
-            title="🔧 Executing Tool",
-            border_style="yellow"
-          )
-          with Live(Group(exec_panel, self.get_rich_status_bar()), refresh_per_second=12, console=console) as live:
+          if t_name == "ask_question":
             logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
             t_result = execute_tool(t_name, args_parsed, self)
-            # Remove status bar before exiting Live context
-            live.update(exec_panel)
+          else:
+            exec_panel = Panel(
+              f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
+              title="🔧 Executing Tool",
+              border_style="yellow"
+            )
+            with Live(Group(exec_panel, self.get_rich_status_bar()), refresh_per_second=12, console=console) as live:
+              logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
+              t_result = execute_tool(t_name, args_parsed, self)
+              # Remove status bar before exiting Live context
+              live.update(exec_panel)
               
         # Print result summary nicely
         console.print(Panel(

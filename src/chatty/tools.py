@@ -678,6 +678,218 @@ def tool_sleep(seconds: float) -> str:
     return f"Error sleeping: {str(e)}"
 
 
+def tool_ask_question(question: str, options: List[str] = None, multiple: bool = False) -> str:
+  """Prompt the user with a question and optional list of selections, returning their answer."""
+  from rich.console import Console
+  from rich.panel import Panel
+  from prompt_toolkit import prompt
+  
+  c = Console()
+  c.print()
+  
+  if options:
+    choices_text = ""
+    for idx, opt in enumerate(options, 1):
+      choices_text += f"[bold cyan]{idx}.[/bold cyan] {opt}\n"
+    
+    c.print(Panel(
+      f"[bold]{question}[/bold]\n\n{choices_text.strip()}",
+      title="❓ Question for User",
+      border_style="magenta",
+      expand=False
+    ))
+    
+    prompt_msg = "Select option number(s) (comma separated)" if multiple else "Select option number or type custom response"
+    while True:
+      try:
+        ans = prompt(f"{prompt_msg} > ")
+        ans_strip = ans.strip()
+        if not ans_strip:
+          continue
+        
+        if multiple:
+          parts = [p.strip() for p in ans_strip.split(",")]
+          selected = []
+          invalid = False
+          for p in parts:
+            if p.isdigit():
+              idx = int(p)
+              if 1 <= idx <= len(options):
+                selected.append(options[idx - 1])
+              else:
+                invalid = True
+                break
+            else:
+              invalid = True
+              break
+          if not invalid and selected:
+            return json.dumps({"selection": selected})
+          else:
+            return json.dumps({"custom_response": ans_strip})
+        else:
+          if ans_strip.isdigit():
+            idx = int(ans_strip)
+            if 1 <= idx <= len(options):
+              return json.dumps({"selection": options[idx - 1]})
+          return json.dumps({"custom_response": ans_strip})
+      except (KeyboardInterrupt, EOFError):
+        return json.dumps({"error": "User cancelled the prompt."})
+  else:
+    c.print(Panel(
+      f"[bold]{question}[/bold]",
+      title="❓ Question for User",
+      border_style="magenta",
+      expand=False
+    ))
+    try:
+      ans = prompt("Answer > ")
+      return json.dumps({"response": ans.strip()})
+    except (KeyboardInterrupt, EOFError):
+      return json.dumps({"error": "User cancelled the prompt."})
+
+
+def tool_search_web(query: str, max_results: int = 10) -> str:
+  """Search the web for a query and return formatted results (title, URL, snippet).
+  
+  Supports multiple backends based on environment variables:
+  1. Google Custom Search: GOOGLE_API_KEY and GOOGLE_CSE_ID
+  2. Serper: SERPER_API_KEY
+  3. SerpApi: SERPAPI_API_KEY
+  4. Yahoo HTML Scraper (Fallback when no keys are provided)
+  """
+  import os
+  import requests
+  import html as html_parser
+  import re
+  from urllib.parse import quote_plus, unquote
+
+  results = []
+  backend_used = ""
+
+  google_key = os.environ.get("GOOGLE_API_KEY")
+  google_cx = os.environ.get("GOOGLE_CSE_ID")
+  serper_key = os.environ.get("SERPER_API_KEY")
+  serpapi_key = os.environ.get("SERPAPI_API_KEY")
+
+  try:
+    if google_key and google_cx:
+      backend_used = "Google Custom Search API"
+      url = "https://www.googleapis.com/customsearch/v1"
+      params = {
+        "key": google_key,
+        "cx": google_cx,
+        "q": query,
+        "num": min(max_results, 10)  # Google API limit is 10 per request
+      }
+      r = requests.get(url, params=params, timeout=10)
+      r.raise_for_status()
+      data = r.json()
+      for item in data.get("items", []):
+        results.append({
+          "title": item.get("title", ""),
+          "url": item.get("link", ""),
+          "snippet": item.get("snippet", "")
+        })
+
+    elif serper_key:
+      backend_used = "Serper Google Search API"
+      url = "https://google.serper.dev/search"
+      headers = {
+        "X-API-KEY": serper_key,
+        "Content-Type": "application/json"
+      }
+      payload = {
+        "q": query,
+        "num": max_results
+      }
+      r = requests.post(url, json=payload, headers=headers, timeout=10)
+      r.raise_for_status()
+      data = r.json()
+      for item in data.get("organic", []):
+        results.append({
+          "title": item.get("title", ""),
+          "url": item.get("link", ""),
+          "snippet": item.get("snippet", "")
+        })
+
+    elif serpapi_key:
+      backend_used = "SerpApi Google Search API"
+      url = "https://serpapi.com/search.json"
+      params = {
+        "engine": "google",
+        "q": query,
+        "api_key": serpapi_key,
+        "num": max_results
+      }
+      r = requests.get(url, params=params, timeout=10)
+      r.raise_for_status()
+      data = r.json()
+      for item in data.get("organic_results", []):
+        results.append({
+          "title": item.get("title", ""),
+          "url": item.get("link", ""),
+          "snippet": item.get("snippet", "")
+        })
+
+    else:
+      # Fallback to Yahoo scraper
+      backend_used = "Yahoo HTML Scraper (Fallback)"
+      url = f"https://search.yahoo.com/search?p={quote_plus(query)}"
+      headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
+      }
+      r = requests.get(url, headers=headers, timeout=10)
+      r.raise_for_status()
+      
+      blocks = re.split(r'<div[^>]*class="[^"]*algo-sr[^"]*"', r.text)
+      for block in blocks[1:]:
+        title_match = re.search(r'<h3[^>]*>.*?<span[^>]*>(.*?)</span>', block, re.DOTALL)
+        if not title_match:
+          title_match = re.search(r'<h3[^>]*>(.*?)</h3>', block, re.DOTALL)
+          
+        url_match = re.search(r'href="([^"]+)"', block)
+        
+        snippet_match = re.search(r'<div[^>]*class="[^"]*compText[^"]*"[^>]*>(.*?)</div>', block, re.DOTALL)
+        if not snippet_match:
+          snippet_match = re.search(r'<p[^>]*class="[^"]*fc-dustygray[^"]*"[^>]*>(.*?)</p>', block, re.DOTALL)
+          
+        if title_match and url_match:
+          title = re.sub(r'<[^>]+>', '', title_match.group(1)).strip()
+          title = html_parser.unescape(title)
+          
+          raw_url = url_match.group(1)
+          url_val = raw_url
+          if "r.search.yahoo.com" in raw_url and "/RU=" in raw_url:
+            ru_match = re.search(r'/RU=([^/]+)/', raw_url)
+            if ru_match:
+              url_val = unquote(ru_match.group(1))
+              
+          snippet = ""
+          if snippet_match:
+            snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip()
+            snippet = html_parser.unescape(snippet)
+            
+          if title and not title.lower().startswith("ad") and not "related searches" in title.lower():
+            results.append({
+              "title": title,
+              "url": url_val,
+              "snippet": snippet
+            })
+            if len(results) >= max_results:
+              break
+
+    if not results:
+      return f"[{backend_used}] No results found."
+      
+    formatted = [f"Search Engine backend: {backend_used}\n"]
+    for idx, res in enumerate(results[:max_results], 1):
+      formatted.append(f"[{idx}] {res['title']}\n    URL: {res['url']}\n    Snippet: {res['snippet']}")
+    return "\n\n".join(formatted)
+
+  except Exception as e:
+    return f"Error searching the web ({backend_used}): {str(e)}"
+
+
 TOOLS_SCHEMA = [
   {
     "type": "function",
@@ -1106,6 +1318,55 @@ TOOLS_SCHEMA = [
         "required": ["seconds"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "ask_question",
+      "description": "Prompt the user with a free-form question or a list of options to select from in order to resolve ambiguity, confirm decisions, or clarify instructions.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question to present to the user."
+          },
+          "options": {
+            "type": "array",
+            "description": "Optional list of selection choices for the user to pick from.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "multiple": {
+            "type": "boolean",
+            "description": "Optional. If true, the user can select multiple options (comma-separated). Only applicable if 'options' is provided. Defaults to false."
+          }
+        },
+        "required": ["question"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_web",
+      "description": "Search the web for a given query and return a list of matching results with titles, URLs, and text snippets.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query to look up on the web."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Optional. The maximum number of search results to return. Defaults to 10."
+          }
+        },
+        "required": ["query"]
+      }
+    }
   }
 ]
 
@@ -1254,5 +1515,21 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
     except (ValueError, TypeError):
       return "Error: seconds must be a valid number."
     return tool_sleep(seconds)
+  elif name == "ask_question":
+    question = arguments.get("question")
+    if not question:
+      return "Error: Missing parameter 'question'."
+    options = arguments.get("options")
+    multiple = bool(arguments.get("multiple", False))
+    return tool_ask_question(question, options, multiple)
+  elif name == "search_web":
+    query = arguments.get("query")
+    if not query:
+      return "Error: Missing parameter 'query'."
+    try:
+      max_results = int(arguments.get("max_results", 10))
+    except (ValueError, TypeError):
+      max_results = 10
+    return tool_search_web(query, max_results)
   else:
     return f"Error: Tool '{name}' is not recognized."
