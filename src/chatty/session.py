@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import uuid
+import weakref
 from typing import List, Dict, Any, Tuple, Optional
 
 import openai
@@ -61,6 +62,9 @@ class ChatbotSession:
     self.background_commands = {}
     self.next_task_id = 1
     self.skills_paths = skills_paths or []
+    
+    # Register weakref finalizer for automatic cleanup on garbage collection or program exit
+    self._finalizer = weakref.finalize(self, ChatbotSession._cleanup_resources, self.background_commands)
     
     # Cutoff limits configurations
     self.max_read_chars = max_read_chars
@@ -677,14 +681,21 @@ class ChatbotSession:
     del self.background_commands[task_id]
     return message
 
-  def cleanup_background_commands(self):
+  @staticmethod
+  def _cleanup_resources(background_commands):
     """Kills all active background tasks and removes temporary files."""
     import signal
-    if self.background_commands:
-      logger.info(f"Cleaning up {len(self.background_commands)} background commands...")
-    for task_id, task in list(self.background_commands.items()):
-      proc = task["proc"]
-      if proc.poll() is None:
+    import os
+    global logger
+    if background_commands:
+      if logger is not None:
+        try:
+          logger.info(f"Cleaning up {len(background_commands)} background commands...")
+        except Exception:
+          pass
+    for task_id, task in list(background_commands.items()):
+      proc = task.get("proc")
+      if proc and proc.poll() is None:
         try:
           os.killpg(proc.pid, signal.SIGKILL)
         except Exception:
@@ -697,13 +708,25 @@ class ChatbotSession:
       except Exception:
         pass
       try:
-        os.unlink(task["stdout_path"])
-        if task.get("stderr_path"):
+        if os is not None and task.get("stdout_path"):
+          os.unlink(task["stdout_path"])
+      except Exception:
+        pass
+      try:
+        if os is not None and task.get("stderr_path"):
           os.unlink(task["stderr_path"])
       except Exception:
         pass
-    self.background_commands.clear()
-    logger.info("Background commands cleanup finished.")
+    background_commands.clear()
+    if logger is not None:
+      try:
+        logger.info("Background commands cleanup finished.")
+      except Exception:
+        pass
+
+  def cleanup_background_commands(self):
+    """Kills all active background tasks and removes temporary files."""
+    ChatbotSession._cleanup_resources(self.background_commands)
 
   def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
     """Prunes conversation history to respect the configured context size, compressing older tool outputs."""

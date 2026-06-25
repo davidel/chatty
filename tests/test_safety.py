@@ -21,6 +21,7 @@ class TestCommandSafety(unittest.TestCase):
     )
 
   def tearDown(self):
+    self.session.cleanup_background_commands()
     os.chdir(self.old_cwd)
     shutil.rmtree(self.sandbox_dir)
 
@@ -276,7 +277,7 @@ class TestCommandSafety(unittest.TestCase):
       # (using side_effect=[None, None, 0, 0, 0])
       mock_proc.poll.side_effect = [None, None, 0, 0, 0]
       # Clear the existing background commands so task_2 can be created
-      self.session.background_commands.clear()
+      self.session.cleanup_background_commands()
       self.session.next_task_id = 2
       
       res = self.session.tool_run_command("long_running_completes")
