@@ -80,7 +80,7 @@ class ChatbotSession:
       "All paths provided to the tools will resolve relative to the sandbox directory.\n"
       "You are strictly prohibited from writing files outside the sandbox folder.\n"
       "CRITICAL: When you need to ask the user a question, clarify instructions, confirm decisions, or present a set of choices/options, you MUST use the dedicated 'ask_question' tool instead of asking questions in your conversational text response. This allows the CLI to prompt the user interactively and return their response to you in the tool execution loop.\n"
-      "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like read_file, search_grep, locate_files, get_file_info, copy_file, move_file, delete_file, delete_directory, make_directory) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more, cp, mv, rm, rmdir, mkdir) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
+      "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like list_dir, read_file, search_grep, locate_files, get_file_info, copy_file, move_file, delete_file, delete_directory, make_directory) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more, cp, mv, rm, rmdir, mkdir, ls) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
       "CRITICAL: For performing search-and-replace edits (similar to 'sed'), you MUST use 'multi_patch' (for multiple non-contiguous exact replacements), 'edit_lines' (for a single line number range), or 'multi_edit_lines' (for multiple non-contiguous line range edits) instead of using 'sed' or custom scripts in run_command.\n"
       "CRITICAL: When you need to reformat source code files or enforce layout/style guidelines (such as indentation, line-splitting, or spacing), you MUST use the dedicated 'format_file' tool instead of manually editing the files using 'edit_lines', 'patch_file', or 'multi_patch'.\n"
       "CRITICAL: You are strictly prohibited from using the shell 'sleep' command inside run_command to pause execution. You MUST use the dedicated 'sleep' tool instead.\n"
@@ -406,6 +406,11 @@ class ChatbotSession:
             return (
               f"Error: Using '{token}' in run_command is prohibited to create directories. "
               "Please use the dedicated 'make_directory' tool instead."
+            )
+          elif clean_token in {'ls', 'dir'}:
+            return (
+              f"Error: Using '{token}' in run_command is prohibited to list directory contents. "
+              "Please use the dedicated 'list_dir' tool instead."
             )
         
         if token.strip() in {'|', '|&'}:

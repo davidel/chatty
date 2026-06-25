@@ -192,7 +192,7 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 
 ### Command & Background Execution
 - **`run_command`**: Runs shell commands from the sandbox directory.
-  - *Safety Restrictions*: Monitored by safety checks to block commands that attempt directory escapes, or attempt to circumvent tool guidelines by calling commands like `cat`, `grep`, `find`, `sed`, `awk`, `less`, `more`, `wc`, `kill`, `pkill`, `killall`, `cp`, `mv`, `rm`, `rmdir`, `mkdir`.
+  - *Safety Restrictions*: Monitored by safety checks to block commands that attempt directory escapes, or attempt to circumvent tool guidelines by calling commands like `cat`, `grep`, `find`, `sed`, `awk`, `less`, `more`, `wc`, `kill`, `pkill`, `killall`, `cp`, `mv`, `rm`, `rmdir`, `mkdir`, `ls`, `dir`.
   - *Output Controls*: Supports `output_filter` (regex matching), `head_lines`, and `tail_lines` parameters to prevent token overflow.
   - *Asynchronous Process Execution*: Commands that block or run indefinitely are automatically backgrounded by the session, returning a `Task ID` (e.g., `task_1`).
 - **`check_background_command`**: Inspects status or reads output of background processes using their `task_id`.

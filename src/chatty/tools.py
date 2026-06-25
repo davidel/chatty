@@ -1511,7 +1511,7 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "run_command",
-      "description": "Execute a shell command, returning its stdout, stderr, and exit status code. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to search files (use search_grep), find files (use locate_files), view/inspect files (use read_file/get_file_info), count lines/words (use get_file_info), or pause execution (use sleep). Using commands like 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', 'more', or 'sleep' directly will fail with an error. Always use get_file_info instead of 'wc -l' to count lines in files, and use the 'sleep' tool to pause execution.",
+      "description": "Execute a shell command, returning its stdout, stderr, and exit status code. The command will run with its working directory (cwd) set to the sandbox folder. WARNING: You are strictly prohibited from using this tool to list directories (use list_dir), search files (use search_grep), find files (use locate_files), view/inspect files (use read_file/get_file_info), count lines/words (use get_file_info), or pause execution (use sleep). Using commands like 'ls', 'dir', 'grep', 'find', 'cat', 'head', 'tail', 'sed', 'awk', 'less', 'more', or 'sleep' directly will fail with an error. Always use get_file_info instead of 'wc -l' to count lines in files, and use the 'sleep' tool to pause execution.",
       "parameters": {
         "type": "object",
         "properties": {

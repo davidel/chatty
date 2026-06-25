@@ -50,7 +50,12 @@ class TestCommandSafety(unittest.TestCase):
       "mv a.txt b.txt",
       "rm a.txt",
       "rmdir mydir",
-      "mkdir mydir"
+      "mkdir mydir",
+      "ls",
+      "dir",
+      "ls -la",
+      "dir -a",
+      "echo $(ls)"
     ]
     for cmd in blocked_commands:
       with self.subTest(cmd=cmd):
@@ -138,7 +143,7 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("get_file_info", err)
 
     piped_wcs = [
-      "ls test/test_programs/test_*.asm | wc -l",
+      "echo test/test_programs/test_*.asm | wc -l",
       "git status | wc -l"
     ]
     for cmd in piped_wcs:
