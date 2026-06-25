@@ -113,6 +113,24 @@ python3 -m chatty [options]
 | `--log-file` | *None* | string | `chatty.log` | File path where execution statements are logged. Set to `""` to disable. |
 | `--log-level` | *None* | string | `info` | Logging verbosity (`debug`, `info`, `warning`, `error`). |
 
+
+---
+
+## Custom OpenAI-Compatible Providers
+
+Since Chatty uses the standard OpenAI SDK client under the hood, you can connect to any third-party provider that offers an OpenAI-compatible endpoint. To do this, specify `--provider openrouter` and override both `--url` and `--api-key` along with your desired `--model`:
+
+```bash
+# Run using DeepSeek V3
+chatty --provider openrouter --url https://api.deepseek.com --api-key YOUR_DEEPSEEK_KEY --model deepseek-chat
+
+# Run using Groq
+chatty --provider openrouter --url https://api.groq.com/openai/v1 --api-key YOUR_GROQ_KEY --model llama-3.3-70b-versatile
+
+# Run using Together AI
+chatty --provider openrouter --url https://api.together.xyz/v1 --api-key YOUR_TOGETHER_KEY --model Qwen/Qwen2.5-Coder-32B-Instruct
+```
+
 ---
 
 ## Interactive Interface & Slash Commands
