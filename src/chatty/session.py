@@ -112,6 +112,17 @@ class ChatbotSession:
     self.load_skills()
     logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}")
 
+  def get_timestamped_title(self, title: str, start_time_str: str = None) -> str:
+    """Returns a title string padded with spaces to show a timestamp on the far right of the panel border."""
+    from datetime import datetime
+    time_str = start_time_str or datetime.now().strftime("%H:%M:%S")
+    # Subtract 4 to account for panel borders and margins
+    available_width = console.width - 4
+    if available_width <= len(title) + len(time_str) + 2:
+      return f"{title} [{time_str}]"
+    padding = available_width - len(title) - len(time_str)
+    return f"{title}{' ' * padding}{time_str}"
+
   def load_skills(self):
     """Scans all configured skills directories and loads/merges valid skill definitions."""
     self.skills = {}
@@ -1015,7 +1026,9 @@ class ChatbotSession:
       logger.info(f"Loop {loop_count + 1}/{max_tool_loops}: Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
       try:
         # Live rendering console helper
-        panel = Panel("Connecting to LLM...", title="Assistant", border_style="green")
+        from datetime import datetime
+        assistant_start_time = datetime.now().strftime("%H:%M:%S")
+        panel = Panel("Connecting to LLM...", title=self.get_timestamped_title("Assistant", assistant_start_time), border_style="green")
         with Live(Group(panel, self.get_rich_status_bar()), 
                   refresh_per_second=12, console=console) as live:
           
@@ -1091,10 +1104,10 @@ class ChatbotSession:
             # Process streaming content
             if delta.content:
               if first_chunk:
-                panel = Panel("", title="Assistant", border_style="green")
+                panel = Panel("", title=self.get_timestamped_title("Assistant", assistant_start_time), border_style="green")
                 first_chunk = False
               content_accumulated += delta.content
-              panel = Panel(Markdown(content_accumulated), title="Assistant", border_style="green")
+              panel = Panel(Markdown(content_accumulated), title=self.get_timestamped_title("Assistant", assistant_start_time), border_style="green")
               live.update(Group(panel, self.get_rich_status_bar()))
                 
             # Process streaming tool calls
@@ -1120,7 +1133,7 @@ class ChatbotSession:
                       
                 # Render loading indicator
                 panel = Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
-                               title="System", border_style="yellow")
+                               title=self.get_timestamped_title("System", assistant_start_time), border_style="yellow")
                 live.update(Group(panel, self.get_rich_status_bar()))
           # Remove status bar before exiting Live context
           live.update(panel)
@@ -1204,9 +1217,11 @@ class ChatbotSession:
             logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
             t_result = execute_tool(t_name, args_parsed, self)
           else:
+            from datetime import datetime
+            tool_start_time = datetime.now().strftime("%H:%M:%S")
             exec_panel = Panel(
               f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
-              title="🔧 Executing Tool",
+              title=self.get_timestamped_title("🔧 Executing Tool", tool_start_time),
               border_style="yellow"
             )
             with Live(Group(exec_panel, self.get_rich_status_bar()), refresh_per_second=12, console=console) as live:
@@ -1218,7 +1233,7 @@ class ChatbotSession:
         # Print result summary nicely
         console.print(Panel(
           Text(t_result),
-          title="🔧 Tool Result",
+          title=self.get_timestamped_title("🔧 Tool Result"),
           border_style="dim yellow"
         ))
         
@@ -1339,7 +1354,7 @@ class ChatbotSession:
           
     elif cmd == "/system":
       if not arg:
-        console.print(Panel(self.system_prompt, title="Current System Prompt", border_style="cyan"))
+        console.print(Panel(self.system_prompt, title=self.get_timestamped_title("Current System Prompt"), border_style="cyan"))
       else:
         self.system_prompt = arg
         console.print("[bold green]System prompt updated.[/bold green]")
@@ -1481,7 +1496,9 @@ class ChatbotSession:
     content_accumulated = ""
     logger.info("Generating summary for /compress command")
     try:
-      with Live(Panel("Connecting to LLM for summary...", title="Context Compression", border_style="yellow"),
+      from datetime import datetime
+      compress_start_time = datetime.now().strftime("%H:%M:%S")
+      with Live(Panel("Connecting to LLM for summary...", title=self.get_timestamped_title("Context Compression", compress_start_time), border_style="yellow"),
                 refresh_per_second=12, console=console) as live:
         
         try:
@@ -1532,10 +1549,10 @@ class ChatbotSession:
           
           if delta.content:
             if first_content_chunk:
-              live.update(Panel("", title="Context Summary", border_style="yellow"))
+              live.update(Panel("", title=self.get_timestamped_title("Context Summary", compress_start_time), border_style="yellow"))
               first_content_chunk = False
             content_accumulated += delta.content
-            live.update(Panel(Markdown(content_accumulated), title="Context Summary", border_style="yellow"))
+            live.update(Panel(Markdown(content_accumulated), title=self.get_timestamped_title("Context Summary", compress_start_time), border_style="yellow"))
             
       logger.info("Summary generation succeeded")
       self._log_llm_response_summary(
@@ -1718,7 +1735,7 @@ class ChatbotSession:
       "This script interfaces with Ollama and OpenRouter and restricts file write operations to the sandbox.\n"
       "Type [cyan]/help[/cyan] to display slash commands.\n"
       "Press [cyan]Ctrl+D[/cyan] or type [cyan]/exit[/cyan] to exit.",
-      title="Antigravity Sandboxed Chatbot",
+      title=self.get_timestamped_title("Chatty Sandboxed Chatbot"),
       border_style="magenta"
     ))
     
