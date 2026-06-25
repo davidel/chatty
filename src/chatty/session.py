@@ -456,8 +456,8 @@ class ChatbotSession:
     stdout_f = None
     stderr_f = None
     try:
-      stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t', dir=self.sandbox)
-      stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t', dir=self.sandbox)
+      stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+      stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
       record_command_binaries(command, self)
       proc = subprocess.Popen(
         command,
