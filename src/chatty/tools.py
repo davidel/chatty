@@ -1530,6 +1530,10 @@ TOOLS_SCHEMA = [
           "head_lines": {
             "type": "integer",
             "description": "Optional. Only return the first N lines of the command output (similar to 'head -n N'). Useful for viewing startup logs, headers, or initial error messages."
+          },
+          "combine_stderr": {
+            "type": "boolean",
+            "description": "Optional. If true, standard error (stderr) is merged into standard output (stdout) and returned chronologically interleaved. Use this instead of appending '2>&1' to the command. Defaults to false."
           }
         },
         "required": ["command"]
@@ -1842,7 +1846,12 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
         head_lines = int(head_lines)
       except (ValueError, TypeError):
         return "Error: head_lines must be a valid integer."
-    return session.tool_run_command(command, output_filter=output_filter, tail_lines=tail_lines, head_lines=head_lines)
+    combine_stderr = arguments.get("combine_stderr", False)
+    if isinstance(combine_stderr, str):
+      combine_stderr = combine_stderr.lower() in ("true", "1", "yes")
+    else:
+      combine_stderr = bool(combine_stderr)
+    return session.tool_run_command(command, output_filter=output_filter, tail_lines=tail_lines, head_lines=head_lines, combine_stderr=combine_stderr)
   elif name == "check_background_command":
     task_id = arguments.get("task_id")
     if not task_id:

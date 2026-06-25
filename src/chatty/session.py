@@ -428,9 +428,9 @@ class ChatbotSession:
 
     return check_cmd(command)
 
-  def tool_run_command(self, command: str, output_filter: Optional[str] = None, tail_lines: Optional[int] = None, head_lines: Optional[int] = None) -> str:
+  def tool_run_command(self, command: str, output_filter: Optional[str] = None, tail_lines: Optional[int] = None, head_lines: Optional[int] = None, combine_stderr: bool = False) -> str:
     """Execute a shell command, transitioning to background execution if it takes too long."""
-    logger.info(f"Running shell command: '{command}' (filter={output_filter}, tail={tail_lines}, head={head_lines})")
+    logger.info(f"Running shell command: '{command}' (filter={output_filter}, tail={tail_lines}, head={head_lines}, combine_stderr={combine_stderr})")
     validation_err = self.validate_command_safety(command)
     if validation_err:
       logger.warning(f"Rejected command '{command}': {validation_err}")
@@ -458,32 +458,38 @@ class ChatbotSession:
     stderr_f = None
     try:
       stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
-      stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+      if not combine_stderr:
+        stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
       record_command_binaries(command, self)
       proc = subprocess.Popen(
         command,
         shell=True,
         cwd=self.sandbox,
         stdout=stdout_f,
-        stderr=stderr_f,
+        stderr=subprocess.STDOUT if combine_stderr else stderr_f,
         start_new_session=True
       )
       try:
         proc.wait(timeout=10)
         stdout_f.close()
-        stderr_f.close()
+        if stderr_f:
+          stderr_f.close()
         with open(stdout_f.name, 'r', errors='replace') as f:
           stdout = f.read()
-        with open(stderr_f.name, 'r', errors='replace') as f:
-          stderr = f.read()
+        if stderr_f:
+          with open(stderr_f.name, 'r', errors='replace') as f:
+            stderr = f.read()
+        else:
+          stderr = ""
         try:
           os.unlink(stdout_f.name)
         except Exception:
           pass
-        try:
-          os.unlink(stderr_f.name)
-        except Exception:
-          pass
+        if stderr_f:
+          try:
+            os.unlink(stderr_f.name)
+          except Exception:
+            pass
         
         if output_filter or tail_lines is not None or head_lines is not None:
           stdout = apply_filters(stdout)
@@ -509,7 +515,7 @@ class ChatbotSession:
           "proc": proc,
           "command": command,
           "stdout_path": stdout_f.name,
-          "stderr_path": stderr_f.name,
+          "stderr_path": stderr_f.name if stderr_f else None,
           "stdout_file": stdout_f,
           "stderr_file": stderr_f,
           "output_filter": output_filter,
@@ -568,8 +574,11 @@ class ChatbotSession:
     try:
       with open(task["stdout_path"], 'r', errors='replace') as f:
         stdout_content = f.read()
-      with open(task["stderr_path"], 'r', errors='replace') as f:
-        stderr_content = f.read()
+      if task.get("stderr_path"):
+        with open(task["stderr_path"], 'r', errors='replace') as f:
+          stderr_content = f.read()
+      else:
+        stderr_content = ""
     except Exception as e:
       stdout_content = f"Error reading output: {e}"
       stderr_content = ""
@@ -655,7 +664,8 @@ class ChatbotSession:
       pass
     try:
       os.unlink(task["stdout_path"])
-      os.unlink(task["stderr_path"])
+      if task.get("stderr_path"):
+        os.unlink(task["stderr_path"])
     except Exception:
       pass
         
@@ -683,7 +693,8 @@ class ChatbotSession:
         pass
       try:
         os.unlink(task["stdout_path"])
-        os.unlink(task["stderr_path"])
+        if task.get("stderr_path"):
+          os.unlink(task["stderr_path"])
       except Exception:
         pass
     self.background_commands.clear()

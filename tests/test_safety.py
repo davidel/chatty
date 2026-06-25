@@ -182,6 +182,21 @@ class TestCommandSafety(unittest.TestCase):
     self.assertNotIn("FAIL: 1", res4)
     self.assertNotIn("FAIL: 3", res4)
 
+  def test_run_command_combine_stderr(self):
+    # Test execution with combine_stderr=False (default behavior)
+    res_sep = self.session.tool_run_command("echo hello && echo error >&2", combine_stderr=False)
+    self.assertIn("Stdout:", res_sep)
+    self.assertIn("Stderr:", res_sep)
+    self.assertIn("hello", res_sep)
+    self.assertIn("error", res_sep)
+
+    # Test execution with combine_stderr=True (combined behavior)
+    res_comb = self.session.tool_run_command("echo hello && echo error >&2", combine_stderr=True)
+    self.assertIn("Stdout:", res_comb)
+    self.assertNotIn("Stderr:", res_comb)
+    self.assertIn("hello", res_comb)
+    self.assertIn("error", res_comb)
+
   def test_kill_process_and_background_command(self):
     import unittest.mock as mock
     import subprocess
