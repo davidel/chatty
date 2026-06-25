@@ -536,7 +536,14 @@ class ChatbotSession:
           pass
       return f"Error executing command: {str(e)}"
 
-  def tool_check_background_command(self, task_id: str, timeout: Optional[float] = None) -> str:
+  def tool_check_background_command(
+    self,
+    task_id: str,
+    timeout: Optional[float] = None,
+    output_filter: Optional[str] = None,
+    tail_lines: Optional[int] = None,
+    head_lines: Optional[int] = None,
+  ) -> str:
     """Check status of a background task and read its currently accumulated stdout and stderr."""
     logger.info(f"Checking status of background task: '{task_id}' (timeout={timeout})")
     task = self.background_commands.get(task_id)
@@ -567,27 +574,27 @@ class ChatbotSession:
       stdout_content = f"Error reading output: {e}"
       stderr_content = ""
       
-    output_filter = task.get("output_filter")
-    tail_lines = task.get("tail_lines")
-    head_lines = task.get("head_lines")
+    actual_filter = output_filter if output_filter is not None else task.get("output_filter")
+    actual_tail = tail_lines if tail_lines is not None else task.get("tail_lines")
+    actual_head = head_lines if head_lines is not None else task.get("head_lines")
     
     def apply_filters(text: str) -> str:
       if not text:
         return text
       lines = text.splitlines()
-      if output_filter:
+      if actual_filter:
         try:
-          pattern = re.compile(output_filter, re.IGNORECASE)
+          pattern = re.compile(actual_filter, re.IGNORECASE)
           lines = [line for line in lines if pattern.search(line)]
         except re.error as e:
           return f"Error applying output_filter: {e}"
-      if head_lines is not None and head_lines > 0:
-        lines = lines[:head_lines]
-      if tail_lines is not None and tail_lines > 0:
-        lines = lines[-tail_lines:]
+      if actual_head is not None and actual_head > 0:
+        lines = lines[:actual_head]
+      if actual_tail is not None and actual_tail > 0:
+        lines = lines[-actual_tail:]
       return "\n".join(lines)
 
-    if output_filter or tail_lines is not None or head_lines is not None:
+    if actual_filter or actual_tail is not None or actual_head is not None:
       stdout_content = apply_filters(stdout_content)
       stderr_content = apply_filters(stderr_content)
 
@@ -606,13 +613,12 @@ class ChatbotSession:
     else:
       logger.info(f"Task '{task_id}' FINISHED with exit code {status}.")
       try:
-        task["stdout_file"].close()
-        task["stderr_file"].close()
-        os.unlink(task["stdout_path"])
-        os.unlink(task["stderr_path"])
+        if task.get("stdout_file"):
+          task["stdout_file"].close()
+        if task.get("stderr_file"):
+          task["stderr_file"].close()
       except Exception:
         pass
-      del self.background_commands[task_id]
       return (
         f"Status: Task '{task_id}' FINISHED with exit code {status}.\n"
         + ("\n".join(output) if output else "(No output generated)")
@@ -641,8 +647,13 @@ class ChatbotSession:
       message = f"Background task '{task_id}' had already exited with code {status}. Cleaned up resources."
     
     try:
-      task["stdout_file"].close()
-      task["stderr_file"].close()
+      if task.get("stdout_file"):
+        task["stdout_file"].close()
+      if task.get("stderr_file"):
+        task["stderr_file"].close()
+    except Exception:
+      pass
+    try:
       os.unlink(task["stdout_path"])
       os.unlink(task["stderr_path"])
     except Exception:
@@ -664,8 +675,13 @@ class ChatbotSession:
         except Exception:
           pass
       try:
-        task["stdout_file"].close()
-        task["stderr_file"].close()
+        if task.get("stdout_file"):
+          task["stdout_file"].close()
+        if task.get("stderr_file"):
+          task["stderr_file"].close()
+      except Exception:
+        pass
+      try:
         os.unlink(task["stdout_path"])
         os.unlink(task["stderr_path"])
       except Exception:

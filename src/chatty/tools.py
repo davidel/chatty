@@ -1551,6 +1551,18 @@ TOOLS_SCHEMA = [
           "timeout": {
             "type": "number",
             "description": "Optional. The number of seconds to wait/block for the background task to complete. If the task is still running after this timeout, the status will show that it is still running."
+          },
+          "output_filter": {
+            "type": "string",
+            "description": "Optional regular expression pattern to filter the output. If specified, only lines matching this pattern will be returned. Pass an empty string to clear any existing filter."
+          },
+          "tail_lines": {
+            "type": "integer",
+            "description": "Optional. Only return the last N lines of the command output. Pass -1 to clear any existing tail limit."
+          },
+          "head_lines": {
+            "type": "integer",
+            "description": "Optional. Only return the first N lines of the command output. Pass -1 to clear any existing head limit."
           }
         },
         "required": ["task_id"]
@@ -1841,7 +1853,26 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
         timeout = float(timeout)
       except (ValueError, TypeError):
         return "Error: timeout must be a valid number."
-    return session.tool_check_background_command(task_id, timeout=timeout)
+    output_filter = arguments.get("output_filter")
+    tail_lines = arguments.get("tail_lines")
+    head_lines = arguments.get("head_lines")
+    if tail_lines is not None:
+      try:
+        tail_lines = int(tail_lines)
+      except (ValueError, TypeError):
+        return "Error: tail_lines must be a valid integer."
+    if head_lines is not None:
+      try:
+        head_lines = int(head_lines)
+      except (ValueError, TypeError):
+        return "Error: head_lines must be a valid integer."
+    return session.tool_check_background_command(
+      task_id,
+      timeout=timeout,
+      output_filter=output_filter,
+      tail_lines=tail_lines,
+      head_lines=head_lines
+    )
   elif name == "kill_process":
     task_id = arguments.get("task_id")
     if not task_id:

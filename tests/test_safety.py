@@ -266,6 +266,58 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("FINISHED with exit code 0", status_res)
       self.assertNotIn("timed out", status_res)
 
+  def test_check_background_command_filters_and_persistence(self):
+    import unittest.mock as mock
+    import subprocess
+    import tempfile
+    
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running_with_output", 10)
+    mock_proc.pid = 12345
+    mock_proc.poll.return_value = 0
+    
+    with mock.patch("subprocess.Popen", return_value=mock_proc):
+      stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+      stdout_f.write("Line 1: Info\nLine 2: Warning\nLine 3: Error!\nLine 4: Success\n")
+      stdout_f.close()
+      
+      stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+      stderr_f.close()
+      
+      task_id = "task_99"
+      self.session.background_commands[task_id] = {
+        "proc": mock_proc,
+        "command": "dummy",
+        "stdout_path": stdout_f.name,
+        "stderr_path": stderr_f.name,
+        "stdout_file": stdout_f,
+        "stderr_file": stderr_f,
+        "output_filter": None,
+        "tail_lines": None,
+        "head_lines": None
+      }
+      
+      res = self.session.tool_check_background_command(task_id)
+      self.assertIn("FINISHED with exit code 0", res)
+      self.assertIn("Line 1: Info", res)
+      self.assertIn("Line 4: Success", res)
+      
+      self.assertIn(task_id, self.session.background_commands)
+      
+      res_filter = self.session.tool_check_background_command(task_id, output_filter="Error")
+      self.assertIn("FINISHED with exit code 0", res_filter)
+      self.assertIn("Line 3: Error!", res_filter)
+      self.assertNotIn("Line 1: Info", res_filter)
+      
+      res_tail = self.session.tool_check_background_command(task_id, tail_lines=2)
+      self.assertIn("FINISHED with exit code 0", res_tail)
+      self.assertIn("Line 3: Error!", res_tail)
+      self.assertIn("Line 4: Success", res_tail)
+      self.assertNotIn("Line 1: Info", res_tail)
+
+      self.session.tool_kill_process(task_id)
+      self.assertNotIn(task_id, self.session.background_commands)
+
   def test_blocked_file_ops_commands(self):
     file_ops_checks = [
       ("cp a.txt b.txt", "prohibited to copy files or directories", "copy_file"),
