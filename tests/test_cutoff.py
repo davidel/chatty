@@ -395,6 +395,41 @@ class TestReasoningAccumulation(unittest.TestCase):
           if hasattr(obj, "title") and obj.title == "Assistant":
             self.fail("Should not print Assistant panel for empty response")
 
+    # Test case 3: Stream with content followed by tool calls
+    mock_tool_call = mock.Mock()
+    mock_tool_call.index = 0
+    mock_tool_call.id = "call_123"
+    mock_tool_call.function = mock.Mock()
+    mock_tool_call.function.name = "execute_command"
+    mock_tool_call.function.arguments = '{"command": "echo"}'
+
+    mock_chunks_tool = [
+      MockChunk([MockChoice(MockDelta(reasoning="Thinking about running a command... "))]),
+      MockChunk([MockChoice(MockDelta(content="Let's run a tool."))]),
+      MockChunk([MockChoice(MockDelta(tool_calls=[mock_tool_call]))])
+    ]
+    session.client.chat.completions.create.return_value = mock_chunks_tool
+
+    # Mock execute_tool to return a dummy result
+    with mock.patch("chatty.session.execute_tool", return_value="done"):
+      with mock.patch("chatty.session.console.print") as mock_print:
+        with mock.patch("time.sleep"):
+          session.run_llm_cycle()
+        
+        # Check that we printed the assistant/thinking group
+        printed_assistant_group = False
+        for call in mock_print.call_args_list:
+          args, kwargs = call
+          if args and not isinstance(args[0], str):
+            obj = args[0]
+            # It should be a Group containing panels
+            if hasattr(obj, "renderables"):
+              # Let's inspect the titles in the group
+              titles = [getattr(r, "title", None) for r in obj.renderables]
+              if "Thinking" in titles and "Assistant" in titles:
+                printed_assistant_group = True
+        self.assertTrue(printed_assistant_group, "Should print Assistant and Thinking panels group even when followed by tool calls")
+
 
 class TestToolResultJsonWrapping(unittest.TestCase):
   def setUp(self):

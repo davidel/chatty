@@ -63,6 +63,24 @@ class SessionConfig:
   prompt_caching: bool = False
 
 
+class LazyMarkdown:
+  """A helper that wraps a Markdown string and only parses it when rendered.
+
+  This prevents high CPU usage caused by parsing Markdown on every LLM token chunk.
+  """
+
+  def __init__(self, text: str):
+    self.text = text
+
+  def __rich_console__(self, console: Console, options: Any) -> Any:
+    md = Markdown(self.text)
+    return md.__rich_console__(console, options)
+
+  def __rich_measure__(self, console: Console, options: Any) -> Any:
+    md = Markdown(self.text)
+    return md.__rich_measure__(console, options)
+
+
 class ChatbotSession:
   _active_session = None
 
@@ -1412,9 +1430,9 @@ class ChatbotSession:
                 first_chunk = False
                 renderables = []
                 if reasoning_accumulated.strip():
-                  renderables.append(Panel(Markdown(reasoning_accumulated), title="Thinking", border_style="yellow"))
+                  renderables.append(Panel(LazyMarkdown(reasoning_accumulated), title="Thinking", border_style="yellow"))
                 if content_accumulated:
-                  renderables.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
+                  renderables.append(Panel(LazyMarkdown(content_accumulated), title="Assistant", border_style="green"))
                 
                 if renderables:
                   panel = Group(*renderables)
@@ -1448,9 +1466,15 @@ class ChatbotSession:
             # Remove status bar before exiting Live context
             live.update(panel)
           
-          # Print the final panel permanently to console
-          if not first_chunk:
-            console.print(panel)
+          # Reconstruct and print the final panels permanently to console
+          final_panels = []
+          if reasoning_accumulated.strip():
+            final_panels.append(Panel(Markdown(reasoning_accumulated), title="Thinking", border_style="yellow"))
+          if content_accumulated:
+            final_panels.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
+          
+          if final_panels:
+            console.print(Group(*final_panels))
           
           if finish_reason == "length":
             logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")
