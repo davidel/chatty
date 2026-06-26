@@ -807,6 +807,9 @@ class ChatbotSession:
             f"... [TRUNCATED {truncated_len} CHARACTERS OF HISTORICAL TOOL OUTPUT] ...\n\n"
             f"{content[-half:]}"
           )
+      if cloned_msg.get("role") == "assistant" and self.provider != "openrouter":
+        for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
+          cloned_msg.pop(field, None)
       processed_messages.append(cloned_msg)
       
     pruned = []
@@ -1193,6 +1196,7 @@ class ChatbotSession:
               
               # Extract any OpenRouter extra fields for reasoning/thought
               extra_fields = ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]
+              has_new_reasoning = False
               for field in extra_fields:
                 val = getattr(delta, field, None)
                 if val is None and hasattr(delta, "model_extra") and delta.model_extra:
@@ -1201,6 +1205,7 @@ class ChatbotSession:
                   val = delta.get(field)
                   
                 if val is not None:
+                  has_new_reasoning = True
                   if extra_fields_accumulated[field] is None:
                     extra_fields_accumulated[field] = val
                   elif isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
@@ -1210,12 +1215,23 @@ class ChatbotSession:
               
               # Process streaming content
               if delta.content:
-                if first_chunk:
-                  panel = Panel("", title="Assistant", border_style="green")
-                  first_chunk = False
                 content_accumulated += delta.content
-                panel = Panel(Markdown(content_accumulated), title="Assistant", border_style="green")
-                live.update(Group(panel, self.get_rich_status_bar()))
+
+              # Process streaming reasoning/thought
+              reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
+                                       extra_fields_accumulated.get("reasoning") or "")
+              
+              if delta.content or has_new_reasoning:
+                first_chunk = False
+                renderables = []
+                if reasoning_accumulated.strip():
+                  renderables.append(Panel(Markdown(reasoning_accumulated), title="Thinking", border_style="yellow"))
+                if content_accumulated:
+                  renderables.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
+                
+                if renderables:
+                  panel = Group(*renderables)
+                  live.update(Group(panel, self.get_rich_status_bar()))
                   
               # Process streaming tool calls
               if delta.tool_calls:
@@ -1314,10 +1330,9 @@ class ChatbotSession:
             }
           })
               
-      if self.provider == "openrouter":
-        for field, val in extra_fields_accumulated.items():
-          if val is not None:
-            assistant_msg[field] = val
+      for field, val in extra_fields_accumulated.items():
+        if val is not None:
+          assistant_msg[field] = val
             
       self.messages.append(assistant_msg)
       
@@ -1594,10 +1609,17 @@ class ChatbotSession:
       for idx, msg in enumerate(self.messages):
         role = msg["role"]
         content = msg.get("content") or ""
+        reasoning = msg.get("reasoning_content") or msg.get("reasoning")
+        display_text = ""
+        if reasoning:
+          display_text += f"[Thinking: {reasoning[:60]}...]\n"
+        display_text += content
         if "tool_calls" in msg:
-          content += f"\n[Calls tools: {[tc['function']['name'] for tc in msg['tool_calls']]}]"
+          display_text += f"\n[Calls tools: {[tc['function']['name'] for tc in msg['tool_calls']]}]"
         tok = count_tokens(content)
-        console.print(f" {idx + 1}. [bold]{role}[/bold]: {content[:80]}... ({tok} tokens)")
+        if reasoning:
+          tok += count_tokens(reasoning)
+        console.print(f" {idx + 1}. [bold]{role}[/bold]: {display_text[:80].replace('\n', ' ')}... ({tok} tokens)")
           
     else:
       console.print(f"[bold red]Unknown command:[/bold red] {cmd}. Type [cyan]/help[/cyan] for options.")
