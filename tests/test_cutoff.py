@@ -373,5 +373,53 @@ class TestToolResultJsonWrapping(unittest.TestCase):
     self.assertIn("module fp_sub", parsed_content["output"])
 
 
+class TestAutoContinuation(unittest.TestCase):
+
+  def test_auto_continuation_on_length_limit(self):
+    import unittest.mock as mock
+    from chatty.session import ChatbotSession
+
+    session = ChatbotSession(
+      provider="openrouter",
+      model="google/gemini-2.5-flash",
+      context_size=10000,
+      sandbox="/tmp"
+    )
+
+    class MockDelta:
+
+      def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+    class MockChoice:
+
+      def __init__(self, delta, finish_reason=None):
+        self.delta = delta
+        self.finish_reason = finish_reason
+
+    class MockChunk:
+
+      def __init__(self, choices):
+        self.choices = choices
+
+    mock_chunks_first = [
+      MockChunk([MockChoice(MockDelta(content="I am doing the task "), finish_reason="length")])
+    ]
+    mock_chunks_second = [
+      MockChunk([MockChoice(MockDelta(content="and it is completed."), finish_reason="stop")])
+    ]
+
+    session.client = mock.Mock()
+    session.client.chat.completions.create.side_effect = [mock_chunks_first, mock_chunks_second]
+
+    session.run_llm_cycle()
+
+    assistant_msgs = [m for m in session.messages if m.get("role") == "assistant"]
+    self.assertEqual(len(assistant_msgs), 2)
+    self.assertEqual(assistant_msgs[0]["content"], "I am doing the task ")
+    self.assertEqual(assistant_msgs[1]["content"], "and it is completed.")
+
+
 if __name__ == "__main__":
     unittest.main()

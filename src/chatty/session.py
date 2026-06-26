@@ -1057,6 +1057,7 @@ class ChatbotSession:
       self.current_loop = loop_count + 1
       max_retries = 3
       api_succeeded = False
+      finish_reason = None
       
       for attempt in range(1, max_retries + 1):
         # Prepare message payloads based on limit settings
@@ -1268,6 +1269,13 @@ class ChatbotSession:
             assistant_msg[field] = val
             
       self.messages.append(assistant_msg)
+      
+      # If the response was truncated due to output token limit, automatically continue
+      if finish_reason == "length":
+        logger.warning("LLM response was truncated (finish_reason='length'). Automatically continuing...")
+        console.print("[bold yellow]🔄  AI response was truncated because it reached the maximum output token limit. Automatically continuing...[/bold yellow]")
+        loop_count += 1
+        continue
       
       # If no tools called, we're finished with this turn
       if not tool_calls_accumulated:
