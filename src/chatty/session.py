@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sys
+import time
 import uuid
 import weakref
 from typing import List, Dict, Any, Tuple, Optional
@@ -1054,158 +1055,188 @@ class ChatbotSession:
     
     while loop_count < max_tool_loops:
       self.current_loop = loop_count + 1
-      # Prepare message payloads based on limit settings
-      active_messages = self.prune_history()
+      max_retries = 3
+      api_succeeded = False
       
-      # Start LLM stream call
-      tool_calls_accumulated = []
-      content_accumulated = ""
-      extra_fields_accumulated = {
-        "reasoning": None,
-        "reasoning_content": None,
-        "reasoning_details": None,
-        "thought_signature": None
-      }
-      
-      logger.info(f"Loop {loop_count + 1}/{max_tool_loops}: Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
-      try:
-        # Live rendering console helper
-        panel = Panel("Connecting to LLM...", title="Assistant", border_style="green")
-        with Live(Group(panel, self.get_rich_status_bar()), 
-                  refresh_per_second=12, console=console) as live:
-          
-          # Log request details in DEBUG mode
-          self._log_llm_request(active_messages, self.get_tools())
-          
-          # Try calling with stream_options={"include_usage": True}
-          try:
-            stream = self.client.chat.completions.create(
-              model=self.model,
-              messages=active_messages,
-              tools=self.get_tools(),
-              stream=True,
-              stream_options={"include_usage": True}
-            )
-          except Exception as e:
-            logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
-            stream = self.client.chat.completions.create(
-              model=self.model,
-              messages=active_messages,
-              tools=self.get_tools(),
-              stream=True
-            )
-          
-          first_metadata_chunk = True
-          first_chunk = True
-          finish_reason = None
-          usage_metadata = None
-          chunk_id = None
-          resp_model = None
-          sys_fp = None
-          for chunk in stream:
-            # Capture usage if present
-            if hasattr(chunk, "usage") and chunk.usage:
-              usage_metadata = chunk.usage
-            elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
-              usage_metadata = chunk.model_extra["usage"]
-
-            # Log metadata on first chunk
-            if first_metadata_chunk:
-              chunk_id = getattr(chunk, "id", None)
-              resp_model = getattr(chunk, "model", None)
-              sys_fp = getattr(chunk, "system_fingerprint", None)
-              logger.debug(
-                f"LLM response started. Chunk ID: {chunk_id}, Model: {resp_model}, System Fingerprint: {sys_fp}"
+      for attempt in range(1, max_retries + 1):
+        # Prepare message payloads based on limit settings
+        active_messages = self.prune_history()
+        
+        # If this is a retry and the last message in active_messages is a tool message,
+        # append a temporary user message nudge to bypass trailing tool message chat template issues
+        if attempt > 1 and active_messages and active_messages[-1].get("role") == "tool":
+          active_messages.append({
+            "role": "user",
+            "content": "Please continue the task using the tool output above."
+          })
+        
+        # Start LLM stream call
+        tool_calls_accumulated = []
+        content_accumulated = ""
+        extra_fields_accumulated = {
+          "reasoning": None,
+          "reasoning_content": None,
+          "reasoning_details": None,
+          "thought_signature": None
+        }
+        
+        logger.info(f"Loop {loop_count + 1}/{max_tool_loops} (Attempt {attempt}/{max_retries}): Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
+        try:
+          # Live rendering console helper
+          panel = Panel("Connecting to LLM...", title="Assistant", border_style="green")
+          with Live(Group(panel, self.get_rich_status_bar()), 
+                    refresh_per_second=12, console=console) as live:
+            
+            # Log request details in DEBUG mode
+            self._log_llm_request(active_messages, self.get_tools())
+            
+            # Try calling with stream_options={"include_usage": True}
+            try:
+              stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=active_messages,
+                tools=self.get_tools(),
+                stream=True,
+                stream_options={"include_usage": True}
               )
-              first_metadata_chunk = False
+            except Exception as e:
+              logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
+              stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=active_messages,
+                tools=self.get_tools(),
+                stream=True
+              )
+            
+            first_metadata_chunk = True
+            first_chunk = True
+            finish_reason = None
+            usage_metadata = None
+            chunk_id = None
+            resp_model = None
+            sys_fp = None
+            for chunk in stream:
+              # Capture usage if present
+              if hasattr(chunk, "usage") and chunk.usage:
+                usage_metadata = chunk.usage
+              elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+                usage_metadata = chunk.model_extra["usage"]
 
-            if not chunk.choices:
-              continue
-            choice = chunk.choices[0]
-            delta = choice.delta
-            if hasattr(choice, "finish_reason") and choice.finish_reason:
-              finish_reason = choice.finish_reason
-            
-            # Extract any OpenRouter extra fields for reasoning/thought
-            extra_fields = ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]
-            for field in extra_fields:
-              val = getattr(delta, field, None)
-              if val is None and hasattr(delta, "model_extra") and delta.model_extra:
-                val = delta.model_extra.get(field)
-              if val is None and isinstance(delta, dict):
-                val = delta.get(field)
-                
-              if val is not None:
-                if extra_fields_accumulated[field] is None:
-                  extra_fields_accumulated[field] = val
-                elif isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
-                  extra_fields_accumulated[field] += val
-                else:
-                  extra_fields_accumulated[field] = val
-            
-            # Process streaming content
-            if delta.content:
-              if first_chunk:
-                panel = Panel("", title="Assistant", border_style="green")
-                first_chunk = False
-              content_accumulated += delta.content
-              panel = Panel(Markdown(content_accumulated), title="Assistant", border_style="green")
-              live.update(Group(panel, self.get_rich_status_bar()))
-                
-            # Process streaming tool calls
-            if delta.tool_calls:
-              first_chunk = False
-              for tc in delta.tool_calls:
-                idx = tc.index
-                while len(tool_calls_accumulated) <= idx:
-                  tool_calls_accumulated.append({
-                    "id": None,
-                    "type": "function",
-                    "function": {"name": "", "arguments": ""}
-                  })
-                
-                item = tool_calls_accumulated[idx]
-                if tc.id:
-                  item["id"] = tc.id
-                if tc.function:
-                  if tc.function.name:
-                    item["function"]["name"] += tc.function.name
-                  if tc.function.arguments:
-                    item["function"]["arguments"] += tc.function.arguments
-                      
-                # Render loading indicator
-                panel = Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
-                               title="System", border_style="yellow")
+              # Log metadata on first chunk
+              if first_metadata_chunk:
+                chunk_id = getattr(chunk, "id", None)
+                resp_model = getattr(chunk, "model", None)
+                sys_fp = getattr(chunk, "system_fingerprint", None)
+                logger.debug(
+                  f"LLM response started. Chunk ID: {chunk_id}, Model: {resp_model}, System Fingerprint: {sys_fp}"
+                )
+                first_metadata_chunk = False
+
+              if not chunk.choices:
+                continue
+              choice = chunk.choices[0]
+              delta = choice.delta
+              if hasattr(choice, "finish_reason") and choice.finish_reason:
+                finish_reason = choice.finish_reason
+              
+              # Extract any OpenRouter extra fields for reasoning/thought
+              extra_fields = ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]
+              for field in extra_fields:
+                val = getattr(delta, field, None)
+                if val is None and hasattr(delta, "model_extra") and delta.model_extra:
+                  val = delta.model_extra.get(field)
+                if val is None and isinstance(delta, dict):
+                  val = delta.get(field)
+                  
+                if val is not None:
+                  if extra_fields_accumulated[field] is None:
+                    extra_fields_accumulated[field] = val
+                  elif isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
+                    extra_fields_accumulated[field] += val
+                  else:
+                    extra_fields_accumulated[field] = val
+              
+              # Process streaming content
+              if delta.content:
+                if first_chunk:
+                  panel = Panel("", title="Assistant", border_style="green")
+                  first_chunk = False
+                content_accumulated += delta.content
+                panel = Panel(Markdown(content_accumulated), title="Assistant", border_style="green")
                 live.update(Group(panel, self.get_rich_status_bar()))
-          # Remove status bar before exiting Live context
-          live.update(panel)
-        
-        if finish_reason == "length":
-          logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")
-          console.print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
-        
-        logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
-        self._log_llm_response_summary(
-          content_accumulated=content_accumulated,
-          tool_calls_accumulated=tool_calls_accumulated,
-          extra_fields_accumulated=extra_fields_accumulated,
-          finish_reason=finish_reason,
-          usage=usage_metadata,
-          response_model=resp_model,
-          system_fingerprint=sys_fp,
-          chunk_id=chunk_id
-        )
-      except Exception as e:
-        logger.exception("Error calling LLM API")
-        console.print(f"[bold red]Error calling API:[/bold red] {str(e)}")
-        break
+                  
+              # Process streaming tool calls
+              if delta.tool_calls:
+                first_chunk = False
+                for tc in delta.tool_calls:
+                  idx = tc.index
+                  while len(tool_calls_accumulated) <= idx:
+                    tool_calls_accumulated.append({
+                      "id": None,
+                      "type": "function",
+                      "function": {"name": "", "arguments": ""}
+                    })
+                  
+                  item = tool_calls_accumulated[idx]
+                  if tc.id:
+                    item["id"] = tc.id
+                  if tc.function:
+                    if tc.function.name:
+                      item["function"]["name"] += tc.function.name
+                    if tc.function.arguments:
+                      item["function"]["arguments"] += tc.function.arguments
+                        
+                  # Render loading indicator
+                  panel = Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
+                                 title="System", border_style="yellow")
+                  live.update(Group(panel, self.get_rich_status_bar()))
+            # Remove status bar before exiting Live context
+            live.update(panel)
           
-      # If we didn't receive structured tool calls, try to extract them from text content
-      if not tool_calls_accumulated and content_accumulated:
-        parsed_calls = self.extract_tool_calls_from_text(content_accumulated)
-        if parsed_calls:
-          tool_calls_accumulated = parsed_calls
-          content_accumulated = ""
+          if finish_reason == "length":
+            logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")
+            console.print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
+          
+          logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
+          self._log_llm_response_summary(
+            content_accumulated=content_accumulated,
+            tool_calls_accumulated=tool_calls_accumulated,
+            extra_fields_accumulated=extra_fields_accumulated,
+            finish_reason=finish_reason,
+            usage=usage_metadata,
+            response_model=resp_model,
+            system_fingerprint=sys_fp,
+            chunk_id=chunk_id
+          )
+        except Exception as e:
+          logger.exception("Error calling LLM API")
+          console.print(f"[bold red]Error calling API:[/bold red] {str(e)}")
+          break
+            
+        # If we didn't receive structured tool calls, try to extract them from text content
+        if not tool_calls_accumulated and content_accumulated:
+          parsed_calls = self.extract_tool_calls_from_text(content_accumulated)
+          if parsed_calls:
+            tool_calls_accumulated = parsed_calls
+            content_accumulated = ""
+            
+        # Check if response was empty (no content, no tool calls)
+        is_empty_response = (not tool_calls_accumulated) and (not content_accumulated or not content_accumulated.strip())
+        
+        if not is_empty_response:
+          api_succeeded = True
+          break
+          
+        if attempt < max_retries:
+          logger.info(f"LLM returned an empty response on loop {self.current_loop} (attempt {attempt}/{max_retries}). Retrying in 2s...")
+          console.print(f"[bold yellow]⚠️  LLM returned an empty response. Retrying in 2s (attempt {attempt}/{max_retries})...[/bold yellow]")
+          time.sleep(2)
+        else:
+          logger.info(f"LLM returned multiple empty responses on loop {self.current_loop}. Breaking cycle.")
+          console.print("[bold red]❌  LLM returned multiple empty responses. Breaking cycle.[/bold red]")
+          
+      if not api_succeeded:
+        break
               
       # Ensure every accumulated tool call has a unique ID
       for tc in tool_calls_accumulated:
