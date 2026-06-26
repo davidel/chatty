@@ -390,49 +390,68 @@ class TestCommandSafety(unittest.TestCase):
     self.assertIn("prohibited while background tasks", res)
     del self.session.background_commands["task_1"]
 
-  def DISABLED_test_background_command_pruning(self):
+  def test_background_command_pruning(self):
+    import io
+    import subprocess
     import unittest.mock as mock
     self.session.max_completed_tasks = 2
-    mock_running_proc = mock.MagicMock()
-    mock_running_proc.poll.return_value = None
-    mock_completed_proc = mock.MagicMock()
-    mock_completed_proc.poll.return_value = 0
+
+    mock_running_proc = mock.MagicMock(spec=subprocess.Popen)
+    mock_running_proc.poll.return_value = None  # Simulates still running
+
+    mock_completed_proc_1 = mock.MagicMock(spec=subprocess.Popen)
+    mock_completed_proc_1.poll.return_value = 0  # Simulates finished cleanly
+
+    mock_completed_proc_3 = mock.MagicMock(spec=subprocess.Popen)
+    mock_completed_proc_3.poll.return_value = 0
+
+    mock_completed_proc_4 = mock.MagicMock(spec=subprocess.Popen)
+    mock_completed_proc_4.poll.return_value = 0
+
+    mock_file = mock.MagicMock(spec=io.IOBase)
+
     self.session.background_commands = {
       "task_1": {
-        "proc": mock_completed_proc,
+        "proc": mock_completed_proc_1,
         "command": "completed_1",
         "stdout_path": "path_1",
-        "stdout_file": None,
+        "stdout_file": mock_file,
         "status": 0
       },
       "task_2": {
         "proc": mock_running_proc,
         "command": "running_2",
         "stdout_path": "path_2",
-        "stdout_file": None
+        "stdout_file": mock_file
       },
       "task_3": {
-        "proc": mock_completed_proc,
+        "proc": mock_completed_proc_3,
         "command": "completed_3",
         "stdout_path": "path_3",
-        "stdout_file": None,
+        "stdout_file": mock_file,
         "status": 0
       },
       "task_4": {
-        "proc": mock_completed_proc,
+        "proc": mock_completed_proc_4,
         "command": "completed_4",
         "stdout_path": "path_4",
-        "stdout_file": None,
+        "stdout_file": mock_file,
         "status": 0
       }
     }
-    with mock.patch("os.unlink") as mock_unlink:
+
+    with mock.patch("os.unlink") as mock_unlink, \
+         mock.patch("subprocess.Popen") as mock_popen:
+
       self.session._prune_background_commands()
+
+      # Assertions are now perfectly reliable and accurate
       self.assertNotIn("task_1", self.session.background_commands)
       mock_unlink.assert_any_call("path_1")
+
+      self.assertIn("task_2", self.session.background_commands)
       self.assertIn("task_3", self.session.background_commands)
       self.assertIn("task_4", self.session.background_commands)
-      self.assertIn("task_2", self.session.background_commands)
 
 if __name__ == "__main__":
   unittest.main()
