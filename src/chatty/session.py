@@ -62,6 +62,7 @@ class ChatbotSession:
     self.max_loops = max_loops
     self.background_commands = {}
     self.next_task_id = 1
+    self.max_completed_tasks = 10
     self.skills_paths = skills_paths or []
     
     # Register weakref finalizer for automatic cleanup on garbage collection or program exit
@@ -532,6 +533,7 @@ class ChatbotSession:
           "tail_lines": tail_lines,
           "head_lines": head_lines
         }
+        self._prune_background_commands()
         return (
           f"Info: The command is taking longer than 10 seconds. It is now running in the background.\n"
           f"Task ID: {task_id}\n"
@@ -568,19 +570,22 @@ class ChatbotSession:
       return f"Error: Task ID '{task_id}' not found."
     proc = task["proc"]
 
-    # If timeout is specified, wait for the process to complete or timeout to expire
+    status = task.get("status")
     timed_out_while_waiting = False
-    if timeout is not None and timeout > 0:
-      import time
-      start_time = time.time()
-      while proc.poll() is None:
-        elapsed = time.time() - start_time
-        if elapsed >= timeout:
-          timed_out_while_waiting = True
-          break
-        time.sleep(min(0.2, timeout - elapsed))
-
-    status = proc.poll()
+    if status is None:
+      # If timeout is specified, wait for the process to complete or timeout to expire
+      if timeout is not None and timeout > 0:
+        import time
+        start_time = time.time()
+        while proc.poll() is None:
+          elapsed = time.time() - start_time
+          if elapsed >= timeout:
+            timed_out_while_waiting = True
+            break
+          time.sleep(min(0.2, timeout - elapsed))
+      status = proc.poll()
+      if status is not None:
+        task["status"] = status
     try:
       with open(task["stdout_path"], 'r', errors='replace') as f:
         stdout_content = f.read()
@@ -638,6 +643,7 @@ class ChatbotSession:
           task["stderr_file"].close()
       except Exception:
         pass
+      self._prune_background_commands()
       return (
         f"Status: Task '{task_id}' FINISHED with exit code {status}.\n"
         + ("\n".join(output) if output else "(No output generated)")
@@ -653,7 +659,11 @@ class ChatbotSession:
       return f"Error: Task ID '{task_id}' not found."
     
     proc = task["proc"]
-    status = proc.poll()
+    status = task.get("status")
+    if status is None:
+      status = proc.poll()
+      if status is not None:
+        task["status"] = status
     if status is None:
       try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -696,7 +706,8 @@ class ChatbotSession:
           pass
     for task_id, task in list(background_commands.items()):
       proc = task.get("proc")
-      if proc and proc.poll() is None:
+      status = task.get("status")
+      if proc and status is None and proc.poll() is None:
         try:
           os.killpg(proc.pid, signal.SIGKILL)
         except Exception:
@@ -728,6 +739,46 @@ class ChatbotSession:
   def cleanup_background_commands(self):
     """Kills all active background tasks and removes temporary files."""
     ChatbotSession._cleanup_resources(self.background_commands)
+
+  def _prune_background_commands(self):
+    """Ensures we only keep the latest max_completed_tasks completed background task outputs, unlinking older ones."""
+    completed_tasks = []
+    for task_id, task in self.background_commands.items():
+      status = task.get("status")
+      if status is None:
+        proc = task.get("proc")
+        if proc:
+          status = proc.poll()
+          if status is not None:
+            task["status"] = status
+      if status is not None:
+        completed_tasks.append(task_id)
+    def get_task_num(tid):
+      try:
+        return int(tid.split("_")[1])
+      except (IndexError, ValueError):
+        return 0
+    completed_tasks.sort(key=get_task_num)
+    if len(completed_tasks) > self.max_completed_tasks:
+      tasks_to_prune = completed_tasks[:-self.max_completed_tasks]
+      for task_id in tasks_to_prune:
+        task = self.background_commands[task_id]
+        logger.info(f"Pruning old completed background task: '{task_id}'")
+        try:
+          if task.get("stdout_file"):
+            task["stdout_file"].close()
+          if task.get("stderr_file"):
+            task["stderr_file"].close()
+        except Exception:
+          pass
+        try:
+          if task.get("stdout_path"):
+            os.unlink(task["stdout_path"])
+          if task.get("stderr_path"):
+            os.unlink(task["stderr_path"])
+        except Exception:
+          pass
+        del self.background_commands[task_id]
 
   def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
     """Prunes conversation history to respect the configured context size, compressing older tool outputs."""

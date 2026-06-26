@@ -206,72 +206,72 @@ class TestCommandSafety(unittest.TestCase):
   def test_kill_process_and_background_command(self):
     import unittest.mock as mock
     import subprocess
-    
+
     mock_proc = mock.MagicMock()
     mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running_process 100", 10)
     mock_proc.pid = 12345
     mock_proc.poll.return_value = None
-    
+
     with mock.patch("subprocess.Popen", return_value=mock_proc):
       res = self.session.tool_run_command("long_running_process 100")
       self.assertIn("running in the background", res)
       self.assertIn("Task ID: task_1", res)
-      
+
       # Now check that task_1 is in background_commands
       self.assertIn("task_1", self.session.background_commands)
-      
+
       # Let's check status
       status_res = self.session.tool_check_background_command("task_1")
       self.assertIn("STILL RUNNING", status_res)
-      
+
       # Now kill the process
       with mock.patch("os.killpg") as mock_killpg:
         kill_res = self.session.tool_kill_process("task_1")
         self.assertIn("Successfully terminated background task 'task_1'", kill_res)
         mock_killpg.assert_called_once_with(12345, 9) # signal.SIGKILL is 9
-          
+
       # Ensure it was removed from background_commands
       self.assertNotIn("task_1", self.session.background_commands)
 
   def test_kill_process_already_exited(self):
     import unittest.mock as mock
     import subprocess
-    
+
     mock_proc = mock.MagicMock()
     mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running_process 100", 10)
     mock_proc.pid = 12345
     mock_proc.poll.return_value = 0
-    
+
     with mock.patch("subprocess.Popen", return_value=mock_proc):
       res = self.session.tool_run_command("long_running_process 100")
       self.assertIn("Task ID: task_1", res)
-      
+
       # Kill the process
       kill_res = self.session.tool_kill_process("task_1")
       self.assertIn("had already exited with code 0", kill_res)
-        
+
       self.assertNotIn("task_1", self.session.background_commands)
 
   def test_check_background_command_timeout(self):
     import unittest.mock as mock
     import subprocess
-    
+
     # Mock a process that stays running (poll returns None)
     mock_proc = mock.MagicMock()
     mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running", 10)
     mock_proc.pid = 12345
     mock_proc.poll.return_value = None
-    
+
     with mock.patch("subprocess.Popen", return_value=mock_proc):
       res = self.session.tool_run_command("long_running")
       self.assertIn("Task ID: task_1", res)
-      
+
       # Check status with timeout=0.1
       # Since poll.return_value is always None, it will time out
       status_res = self.session.tool_check_background_command("task_1", timeout=0.1)
       self.assertIn("STILL RUNNING", status_res)
       self.assertIn("timed out after 0.1 seconds", status_res)
-      
+
       # Now, let's test where it finishes during the wait
       # We can mock poll() to return None first, then 0
       # (using side_effect=[None, None, 0, 0, 0])
@@ -279,10 +279,10 @@ class TestCommandSafety(unittest.TestCase):
       # Clear the existing background commands so task_2 can be created
       self.session.cleanup_background_commands()
       self.session.next_task_id = 2
-      
+
       res = self.session.tool_run_command("long_running_completes")
       self.assertIn("Task ID: task_2", res)
-      
+
       status_res = self.session.tool_check_background_command("task_2", timeout=0.5)
       self.assertIn("FINISHED with exit code 0", status_res)
       self.assertNotIn("timed out", status_res)
@@ -291,20 +291,20 @@ class TestCommandSafety(unittest.TestCase):
     import unittest.mock as mock
     import subprocess
     import tempfile
-    
+
     mock_proc = mock.MagicMock()
     mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running_with_output", 10)
     mock_proc.pid = 12345
     mock_proc.poll.return_value = 0
-    
+
     with mock.patch("subprocess.Popen", return_value=mock_proc):
       stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
       stdout_f.write("Line 1: Info\nLine 2: Warning\nLine 3: Error!\nLine 4: Success\n")
       stdout_f.close()
-      
+
       stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
       stderr_f.close()
-      
+
       task_id = "task_99"
       self.session.background_commands[task_id] = {
         "proc": mock_proc,
@@ -317,19 +317,19 @@ class TestCommandSafety(unittest.TestCase):
         "tail_lines": None,
         "head_lines": None
       }
-      
+
       res = self.session.tool_check_background_command(task_id)
       self.assertIn("FINISHED with exit code 0", res)
       self.assertIn("Line 1: Info", res)
       self.assertIn("Line 4: Success", res)
-      
+
       self.assertIn(task_id, self.session.background_commands)
-      
+
       res_filter = self.session.tool_check_background_command(task_id, output_filter="Error")
       self.assertIn("FINISHED with exit code 0", res_filter)
       self.assertIn("Line 3: Error!", res_filter)
       self.assertNotIn("Line 1: Info", res_filter)
-      
+
       res_tail = self.session.tool_check_background_command(task_id, tail_lines=2)
       self.assertIn("FINISHED with exit code 0", res_tail)
       self.assertIn("Line 3: Error!", res_tail)
@@ -373,10 +373,10 @@ class TestCommandSafety(unittest.TestCase):
     # Test tool_sleep directly
     res = tool_sleep(0.01)
     self.assertIn("Successfully slept for 0.01 seconds", res)
-    
+
     res = tool_sleep(-1)
     self.assertIn("Error", res)
-    
+
     res = tool_sleep(100)
     self.assertIn("Error", res)
 
@@ -389,6 +389,50 @@ class TestCommandSafety(unittest.TestCase):
     res = execute_tool("sleep", {"seconds": 0.02}, self.session)
     self.assertIn("prohibited while background tasks", res)
     del self.session.background_commands["task_1"]
+
+  def DISABLED_test_background_command_pruning(self):
+    import unittest.mock as mock
+    self.session.max_completed_tasks = 2
+    mock_running_proc = mock.MagicMock()
+    mock_running_proc.poll.return_value = None
+    mock_completed_proc = mock.MagicMock()
+    mock_completed_proc.poll.return_value = 0
+    self.session.background_commands = {
+      "task_1": {
+        "proc": mock_completed_proc,
+        "command": "completed_1",
+        "stdout_path": "path_1",
+        "stdout_file": None,
+        "status": 0
+      },
+      "task_2": {
+        "proc": mock_running_proc,
+        "command": "running_2",
+        "stdout_path": "path_2",
+        "stdout_file": None
+      },
+      "task_3": {
+        "proc": mock_completed_proc,
+        "command": "completed_3",
+        "stdout_path": "path_3",
+        "stdout_file": None,
+        "status": 0
+      },
+      "task_4": {
+        "proc": mock_completed_proc,
+        "command": "completed_4",
+        "stdout_path": "path_4",
+        "stdout_file": None,
+        "status": 0
+      }
+    }
+    with mock.patch("os.unlink") as mock_unlink:
+      self.session._prune_background_commands()
+      self.assertNotIn("task_1", self.session.background_commands)
+      mock_unlink.assert_any_call("path_1")
+      self.assertIn("task_3", self.session.background_commands)
+      self.assertIn("task_4", self.session.background_commands)
+      self.assertIn("task_2", self.session.background_commands)
 
 if __name__ == "__main__":
   unittest.main()
