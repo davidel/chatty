@@ -217,8 +217,11 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("running in the background", res)
       self.assertIn("Task ID: task_1", res)
 
-      # Now check that task_1 is in background_commands
+      # Now check that task_1 is in background_commands and carries the task ID in temp files
       self.assertIn("task_1", self.session.background_commands)
+      task_info = self.session.background_commands["task_1"]
+      self.assertIn("task_1_stdout_", task_info["stdout_path"])
+      self.assertIn("task_1_stderr_", task_info["stderr_path"])
 
       # Let's check status
       status_res = self.session.tool_check_background_command("task_1")

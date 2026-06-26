@@ -686,12 +686,13 @@ class ChatbotSession:
     import subprocess
     import tempfile
     
+    task_id = f"task_{self.next_task_id}"
     stdout_f = None
     stderr_f = None
     try:
-      stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+      stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t', prefix=f"chatty_{task_id}_stdout_")
       if not combine_stderr:
-        stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+        stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t', prefix=f"chatty_{task_id}_stderr_")
       record_command_binaries(command, self)
       proc = subprocess.Popen(
         command,
