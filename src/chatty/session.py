@@ -1327,7 +1327,7 @@ class ChatbotSession:
           # Live rendering console helper
           panel = Panel("Connecting to LLM...", title="Assistant", border_style="green")
           with Live(Group(panel, self.get_rich_status_bar()), 
-                    refresh_per_second=12, console=console) as live:
+                    refresh_per_second=12, console=console, transient=True) as live:
             
             # Log request details in DEBUG mode
             self._log_llm_request(active_messages, self.get_tools())
@@ -1447,6 +1447,10 @@ class ChatbotSession:
                   live.update(Group(panel, self.get_rich_status_bar()))
             # Remove status bar before exiting Live context
             live.update(panel)
+          
+          # Print the final panel permanently to console
+          if not first_chunk:
+            console.print(panel)
           
           if finish_reason == "length":
             logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")

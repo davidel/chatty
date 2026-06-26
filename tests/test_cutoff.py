@@ -339,6 +339,62 @@ class TestReasoningAccumulation(unittest.TestCase):
     self.assertNotIn("reasoning", pruned_msg)
     self.assertNotIn("thought_signature", pruned_msg)
 
+  def test_console_printing_on_stream_completion(self):
+    import unittest.mock as mock
+    from chatty.session import ChatbotSession
+
+    session = ChatbotSession(
+      provider="ollama",
+      model="qwen2.5-coder:7b",
+      context_size=10000,
+      sandbox="/tmp"
+    )
+
+    class MockDelta:
+      def __init__(self, content=None, tool_calls=None, reasoning=None, thought_signature=None):
+        self.content = content
+        self.tool_calls = tool_calls
+        self.reasoning = reasoning
+        self.thought_signature = thought_signature
+
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+
+    class MockChunk:
+      def __init__(self, choices):
+        self.choices = choices
+
+    # Test case 1: Successful stream with content
+    mock_chunks_success = [
+      MockChunk([MockChoice(MockDelta(reasoning="Thinking... "))]),
+      MockChunk([MockChoice(MockDelta(content="Hello!"))])
+    ]
+    session.client = mock.Mock()
+    session.client.chat.completions.create.return_value = mock_chunks_success
+
+    with mock.patch("chatty.session.console.print") as mock_print:
+      session.run_llm_cycle()
+      mock_print.assert_called()
+      called_with_group = False
+      for call in mock_print.call_args_list:
+        args, kwargs = call
+        if args and not isinstance(args[0], str):
+          called_with_group = True
+      self.assertTrue(called_with_group)
+
+    # Test case 2: Empty stream
+    session.client.chat.completions.create.return_value = []
+    with mock.patch("chatty.session.console.print") as mock_print:
+      with mock.patch("time.sleep"):
+        session.run_llm_cycle()
+      for call in mock_print.call_args_list:
+        args, kwargs = call
+        if args and not isinstance(args[0], str):
+          obj = args[0]
+          if hasattr(obj, "title") and obj.title == "Assistant":
+            self.fail("Should not print Assistant panel for empty response")
+
 
 class TestToolResultJsonWrapping(unittest.TestCase):
   def setUp(self):
