@@ -14,10 +14,12 @@ from chatty.session import ChatbotSession
 class TestSessionPersist(unittest.TestCase):
 
   def setUp(self):
+    self.old_cwd = os.getcwd()
     self.sandbox_dir = tempfile.mkdtemp()
     self.save_dir = tempfile.mkdtemp()
 
   def tearDown(self):
+    os.chdir(self.old_cwd)
     shutil.rmtree(self.sandbox_dir)
     shutil.rmtree(self.save_dir)
 

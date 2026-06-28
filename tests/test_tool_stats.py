@@ -13,6 +13,7 @@ from chatty.tools import execute_tool
 
 class TestToolStats(unittest.TestCase):
     def setUp(self):
+        self.old_cwd = os.getcwd()
         self.sandbox_dir = tempfile.mkdtemp()
         self.session = ChatbotSession(
             provider="ollama",
@@ -22,6 +23,7 @@ class TestToolStats(unittest.TestCase):
         )
 
     def tearDown(self):
+        os.chdir(self.old_cwd)
         shutil.rmtree(self.sandbox_dir)
 
     def test_initial_stats(self):

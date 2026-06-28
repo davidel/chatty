@@ -471,6 +471,7 @@ class TestSafetyModuleAndDelegation(unittest.TestCase):
 
   def test_chatbot_session_attribute_delegation(self):
     # Test dynamic configuration getter / setter delegation
+    old_cwd = os.getcwd()
     temp_dir = tempfile.mkdtemp()
     try:
       session = ChatbotSession(
@@ -503,6 +504,7 @@ class TestSafetyModuleAndDelegation(unittest.TestCase):
         _ = session.non_existent_attribute_123
 
     finally:
+      os.chdir(old_cwd)
       shutil.rmtree(temp_dir)
 
 

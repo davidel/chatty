@@ -15,6 +15,7 @@ from chatty.utils import repair_json
 class TestCommandsRegistry(unittest.TestCase):
 
   def setUp(self):
+    self.old_cwd = os.getcwd()
     self.sandbox_dir = tempfile.mkdtemp()
     self.session = ChatbotSession(
       provider="ollama",
@@ -23,6 +24,7 @@ class TestCommandsRegistry(unittest.TestCase):
     )
 
   def tearDown(self):
+    os.chdir(self.old_cwd)
     shutil.rmtree(self.sandbox_dir)
 
   def test_registry_contains_commands(self):

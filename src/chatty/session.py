@@ -1296,23 +1296,6 @@ class ChatbotSession:
         except Exception as e:
           logger.exception("Error calling LLM API")
           self._print(f"[bold red]Error calling API:[/bold red] {str(e)}")
-          if not self.headless:
-            has_corrupt_tail = any(msg.get("role") in ("tool", "assistant") for msg in self.messages)
-            if has_corrupt_tail:
-              self._print("[yellow]The conversation history contains tool calls/responses that may be corrupted.[/yellow]")
-              from prompt_toolkit import prompt
-              try:
-                ans = prompt("Would you like to undo the last failed turn and retry? (y/n) > ").strip().lower()
-                if ans in ("y", "yes"):
-                  popped = 0
-                  while self.messages and self.messages[-1].get("role") in ("tool", "assistant"):
-                    self.messages.pop()
-                    popped += 1
-                  self._print(f"[green]Popped {popped} messages. Retrying execution...[/green]")
-                  self.run_llm_cycle()
-                  return
-              except (KeyboardInterrupt, EOFError):
-                pass
           break
             
         # If we didn't receive structured tool calls, try to extract them from text content
