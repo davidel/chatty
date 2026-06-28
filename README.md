@@ -1,5 +1,9 @@
 # Chatty
 
+<p align="center">
+  <img src="assets/logo.svg" alt="Chatty Logo" width="600">
+</p>
+
 An advanced AI Chatbot CLI with a rich terminal interface, sandboxed file system tools, multi-provider LLM support (Ollama and OpenRouter), syntax verification, dynamic skills, and cost/token optimization.
 
 Chatty provides a local terminal loop that allows an LLM agent to interact with your codebase and system tools in a safe, sandboxed directory. It utilizes `rich` and `prompt_toolkit` to deliver a premium user experience, complete with formatting, status indicators, and autocompletion.
@@ -25,7 +29,7 @@ chatty/
 │       ├── logging_setup.py# Configures custom Google-style Logging (glog)
 │       ├── safety.py       # Command safety validation checks
 │       ├── session.py      # Core ChatbotSession logic and client management
-│       ├── tools.py        # Implementation of chatbot file and command tools
+│       ├── tools/          # Implementation of chatbot file and command tools package
 │       ├── utils.py        # Helper utilities
 │       └── skills/         # Default skills / extensions directory
 │           └── greetings/  # Standard greetings plugin
@@ -45,8 +49,8 @@ chatty/
 ### Main Code Components
 - [pyproject.toml](file:///tmp/chatty/pyproject.toml): Defines Python package requirements and targets [cli.py:main](file:///tmp/chatty/src/chatty/cli.py#L15) as the execution entrypoint.
 - [cli.py](file:///tmp/chatty/src/chatty/cli.py): Handles the terminal interactive loops, input prompts, rich console outputs, and slash commands.
-- [session.py](file:///tmp/chatty/src/chatty/session.py): Contains the core [ChatbotSession](file:///tmp/chatty/src/chatty/session.py#L84) logic, LLM provider clients, and execution loops.
-- [tools.py](file:///tmp/chatty/src/chatty/tools.py): Implements all sandboxed tools that can be invoked by the model.
+- [session.py](file:///tmp/chatty/src/chatty/session.py): Contains the core [ChatbotSession](file:///tmp/chatty/src/chatty/session.py#L99) logic, LLM provider clients, and execution loops.
+- [tools/](file:///tmp/chatty/src/chatty/tools/): Implements all sandboxed tools that can be invoked by the model.
 - [landlock.py](file:///tmp/chatty/src/chatty/landlock.py): Provides helper methods like [compile_landlock_binary](file:///tmp/chatty/src/chatty/landlock.py#L13) and [wrap_command_with_landlock](file:///tmp/chatty/src/chatty/landlock.py#L71) to wrap shell executions in a kernel-level sandbox.
 - [landlock_exec.c](file:///tmp/chatty/src/chatty/landlock_exec.c): Low-level C wrapper that sets up the Landlock ruleset and restricts process namespaces before executing commands.
 - [__init__.py](file:///tmp/chatty/src/chatty/__init__.py): Exposes the package API.
