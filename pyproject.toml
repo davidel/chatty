@@ -21,6 +21,7 @@ dependencies = [
     "rich",
     "prompt-toolkit",
     "PyYAML",
+    "json-repair",
 ]
 
 [project.scripts]

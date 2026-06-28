@@ -170,6 +170,8 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/load_session` | `<path>` | Load a saved conversation/session status from a JSON file. |
 | `/multiline` | None | Toggle multiline mode. When enabled, use `Alt+Enter` or `Esc+Enter` to submit. |
 | `/history` | None | Renders message records, estimated token counts, roles, and tool calls. |
+| `/undo` | `[count]` | Reverts the last conversation turn(s), removing assistant responses, tool outputs, and the user prompt. |
+| `/pop` | `<index>` | Truncates the conversation history by deleting all messages from the specified 1-based index onwards. |
 | `/tools` | None | Lists available sandboxed tools and their schema definitions. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
 | `/compress` | None | Directs the model to summarize current conversational state, resets history, and appends summary. |

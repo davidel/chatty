@@ -33,7 +33,8 @@ from chatty.utils import (
   load_system_prompt_from_file,
   parse_frontmatter,
   record_command_binaries,
-  sanitize_tool_output
+  sanitize_tool_output,
+  repair_json
 )
 from chatty.tools import execute_tool, TOOLS_SCHEMA
 from chatty.safety import validate_command_safety
@@ -902,7 +903,13 @@ class ChatbotSession:
       if tool_call:
         return [tool_call]
     except Exception:
-      pass
+      try:
+        data = json.loads(repair_json(text), strict=False)
+        tool_call = parse_single_dict_tool_call(data)
+        if tool_call:
+          return [tool_call]
+      except Exception:
+        pass
 
     # 2. Try parsing code blocks
     import re
@@ -914,7 +921,13 @@ class ChatbotSession:
         if tool_call:
           return [tool_call]
       except Exception:
-        pass
+        try:
+          data = json.loads(repair_json(block.strip()), strict=False)
+          tool_call = parse_single_dict_tool_call(data)
+          if tool_call:
+            return [tool_call]
+        except Exception:
+          pass
 
     # 3. Try parsing nested braces using brace tracking
     n = len(text)
@@ -947,7 +960,13 @@ class ChatbotSession:
                   if tool_call:
                     return [tool_call]
                 except Exception:
-                  pass
+                  try:
+                    data = json.loads(repair_json(potential), strict=False)
+                    tool_call = parse_single_dict_tool_call(data)
+                    if tool_call:
+                      return [tool_call]
+                  except Exception:
+                    pass
                 break
 
     return []
@@ -1277,6 +1296,23 @@ class ChatbotSession:
         except Exception as e:
           logger.exception("Error calling LLM API")
           self._print(f"[bold red]Error calling API:[/bold red] {str(e)}")
+          if not self.headless:
+            has_corrupt_tail = any(msg.get("role") in ("tool", "assistant") for msg in self.messages)
+            if has_corrupt_tail:
+              self._print("[yellow]The conversation history contains tool calls/responses that may be corrupted.[/yellow]")
+              from prompt_toolkit import prompt
+              try:
+                ans = prompt("Would you like to undo the last failed turn and retry? (y/n) > ").strip().lower()
+                if ans in ("y", "yes"):
+                  popped = 0
+                  while self.messages and self.messages[-1].get("role") in ("tool", "assistant"):
+                    self.messages.pop()
+                    popped += 1
+                  self._print(f"[green]Popped {popped} messages. Retrying execution...[/green]")
+                  self.run_llm_cycle()
+                  return
+              except (KeyboardInterrupt, EOFError):
+                pass
           break
             
         # If we didn't receive structured tool calls, try to extract them from text content
@@ -1353,9 +1389,12 @@ class ChatbotSession:
         
         try:
           args_parsed = json.loads(t_args_raw) if t_args_raw else {}
-        except Exception as e:
-          args_parsed = {}
-          t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
+        except Exception:
+          try:
+            args_parsed = json.loads(repair_json(t_args_raw)) if t_args_raw else {}
+          except Exception as e:
+            args_parsed = {}
+            t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
         else:
           # Execute tool
           if t_name == "ask_question":
@@ -1551,6 +1590,8 @@ class ChatbotSession:
     table.add_row("/load_session <path>", "Load a saved session status from a JSON file")
     table.add_row("/multiline", "Toggle multiline prompt input (Alt+Enter to send)")
     table.add_row("/history", "View message records and sizing details")
+    table.add_row("/undo [count]", "Undo the last conversation turn(s)")
+    table.add_row("/pop <index>", "Truncate history from index (1-based) onwards")
     table.add_row("/tools", "List available sandbox tools and schemas")
     table.add_row("/clear / /reset", "Clear conversation memory")
     table.add_row("/compress", "Summarize history, clear context, and reload summary")

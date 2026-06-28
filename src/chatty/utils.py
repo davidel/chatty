@@ -314,3 +314,59 @@ def sanitize_tool_output(text: str) -> str:
   control_chars_re = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
   return control_chars_re.sub(replace_control, text)
 
+
+def repair_json(json_str: str) -> str:
+  """Attempts to repair common JSON malformations from LLMs."""
+  if not json_str:
+    return "{}"
+
+  try:
+    import json_repair
+    repaired = json_repair.repair(json_str)
+    if repaired:
+      return repaired
+  except ImportError:
+    pass
+
+  s = json_str.strip()
+  import re
+  s = re.sub(r"'([^']+)'\s*:", r'"\1":', s)
+  s = re.sub(r":\s*'([^']*)'", r': "\1"', s)
+  s = re.sub(r',\s*([\]}])', r'\1', s)
+
+  braces = []
+  in_string = False
+  escaped = False
+  for i, char in enumerate(s):
+    if in_string:
+      if escaped:
+        escaped = False
+      elif char == '\\':
+        escaped = True
+      elif char == '"':
+        in_string = False
+    else:
+      if char == '"':
+        in_string = True
+      elif char in ('{', '['):
+        braces.append(char)
+      elif char == '}':
+        if braces and braces[-1] == '{':
+          braces.pop()
+      elif char == ']':
+        if braces and braces[-1] == '[':
+          braces.pop()
+
+  if in_string:
+    s += '"'
+
+  while braces:
+    matching = braces.pop()
+    if matching == '{':
+      s += '}'
+    elif matching == '[':
+      s += ']'
+
+  return s
+
+

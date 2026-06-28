@@ -253,6 +253,63 @@ def cmd_history(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_undo(session: Any, arg: str) -> bool:
+  try:
+    count = int(arg.strip()) if arg.strip() else 1
+  except ValueError:
+    console.print("[bold red]Error: Undo count must be an integer.[/bold red]")
+    return True
+
+  if count < 1:
+    console.print("[bold red]Error: Undo count must be at least 1.[/bold red]")
+    return True
+
+  undone_turns = 0
+  for _ in range(count):
+    popped_assistant_tool = 0
+    while session.messages and session.messages[-1].get("role") in ("tool", "assistant"):
+      session.messages.pop()
+      popped_assistant_tool += 1
+    if session.messages and session.messages[-1].get("role") == "user":
+      user_msg = session.messages.pop()
+      content = user_msg.get("content") or ""
+      console.print(f"[bold green]Undone turn {undone_turns + 1}:[/bold green] Popped {popped_assistant_tool} assistant/tool messages and user prompt: '[yellow]{content}[/yellow]'")
+      undone_turns += 1
+    else:
+      if popped_assistant_tool > 0:
+        console.print(f"[bold green]Undone turn {undone_turns + 1}:[/bold green] Popped {popped_assistant_tool} assistant/tool messages (no user prompt found).")
+        undone_turns += 1
+      else:
+        break
+
+  if undone_turns == 0:
+    console.print("[bold yellow]History is empty or has no messages to undo.[/bold yellow]")
+  return True
+
+
+def cmd_pop(session: Any, arg: str) -> bool:
+  if not arg.strip():
+    console.print("[bold red]Error: Usage: /pop <index>[/bold red]")
+    return True
+
+  try:
+    index = int(arg.strip())
+  except ValueError:
+    console.print("[bold red]Error: Message index must be an integer.[/bold red]")
+    return True
+
+  total = len(session.messages)
+  if index < 1 or index > total:
+    console.print(f"[bold red]Error: Message index must be between 1 and {total}.[/bold red]")
+    return True
+
+  pop_start = index - 1
+  popped_messages = session.messages[pop_start:]
+  session.messages = session.messages[:pop_start]
+  console.print(f"[bold green]Truncated history.[/bold green] Popped {len(popped_messages)} messages from index {index} onwards.")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -276,4 +333,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/load_session": cmd_load_session,
   "/tools": cmd_tools,
   "/history": cmd_history,
+  "/undo": cmd_undo,
+  "/pop": cmd_pop,
 }
+
