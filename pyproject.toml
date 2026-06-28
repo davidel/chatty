@@ -30,6 +30,6 @@ chatty = "chatty.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-chatty = ["skills/**/*"]
+chatty = ["skills/**/*", "landlock_exec.c"]
 
 

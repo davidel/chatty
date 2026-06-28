@@ -187,6 +187,15 @@ class ChatbotSession:
     # Initialize client
     self.init_client()
     
+    # Landlock sandboxing support
+    self.landlock_bin = None
+    if sys.platform == "linux" and self.sandbox:
+      try:
+        from chatty.landlock import compile_landlock_binary
+        self.landlock_bin = compile_landlock_binary()
+      except Exception as e:
+        logger.warning(f"Could not initialize Landlock support: {e}")
+    
     # Initialize and register commands registry
     self._commands = {}
     self._register_commands()
@@ -694,9 +703,18 @@ class ChatbotSession:
       if not combine_stderr:
         stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t', prefix=f"chatty_{task_id}_stderr_")
       record_command_binaries(command, self)
+      
+      if self.landlock_bin and self.sandbox:
+        from chatty.landlock import wrap_command_with_landlock
+        cmd_args = wrap_command_with_landlock(self.landlock_bin, self.sandbox, command)
+        shell_val = False
+      else:
+        cmd_args = command
+        shell_val = True
+
       proc = subprocess.Popen(
-        command,
-        shell=True,
+        cmd_args,
+        shell=shell_val,
         cwd=self.sandbox,
         stdout=stdout_f,
         stderr=subprocess.STDOUT if combine_stderr else stderr_f,

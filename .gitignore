@@ -40,3 +40,7 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Landlock compiled binary
+src/chatty/landlock_exec
+src/chatty/landlock_exec.test
