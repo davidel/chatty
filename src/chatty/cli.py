@@ -132,6 +132,12 @@ def main():
     choices=["debug", "info", "warning", "error"],
     help="Logging level (default: info)."
   )
+  parser.add_argument(
+    "--headless",
+    action="store_true",
+    default=False,
+    help="Run the chatbot in headless mode (no console printing or terminal interactive loop)."
+  )
   
   args = parser.parse_args()
   
@@ -146,9 +152,11 @@ def main():
   if args.config_prompt:
     try:
       custom_system_prompt = load_system_prompt_from_file(args.config_prompt)
-      console.print(f"[bold blue]Info:[/bold blue] Loaded custom system prompt from '{args.config_prompt}' (mode: {args.prompt_mode}).")
+      if not args.headless:
+        console.print(f"[bold blue]Info:[/bold blue] Loaded custom system prompt from '{args.config_prompt}' (mode: {args.prompt_mode}).")
     except Exception as e:
-      console.print(f"[bold red]Error loading prompt configuration:[/bold red] {e}")
+      if not args.headless:
+        console.print(f"[bold red]Error loading prompt configuration:[/bold red] {e}")
       sys.exit(1)
           
   # Resolve default models
@@ -161,13 +169,16 @@ def main():
       if local_models:
         # Pick the first matching model
         model = local_models[0]
-        console.print(f"[bold blue]Info:[/bold blue] Auto-detected local Ollama model: [bold green]{model}[/bold green]")
+        if not args.headless:
+          console.print(f"[bold blue]Info:[/bold blue] Auto-detected local Ollama model: [bold green]{model}[/bold green]")
       else:
         model = "qwen2.5-coder:7b"
-        console.print(f"[bold blue]Info:[/bold blue] No local Ollama models detected. Fallback default: [bold green]{model}[/bold green]")
+        if not args.headless:
+          console.print(f"[bold blue]Info:[/bold blue] No local Ollama models detected. Fallback default: [bold green]{model}[/bold green]")
     else:
       model = "google/gemini-2.5-flash"
-      console.print(f"[bold blue]Info:[/bold blue] OpenRouter provider selected. Default model: [bold green]{model}[/bold green]")
+      if not args.headless:
+        console.print(f"[bold blue]Info:[/bold blue] OpenRouter provider selected. Default model: [bold green]{model}[/bold green]")
           
   # Initialize and execute chat session
   chat_session = ChatbotSession(
@@ -189,10 +200,12 @@ def main():
     max_url_chars=args.max_url_chars,
     max_dir_items=args.max_dir_items,
     static_skills=args.static_skills,
-    prompt_caching=args.prompt_caching
+    prompt_caching=args.prompt_caching,
+    headless=args.headless
   )
   
-  chat_session.start_loop()
+  if not args.headless:
+    chat_session.start_loop()
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import os
@@ -63,6 +64,7 @@ class SessionConfig:
   max_dir_items: int = 200
   static_skills: Optional[bool] = None
   prompt_caching: bool = False
+  headless: bool = False
 
 
 class LazyMarkdown:
@@ -81,6 +83,19 @@ class LazyMarkdown:
   def __rich_measure__(self, console: Console, options: Any) -> Any:
     md = Markdown(self.text)
     return md.__rich_measure__(console, options)
+
+
+@contextlib.contextmanager
+def optional_live(renderable, console, enabled=True, **kwargs):
+  if enabled:
+    from rich.live import Live
+    with Live(renderable, console=console, **kwargs) as live:
+      yield live
+  else:
+    class DummyLive:
+      def update(self, *args, **kwargs):
+        pass
+    yield DummyLive()
 
 
 class ChatbotSession:
@@ -107,6 +122,7 @@ class ChatbotSession:
     max_dir_items: int = 200,
     static_skills: Optional[bool] = None,
     prompt_caching: bool = False,
+    headless: bool = False,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -136,7 +152,8 @@ class ChatbotSession:
         max_url_chars=max_url_chars,
         max_dir_items=max_dir_items,
         static_skills=static_skills,
-        prompt_caching=prompt_caching
+        prompt_caching=prompt_caching,
+        headless=headless
       )
 
     # Ensure static_skills defaults correctly if not provided
@@ -205,6 +222,10 @@ class ChatbotSession:
     self.skills = {}
     self.load_skills()
     logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}")
+
+  def _print(self, *args, **kwargs):
+    if not self.headless:
+      console.print(*args, **kwargs)
 
   def __getattr__(self, name: str) -> Any:
     if name == "config":
@@ -335,7 +356,7 @@ class ChatbotSession:
       base = self.url or "https://openrouter.ai/api/v1"
       key = self.api_key or os.environ.get("OPENROUTER_API_KEY")
       if not key:
-        console.print(
+        self._print(
           "[bold red]Warning:[/bold red] OpenRouter API key is not configured. "
           "Use [cyan]/api_key <key>[/cyan] or set the [cyan]OPENROUTER_API_KEY[/cyan] environment variable."
         )
@@ -501,7 +522,7 @@ class ChatbotSession:
         task_id = f"task_{self.next_task_id}"
         self.next_task_id += 1
         logger.info(f"Command timed out. Transitioned to background. Task ID: {task_id}")
-        console.print(
+        self._print(
           f"\n[bold yellow]⚙️  Command took > 10s and is now running in the background. "
           f"Task ID: {task_id}. Use '/status' or check_background_command to monitor progress.[/bold yellow]\n"
         )
@@ -804,13 +825,13 @@ class ChatbotSession:
       pruned_count = total_msgs - len(pruned)
       if pruned_count > 0:
         logger.warning(f"Context window limit reached. Pruned {pruned_count} messages from history.")
-        console.print(
+        self._print(
           f"\n[bold yellow]⚠️  Context Warning: {pruned_count} older message(s) were pruned from history "
           f"to fit the context size limit ({self.context_size} tokens).[/bold yellow]"
         )
         # If the very first user prompt is no longer in the pruned message history
         if self.messages and self.messages[0] not in pruned:
-          console.print(
+          self._print(
             "[bold red]⚠️  Critical: Your initial prompt/instructions have been pruned from context! "
             "The AI may lose track of the overall goal. Consider running '/compress' to reload a summary recap.[/bold red]\n"
           )
@@ -1106,8 +1127,8 @@ class ChatbotSession:
         try:
           # Live rendering console helper
           panel = Panel("Connecting to LLM...", title="Assistant", border_style="green")
-          with Live(Group(panel, self.get_rich_status_bar()), 
-                    refresh_per_second=12, console=console, transient=True) as live:
+          with optional_live(Group(panel, self.get_rich_status_bar()), 
+                             console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
             
             # Log request details in DEBUG mode
             self._log_llm_request(active_messages, self.get_tools())
@@ -1236,11 +1257,11 @@ class ChatbotSession:
             final_panels.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
           
           if final_panels:
-            console.print(Group(*final_panels))
+            self._print(Group(*final_panels))
           
           if finish_reason == "length":
             logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")
-            console.print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
+            self._print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
           
           logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
           self._log_llm_response_summary(
@@ -1255,7 +1276,7 @@ class ChatbotSession:
           )
         except Exception as e:
           logger.exception("Error calling LLM API")
-          console.print(f"[bold red]Error calling API:[/bold red] {str(e)}")
+          self._print(f"[bold red]Error calling API:[/bold red] {str(e)}")
           break
             
         # If we didn't receive structured tool calls, try to extract them from text content
@@ -1274,11 +1295,11 @@ class ChatbotSession:
           
         if attempt < max_retries:
           logger.info(f"LLM returned an empty response on loop {self.current_loop} (attempt {attempt}/{max_retries}). Retrying in 2s...")
-          console.print(f"[bold yellow]⚠️  LLM returned an empty response. Retrying in 2s (attempt {attempt}/{max_retries})...[/bold yellow]")
+          self._print(f"[bold yellow]⚠️  LLM returned an empty response. Retrying in 2s (attempt {attempt}/{max_retries})...[/bold yellow]")
           time.sleep(2)
         else:
           logger.info(f"LLM returned multiple empty responses on loop {self.current_loop}. Breaking cycle.")
-          console.print("[bold red]❌  LLM returned multiple empty responses. Breaking cycle.[/bold red]")
+          self._print("[bold red]❌  LLM returned multiple empty responses. Breaking cycle.[/bold red]")
           
       if not api_succeeded:
         break
@@ -1316,7 +1337,7 @@ class ChatbotSession:
       # If the response was truncated due to output token limit, automatically continue
       if finish_reason == "length":
         logger.warning("LLM response was truncated (finish_reason='length'). Automatically continuing...")
-        console.print("[bold yellow]🔄  AI response was truncated because it reached the maximum output token limit. Automatically continuing...[/bold yellow]")
+        self._print("[bold yellow]🔄  AI response was truncated because it reached the maximum output token limit. Automatically continuing...[/bold yellow]")
         loop_count += 1
         continue
       
@@ -1346,14 +1367,14 @@ class ChatbotSession:
               title="🔧 Executing Tool",
               border_style="yellow"
             )
-            with Live(Group(exec_panel, self.get_rich_status_bar()), refresh_per_second=12, console=console) as live:
+            with optional_live(Group(exec_panel, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
               logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
               t_result = execute_tool(t_name, args_parsed, self)
               # Remove status bar before exiting Live context
               live.update(exec_panel)
               
         # Print result summary nicely
-        console.print(Panel(
+        self._print(Panel(
           Text(t_result),
           title="🔧 Tool Result",
           border_style="dim yellow"
@@ -1379,7 +1400,7 @@ class ChatbotSession:
       loop_count += 1
       
     if loop_count >= max_tool_loops:
-      console.print("[bold red]Reached maximum sequential tool loop executions. Breaking cycle.[/bold red]")
+      self._print("[bold red]Reached maximum sequential tool loop executions. Breaking cycle.[/bold red]")
     self.current_loop = 0
 
   def handle_command(self, cmd_line: str) -> bool:
@@ -1395,13 +1416,14 @@ class ChatbotSession:
     if handler:
       return handler(self, arg)
     
-    console.print(f"[bold red]Unknown command:[/bold red] {cmd}. Type [cyan]/help[/cyan] for options.")
+    console_print = self._print if hasattr(self, "_print") else console.print
+    console_print(f"[bold red]Unknown command:[/bold red] {cmd}. Type [cyan]/help[/cyan] for options.")
     return True
 
   def compress_context(self):
     """Summarizes the history, clears the context, and reloads the summary."""
     if not self.messages:
-      console.print("[bold yellow]History is empty. Nothing to compress.[/bold yellow]")
+      self._print("[bold yellow]History is empty. Nothing to compress.[/bold yellow]")
       return
 
     # Prepare messages for summarization
@@ -1420,8 +1442,8 @@ class ChatbotSession:
     content_accumulated = ""
     logger.info("Generating summary for /compress command")
     try:
-      with Live(Panel("Connecting to LLM for summary...", title="Context Compression", border_style="yellow"),
-                refresh_per_second=12, console=console) as live:
+      with optional_live(Panel("Connecting to LLM for summary...", title="Context Compression", border_style="yellow"),
+                        console=console, enabled=not self.headless, refresh_per_second=12) as live:
         
         try:
           stream = self.client.chat.completions.create(
@@ -1489,11 +1511,11 @@ class ChatbotSession:
       )
     except Exception as e:
       logger.exception("Error calling LLM API for context summary")
-      console.print(f"[bold red]Error calling API for summary:[/bold red] {str(e)}")
+      self._print(f"[bold red]Error calling API for summary:[/bold red] {str(e)}")
       return
 
     if not content_accumulated.strip():
-      console.print("[bold red]Failed to generate summary. Context was not cleared.[/bold red]")
+      self._print("[bold red]Failed to generate summary. Context was not cleared.[/bold red]")
       return
 
     # Clear and reload context
@@ -1507,7 +1529,7 @@ class ChatbotSession:
       "content": content_accumulated
     })
     
-    console.print("[bold green]Conversation history cleared and recap reloaded.[/bold green]")
+    self._print("[bold green]Conversation history cleared and recap reloaded.[/bold green]")
 
   def show_help(self):
     """Displays formatted CLI usage guide."""
@@ -1533,7 +1555,7 @@ class ChatbotSession:
     table.add_row("/clear / /reset", "Clear conversation memory")
     table.add_row("/compress", "Summarize history, clear context, and reload summary")
     table.add_row("/exit / /quit", "Exit the application")
-    console.print(table)
+    self._print(table)
 
   def show_status(self):
     """Displays configured status parameters."""
@@ -1547,7 +1569,7 @@ class ChatbotSession:
     table.add_row("Max Loop Iterations", f"{self.max_loops} loops")
     table.add_row("Total Messages", str(len(self.messages)))
     table.add_row("Multiline Input", "Enabled" if self.multiline_mode else "Disabled")
-    console.print(table)
+    self._print(table)
 
   def show_tool_stats(self):
     """Displays statistics on tool and external binary calls."""
@@ -1584,7 +1606,7 @@ class ChatbotSession:
       bin_table.add_section()
       bin_table.add_row("[bold]Total Binary Calls[/bold]", f"[bold]{self.external_binaries_count}[/bold]")
         
-    console.print(Columns([tool_table, bin_table], equal=False, expand=True))
+    self._print(Columns([tool_table, bin_table], equal=False, expand=True))
 
   def show_tools(self):
     """Lists available filesystem functions."""
@@ -1594,7 +1616,7 @@ class ChatbotSession:
     for tool in TOOLS_SCHEMA:
       func = tool["function"]
       table.add_row(func["name"], func["description"])
-    console.print(table)
+    self._print(table)
 
   def get_rich_status_bar(self):
     """Returns a Rich Table rendering the status bar."""
@@ -1633,6 +1655,8 @@ class ChatbotSession:
 
   def start_loop(self):
     """Runs the interactive input/output CLI loop."""
+    if self.headless:
+      raise RuntimeError("Cannot start interactive prompt loop in headless mode.")
     # Create keybindings for multiline submissions
     kb = KeyBindings()
     
@@ -1652,7 +1676,7 @@ class ChatbotSession:
     )
     
     # Display starting banner
-    console.print(Panel(
+    self._print(Panel(
       "[bold green]Welcome to the Sandboxed AI Chatbot CLI![/bold green]\n"
       "This script interfaces with Ollama and OpenRouter and restricts file write operations to the sandbox.\n"
       "Type [cyan]/help[/cyan] to display slash commands.\n"
@@ -1722,12 +1746,12 @@ class ChatbotSession:
         
       except KeyboardInterrupt:
         # Handle Ctrl+C (clear current input or confirm exit)
-        console.print("\n[yellow]KeyboardInterrupt (Ctrl+C). Type /exit to quit.[/yellow]")
+        self._print("\n[yellow]KeyboardInterrupt (Ctrl+C). Type /exit to quit.[/yellow]")
       except EOFError:
         # Handle Ctrl+D
         self.cleanup_background_commands()
-        console.print("\n[bold green]Goodbye![/bold green]")
+        self._print("\n[bold green]Goodbye![/bold green]")
         break
       except Exception as e:
         logger.exception("Unexpected error in CLI loop")
-        console.print(f"[bold red]Unexpected error in CLI loop:[/bold red] {str(e)}")
+        self._print(f"[bold red]Unexpected error in CLI loop:[/bold red] {str(e)}")
