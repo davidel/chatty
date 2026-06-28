@@ -19,7 +19,14 @@ chatty/
 │   └── chatty/             # Main source package
 │       ├── __init__.py     # Module initialization & top-level interface
 │       ├── __main__.py     # Command-line entrypoint wrapper
-│       ├── cli.py          # Primary application logic & ChatbotSession execution loop
+│       ├── cli.py          # Primary terminal interactive loop and CLI entrypoint
+│       ├── landlock.py     # Python helper to compile and wrap commands in Landlock
+│       ├── landlock_exec.c # C source for kernel-level Linux Landlock process isolation
+│       ├── logging_setup.py# Configures custom Google-style Logging (glog)
+│       ├── safety.py       # Command safety validation checks
+│       ├── session.py      # Core ChatbotSession logic and client management
+│       ├── tools.py        # Implementation of chatbot file and command tools
+│       ├── utils.py        # Helper utilities
 │       └── skills/         # Default skills / extensions directory
 │           └── greetings/  # Standard greetings plugin
 │               ├── SKILL.md  # System instructions guidelines for greeting users
@@ -27,6 +34,7 @@ chatty/
 └── tests/                  # Unittest suite
     ├── test_cutoff.py      # Validation of message token truncation, history pruning, and prompt caching
     ├── test_format.py      # Verification of json, yaml, and clang-format code styling tools
+    ├── test_landlock.py    # Unittests for the Landlock sandboxing mechanism on Linux
     ├── test_logging.py     # Checks for Google-style Logging (glog) file outputs
     ├── test_safety.py      # Ensures commands and processes are validated for sandboxing
     ├── test_sandbox_ops.py # Verification of file copy, move, delete, make-dir, search, and info tools
@@ -35,8 +43,12 @@ chatty/
 ```
 
 ### Main Code Components
-- [pyproject.toml](file:///tmp/chatty/pyproject.toml): Defines Python package requirements and targets [cli.py:main](file:///tmp/chatty/src/chatty/cli.py#L3034) as the execution binary entrypoint.
-- [cli.py](file:///tmp/chatty/src/chatty/cli.py): Contains the core [ChatbotSession](file:///tmp/chatty/src/chatty/cli.py#L1696) logic, input loops, slash commands, LLM provider clients, and tool execution routines.
+- [pyproject.toml](file:///tmp/chatty/pyproject.toml): Defines Python package requirements and targets [cli.py:main](file:///tmp/chatty/src/chatty/cli.py#L15) as the execution entrypoint.
+- [cli.py](file:///tmp/chatty/src/chatty/cli.py): Handles the terminal interactive loops, input prompts, rich console outputs, and slash commands.
+- [session.py](file:///tmp/chatty/src/chatty/session.py): Contains the core [ChatbotSession](file:///tmp/chatty/src/chatty/session.py#L84) logic, LLM provider clients, and execution loops.
+- [tools.py](file:///tmp/chatty/src/chatty/tools.py): Implements all sandboxed tools that can be invoked by the model.
+- [landlock.py](file:///tmp/chatty/src/chatty/landlock.py): Provides helper methods like [compile_landlock_binary](file:///tmp/chatty/src/chatty/landlock.py#L13) and [wrap_command_with_landlock](file:///tmp/chatty/src/chatty/landlock.py#L71) to wrap shell executions in a kernel-level sandbox.
+- [landlock_exec.c](file:///tmp/chatty/src/chatty/landlock_exec.c): Low-level C wrapper that sets up the Landlock ruleset and restricts process namespaces before executing commands.
 - [__init__.py](file:///tmp/chatty/src/chatty/__init__.py): Exposes the package API.
 - [__main__.py](file:///tmp/chatty/src/chatty/__main__.py): Enables execution using `python3 -m chatty`.
 
@@ -45,7 +57,7 @@ chatty/
 ## Features
 
 - **Multi-Provider Flexibility**: Switch seamlessly between local Ollama instances (offline models) and remote cloud-based OpenRouter endpoints.
-- **Sandboxed Operations**: Restricts file modifications and commands strictly to a sandbox root (default `./sandbox`).
+- **Sandboxed Operations**: Restricts file modifications and commands strictly to a sandbox root (default `./sandbox`), enhanced by Linux Landlock kernel-level isolation when running on Linux.
 - **Interactive UI**: Status bars showing the provider, active model, token counter, active loop count, and sandbox directory path. Autocomplete and multiline inputs are fully integrated.
 - **Slash Commands**: Modify settings dynamically mid-session, view tool metrics, or compress history to save tokens.
 - **Dynamic & Static Skills**: Dynamically import system prompts and guidelines from external files or directories via keyword/tag triggers or statically on initialization.
@@ -163,7 +175,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 
 ## Sandboxed File System Tools
 
-The chatbot uses function-calling to interface with the sandbox workspace. Directly invoking command-line file manipulation programs (e.g. `cat`, `grep`, `find`) in `run_command` is blocked by safety filters in [validate_command_safety](file:///tmp/chatty/src/chatty/session.py#L293). The agent is required to use the appropriate structured tools:
+The chatbot uses function-calling to interface with the sandbox workspace. Directly invoking command-line file manipulation programs (e.g. `cat`, `grep`, `find`) in `run_command` is blocked by safety filters in [validate_command_safety](file:///tmp/chatty/src/chatty/session.py#L523). The agent is required to use the appropriate structured tools:
 
 ### File Manipulation Tools
 - **`list_dir`**: Explores directories inside the sandbox. Truncates output above `--max-dir-items` to prevent token flooding.
@@ -199,6 +211,40 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`kill_process`**: Kills a running background subprocess.
 - **`sleep`**: Pauses execution for a specified number of seconds.
 - **`ask_question`**: Prompts the user with a question or selectable options to confirm decisions or resolve ambiguity.
+
+---
+
+## Sandbox & Landlock Security Architecture
+
+Chatty implements a layered security approach to sandbox tool executions and protect the host system.
+
+### 1. User-Space Safety Filtering
+Every command sent to `run_command` is statically parsed and verified by [validate_command_safety](file:///tmp/chatty/src/chatty/session.py#L523). It blocks common shell commands (such as `cat`, `grep`, `find`, `cp`, `mv`, `rm`, `ls`, etc.) to force the LLM to use structured sandbox API tools rather than arbitrary shell execution.
+
+### 2. Kernel-Level Linux Landlock Sandboxing
+On Linux (kernel version 5.13+), Chatty provides transparent, compile-on-demand process isolation using the Linux **Landlock LSM (Linux Security Module)**. 
+
+#### Compilation Flow
+When a chatbot session is initialized (see [ChatbotSession](file:///tmp/chatty/src/chatty/session.py#L84)), Chatty checks if:
+1. The operating system is Linux.
+2. The `--sandbox` option is enabled.
+3. GCC or Clang is installed.
+
+If these conditions are met, [compile_landlock_binary](file:///tmp/chatty/src/chatty/landlock.py#L13) builds the C-based wrapper helper [landlock_exec.c](file:///tmp/chatty/src/chatty/landlock_exec.c) into an executable binary `landlock_exec`. The binary is cached in the package directory or under the user's cache folder (`~/.cache/chatty/`) to avoid compilation overhead on subsequent startup.
+
+#### Restrictive Access Rules
+When executing a shell command via `run_command`, the execution argument is wrapped using [wrap_command_with_landlock](file:///tmp/chatty/src/chatty/landlock.py#L71), transforming it into:
+```bash
+landlock_exec --ro / --rw <sandbox_dir> --rw <temp_dir> -- /bin/sh -c "<command>"
+```
+The [landlock_exec](file:///tmp/chatty/src/chatty/landlock_exec.c) binary interacts with the Linux kernel to apply rules before spawning the target process:
+* **Read-Only Paths (`--ro`)**: Allows reading from `/` (the root filesystem). This enables reading standard system executables, Python runtimes, shared libraries (`/lib`, `/usr/lib`), and general command dependencies.
+* **Read-Write Paths (`--rw`)**: Specifically permits file writes, directory creation, and removals only inside the target `<sandbox_dir>` and the system's temporary directory. Any attempts to write elsewhere on the filesystem will fail with a `Permission denied` error.
+* **No New Privileges**: Configures `prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)` so that processes cannot escalate privileges.
+* **Kernel Enforcement**: Enforces the ruleset using the `landlock_restrict_self` system call, sealing the sandbox rules for the current process and all future sub-processes.
+
+#### Fallback Behavior
+If Landlock is unavailable (non-Linux systems, older kernels, or missing compilers), Chatty automatically falls back to standard user-space process execution limited by the working directory (`cwd`) configuration and command regex validations.
 
 ---
 
@@ -242,7 +288,7 @@ Skills are compiled from multiple locations:
 To operate efficiently over long conversations, Chatty implements two main context optimization mechanisms:
 
 ### 1. Smart History Pruning
-Before sending messages to the LLM, the [prune_history](file:///tmp/chatty/src/chatty/cli.py#L2245) method limits the total context:
+Before sending messages to the LLM, the [prune_history](file:///tmp/chatty/src/chatty/session.py#L1007) method limits the total context:
 - Old tool outputs exceeding `--max-history-tool-chars` characters are truncated in memory and annotated with a `[TRUNCATED]` note.
 - The latest messages (configured via `--history-keep-messages`) are kept fully raw to ensure the model retains precise local context.
 
@@ -257,7 +303,7 @@ This helps minimize token costs and reduces API response latencies.
 
 ## Logging & Diagnostics
 
-Chatty records session activity in a log file (default: `chatty.log`). The logging mechanism (configured in [setup_logging](file:///tmp/chatty/src/chatty/cli.py#L3021)) uses the [GlogFormatter](file:///tmp/chatty/src/chatty/cli.py#L2984) to output in standard Google logging syntax:
+Chatty records session activity in a log file (default: `chatty.log`). The logging mechanism (configured in [setup_logging](file:///tmp/chatty/src/chatty/logging_setup.py#L42)) uses the [GlogFormatter](file:///tmp/chatty/src/chatty/logging_setup.py#L5) to output in standard Google logging syntax:
 
 `Lyyyymmdd hh:mm:ss.uuuuuu process file:line] message`
 
