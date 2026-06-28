@@ -36,6 +36,7 @@ from chatty.utils import (
 )
 from chatty.tools import execute_tool, TOOLS_SCHEMA
 from chatty.safety import validate_command_safety
+from chatty.commands import COMMANDS
 
 logger = logging.getLogger("chatty")
 console = Console()
@@ -198,8 +199,7 @@ class ChatbotSession:
         logger.warning(f"Could not initialize Landlock support: {e}")
     
     # Initialize and register commands registry
-    self._commands = {}
-    self._register_commands()
+    self._commands = COMMANDS
     
     # Load active skills
     self.skills = {}
@@ -1382,255 +1382,6 @@ class ChatbotSession:
       console.print("[bold red]Reached maximum sequential tool loop executions. Breaking cycle.[/bold red]")
     self.current_loop = 0
 
-  def _register_commands(self):
-    self._commands["/exit"] = self._cmd_exit
-    self._commands["/quit"] = self._cmd_exit
-    self._commands["/clear"] = self._cmd_clear
-    self._commands["/reset"] = self._cmd_clear
-    self._commands["/compress"] = self._cmd_compress
-    self._commands["/help"] = self._cmd_help
-    self._commands["/status"] = self._cmd_status
-    self._commands["/tool_stats"] = self._cmd_tool_stats
-    self._commands["/provider"] = self._cmd_provider
-    self._commands["/model"] = self._cmd_model
-    self._commands["/sandbox"] = self._cmd_sandbox
-    self._commands["/context"] = self._cmd_context
-    self._commands["/loops"] = self._cmd_loops
-    self._commands["/api_key"] = self._cmd_api_key
-    self._commands["/multiline"] = self._cmd_multiline
-    self._commands["/system"] = self._cmd_system
-    self._commands["/load"] = self._cmd_load
-    self._commands["/save"] = self._cmd_save
-    self._commands["/save_session"] = self._cmd_save
-    self._commands["/load_session"] = self._cmd_load_session
-    self._commands["/tools"] = self._cmd_tools
-    self._commands["/history"] = self._cmd_history
-
-  def _cmd_exit(self, arg: str) -> bool:
-    self.cleanup_background_commands()
-    console.print("[bold green]Goodbye![/bold green]")
-    return False
-
-  def _cmd_clear(self, arg: str) -> bool:
-    self.messages.clear()
-    console.print("[bold green]Conversation history cleared.[/bold green]")
-    return True
-
-  def _cmd_compress(self, arg: str) -> bool:
-    self.compress_context()
-    return True
-
-  def _cmd_help(self, arg: str) -> bool:
-    self.show_help()
-    return True
-
-  def _cmd_status(self, arg: str) -> bool:
-    self.show_status()
-    return True
-
-  def _cmd_tool_stats(self, arg: str) -> bool:
-    self.show_tool_stats()
-    return True
-
-  def _cmd_provider(self, arg: str) -> bool:
-    if not arg:
-      console.print(f"Current provider: [bold cyan]{self.provider}[/bold cyan]")
-    elif arg in ("ollama", "openrouter"):
-      self.provider = arg
-      self.init_client()
-      console.print(f"Switched provider to: [bold green]{self.provider}[/bold green]")
-    else:
-      console.print("[bold red]Error: Provider must be 'ollama' or 'openrouter'.[/bold red]")
-    return True
-
-  def _cmd_model(self, arg: str) -> bool:
-    if not arg:
-      console.print(f"Current model: [bold cyan]{self.model}[/bold cyan]")
-    else:
-      self.model = arg
-      console.print(f"Model updated to: [bold green]{self.model}[/bold green]")
-    return True
-
-  def _cmd_sandbox(self, arg: str) -> bool:
-    if not arg:
-      console.print(f"Current sandbox path: [bold cyan]{self.sandbox}[/bold cyan]")
-    else:
-      abs_p = os.path.abspath(arg)
-      os.makedirs(abs_p, exist_ok=True)
-      self.sandbox = abs_p
-      self.load_skills()
-      console.print(f"Sandbox updated to: [bold green]{self.sandbox}[/bold green]")
-    return True
-
-  def _cmd_context(self, arg: str) -> bool:
-    if not arg:
-      console.print(f"Current context size: [bold cyan]{self.context_size}[/bold cyan] tokens")
-    else:
-      try:
-        self.context_size = int(arg)
-        console.print(f"Context size updated to: [bold green]{self.context_size}[/bold green] tokens")
-      except ValueError:
-        console.print("[bold red]Error: Context size must be an integer.[/bold red]")
-    return True
-
-  def _cmd_loops(self, arg: str) -> bool:
-    if not arg:
-      console.print(f"Current max loop limit: [bold cyan]{self.max_loops}[/bold cyan]")
-    else:
-      try:
-        self.max_loops = int(arg)
-        console.print(f"Max loop limit updated to: [bold green]{self.max_loops}[/bold green]")
-      except ValueError:
-        console.print("[bold red]Error: Max loops must be an integer.[/bold red]")
-    return True
-
-  def _cmd_api_key(self, arg: str) -> bool:
-    if not arg:
-      console.print("API Key: [dim](hidden)[/dim]")
-    else:
-      self.api_key = arg
-      self.init_client()
-      console.print("[bold green]API key updated successfully.[/bold green]")
-    return True
-
-  def _cmd_multiline(self, arg: str) -> bool:
-    self.multiline_mode = not self.multiline_mode
-    status = "enabled" if self.multiline_mode else "disabled"
-    console.print(f"Multiline mode [bold cyan]{status}[/bold cyan].")
-    if self.multiline_mode:
-      console.print("[dim]Use Alt+Enter or Esc+Enter to submit message.[/dim]")
-    return True
-
-  def _cmd_system(self, arg: str) -> bool:
-    if not arg:
-      console.print(Panel(self.system_prompt, title="Current System Prompt", border_style="cyan"))
-    else:
-      self.system_prompt = arg
-      console.print("[bold green]System prompt updated.[/bold green]")
-    return True
-
-  def _cmd_load(self, arg: str) -> bool:
-    if not arg:
-      console.print("[bold red]Error: Usage: /load <file_path> [append|replace][/bold red]")
-    else:
-      parts = arg.strip().rsplit(maxsplit=1)
-      opt = "append"
-      file_path = arg.strip()
-      if len(parts) == 2 and parts[1].lower() in ("append", "replace"):
-        file_path = parts[0].strip()
-        opt = parts[1].lower()
-      file_path = os.path.expanduser(file_path)
-      try:
-        loaded_prompt = load_system_prompt_from_file(file_path)
-        if opt == "replace":
-          self.system_prompt = loaded_prompt
-          console.print(f"[bold green]System prompt replaced with content from {file_path}[/bold green]")
-        else:
-          self.system_prompt += f"\n\n{loaded_prompt}"
-          console.print(f"[bold green]Appended prompt content from {file_path} to system prompt.[/bold green]")
-      except Exception as e:
-        console.print(f"[bold red]Error loading prompt file: {str(e)}[/bold red]")
-    return True
-
-  def _cmd_save(self, arg: str) -> bool:
-    if not arg:
-      console.print("[bold red]Error: Usage: /save_session <file_path>[/bold red]")
-    else:
-      file_path = os.path.expanduser(arg.strip())
-      if not os.path.isabs(file_path):
-        file_path = os.path.join(self.sandbox, file_path)
-      dir_name = os.path.dirname(file_path)
-      if dir_name:
-        os.makedirs(dir_name, exist_ok=True)
-      session_data = {
-        "provider": self.provider,
-        "model": self.model,
-        "context_size": self.context_size,
-        "sandbox": self.sandbox,
-        "max_loops": self.max_loops,
-        "system_prompt": self.system_prompt,
-        "messages": self.messages,
-        "tool_calls_count": self.tool_calls_count,
-        "external_binaries_count": self.external_binaries_count,
-        "external_binaries_breakdown": self.external_binaries_breakdown,
-      }
-      if self.api_key:
-        session_data["api_key"] = self.api_key
-      if self.url:
-        session_data["url"] = self.url
-      try:
-        with open(file_path, "w", encoding="utf-8") as f:
-          json.dump(session_data, f, indent=2, default=str)
-        console.print(f"[bold green]Session saved successfully to {file_path}[/bold green]")
-      except Exception as e:
-        console.print(f"[bold red]Error saving session: {str(e)}[/bold red]")
-    return True
-
-  def _cmd_load_session(self, arg: str) -> bool:
-    if not arg:
-      console.print("[bold red]Error: Usage: /load_session <file_path>[/bold red]")
-    else:
-      file_path = os.path.expanduser(arg.strip())
-      if not os.path.isabs(file_path):
-        file_path = os.path.join(self.sandbox, file_path)
-      try:
-        with open(file_path, "r", encoding="utf-8") as f:
-          session_data = json.load(f)
-        if "provider" in session_data:
-          self.provider = session_data["provider"]
-        if "model" in session_data:
-          self.model = session_data["model"]
-        if "context_size" in session_data:
-          self.context_size = session_data["context_size"]
-        if "sandbox" in session_data:
-          sandbox_path = os.path.abspath(session_data["sandbox"])
-          if os.path.exists(sandbox_path):
-            self.sandbox = sandbox_path
-        if "max_loops" in session_data:
-          self.max_loops = session_data["max_loops"]
-        if "system_prompt" in session_data:
-          self.system_prompt = session_data["system_prompt"]
-        if "messages" in session_data:
-          self.messages = session_data["messages"]
-        if "tool_calls_count" in session_data:
-          self.tool_calls_count = session_data["tool_calls_count"]
-        if "external_binaries_count" in session_data:
-          self.external_binaries_count = session_data["external_binaries_count"]
-        if "external_binaries_breakdown" in session_data:
-          self.external_binaries_breakdown = session_data["external_binaries_breakdown"]
-        if "api_key" in session_data:
-          self.api_key = session_data["api_key"]
-        if "url" in session_data:
-          self.url = session_data["url"]
-        self.init_client()
-        self.load_skills()
-        console.print(f"[bold green]Session loaded successfully from {file_path}[/bold green]")
-      except Exception as e:
-        console.print(f"[bold red]Error loading session: {str(e)}[/bold red]")
-    return True
-
-  def _cmd_tools(self, arg: str) -> bool:
-    self.show_tools()
-    return True
-
-  def _cmd_history(self, arg: str) -> bool:
-    console.print("[bold cyan]Conversation History (estimated tokens):[/bold cyan]")
-    for idx, msg in enumerate(self.messages):
-      role = msg["role"]
-      content = msg.get("content") or ""
-      reasoning = msg.get("reasoning_content") or msg.get("reasoning")
-      display_text = ""
-      if reasoning:
-        display_text += f"[Thinking: {reasoning[:60]}...]\n"
-      display_text += content
-      if "tool_calls" in msg:
-        display_text += f"\n[Calls tools: {[tc['function']['name'] for tc in msg['tool_calls']]}]"
-      tok = count_tokens(content)
-      if reasoning:
-        tok += count_tokens(reasoning)
-      console.print(f" {idx + 1}. [bold]{role}[/bold]: {display_text[:80].replace('\n', ' ')}... ({tok} tokens)")
-    return True
-
   def handle_command(self, cmd_line: str) -> bool:
     """
     Parses and handles slash commands.
@@ -1642,7 +1393,7 @@ class ChatbotSession:
     
     handler = self._commands.get(cmd)
     if handler:
-      return handler(arg)
+      return handler(self, arg)
     
     console.print(f"[bold red]Unknown command:[/bold red] {cmd}. Type [cyan]/help[/cyan] for options.")
     return True
