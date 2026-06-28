@@ -456,5 +456,56 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("task_3", self.session.background_commands)
       self.assertIn("task_4", self.session.background_commands)
 
+
+from chatty.safety import validate_command_safety
+
+class TestSafetyModuleAndDelegation(unittest.TestCase):
+  def test_safety_module_direct(self):
+    # Test safety check directly from safety module
+    err = validate_command_safety("cat /etc/passwd")
+    self.assertIsNotNone(err)
+    self.assertIn("read_file", err)
+
+    err = validate_command_safety("echo 'hello'")
+    self.assertIsNone(err)
+
+  def test_chatbot_session_attribute_delegation(self):
+    # Test dynamic configuration getter / setter delegation
+    temp_dir = tempfile.mkdtemp()
+    try:
+      session = ChatbotSession(
+        provider="openrouter",
+        model="google/gemini-2.5-flash",
+        context_size=4096,
+        sandbox=temp_dir
+      )
+      self.assertEqual(session.provider, "openrouter")
+      self.assertEqual(session.model, "google/gemini-2.5-flash")
+      self.assertEqual(session.context_size, 4096)
+      
+      # Change attributes
+      session.provider = "ollama"
+      session.model = "llama3"
+      session.context_size = 8192
+      
+      # Verify changes propagate to config object
+      self.assertEqual(session.config.provider, "ollama")
+      self.assertEqual(session.config.model, "llama3")
+      self.assertEqual(session.config.context_size, 8192)
+      
+      # Verify changes reflect back on properties
+      self.assertEqual(session.provider, "ollama")
+      self.assertEqual(session.model, "llama3")
+      self.assertEqual(session.context_size, 8192)
+
+      # Non-existent attribute lookup
+      with self.assertRaises(AttributeError):
+        _ = session.non_existent_attribute_123
+
+    finally:
+      shutil.rmtree(temp_dir)
+
+
 if __name__ == "__main__":
   unittest.main()
+

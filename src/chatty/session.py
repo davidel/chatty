@@ -35,6 +35,7 @@ from chatty.utils import (
   sanitize_tool_output
 )
 from chatty.tools import execute_tool, TOOLS_SCHEMA
+from chatty.safety import validate_command_safety
 
 logger = logging.getLogger("chatty")
 console = Console()
@@ -205,141 +206,21 @@ class ChatbotSession:
     self.load_skills()
     logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}")
 
-  @property
-  def provider(self) -> str:
-    return self.config.provider
+  def __getattr__(self, name: str) -> Any:
+    if name == "config":
+      raise AttributeError("config not initialized yet")
+    config = self.__dict__.get("config")
+    if config is not None and hasattr(config, name):
+      return getattr(config, name)
+    raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
-  @provider.setter
-  def provider(self, val: str):
-    self.config.provider = val
+  def __setattr__(self, name: str, value: Any):
+    config = self.__dict__.get("config")
+    if name != "config" and config is not None and hasattr(config, name):
+      setattr(config, name, value)
+    else:
+      super().__setattr__(name, value)
 
-  @property
-  def model(self) -> str:
-    return self.config.model
-
-  @model.setter
-  def model(self, val: str):
-    self.config.model = val
-
-  @property
-  def context_size(self) -> int:
-    return self.config.context_size
-
-  @context_size.setter
-  def context_size(self, val: int):
-    self.config.context_size = val
-
-  @property
-  def sandbox(self) -> str:
-    return self.config.sandbox
-
-  @sandbox.setter
-  def sandbox(self, val: str):
-    self.config.sandbox = val
-
-  @property
-  def api_key(self) -> Optional[str]:
-    return self.config.api_key
-
-  @api_key.setter
-  def api_key(self, val: Optional[str]):
-    self.config.api_key = val
-
-  @property
-  def url(self) -> Optional[str]:
-    return self.config.url
-
-  @url.setter
-  def url(self, val: Optional[str]):
-    self.config.url = val
-
-  @property
-  def max_loops(self) -> int:
-    return self.config.max_loops
-
-  @max_loops.setter
-  def max_loops(self, val: int):
-    self.config.max_loops = val
-
-  @property
-  def skills_paths(self) -> List[str]:
-    return self.config.skills_paths
-
-  @skills_paths.setter
-  def skills_paths(self, val: List[str]):
-    self.config.skills_paths = val
-
-  @property
-  def max_read_chars(self) -> int:
-    return self.config.max_read_chars
-
-  @max_read_chars.setter
-  def max_read_chars(self, val: int):
-    self.config.max_read_chars = val
-
-  @property
-  def max_grep_results(self) -> int:
-    return self.config.max_grep_results
-
-  @max_grep_results.setter
-  def max_grep_results(self, val: int):
-    self.config.max_grep_results = val
-
-  @property
-  def max_command_chars(self) -> int:
-    return self.config.max_command_chars
-
-  @max_command_chars.setter
-  def max_command_chars(self, val: int):
-    self.config.max_command_chars = val
-
-  @property
-  def max_history_tool_chars(self) -> int:
-    return self.config.max_history_tool_chars
-
-  @max_history_tool_chars.setter
-  def max_history_tool_chars(self, val: int):
-    self.config.max_history_tool_chars = val
-
-  @property
-  def history_keep_messages(self) -> int:
-    return self.config.history_keep_messages
-
-  @history_keep_messages.setter
-  def history_keep_messages(self, val: int):
-    self.config.history_keep_messages = val
-
-  @property
-  def max_url_chars(self) -> int:
-    return self.config.max_url_chars
-
-  @max_url_chars.setter
-  def max_url_chars(self, val: int):
-    self.config.max_url_chars = val
-
-  @property
-  def max_dir_items(self) -> int:
-    return self.config.max_dir_items
-
-  @max_dir_items.setter
-  def max_dir_items(self, val: int):
-    self.config.max_dir_items = val
-
-  @property
-  def static_skills(self) -> bool:
-    return self.config.static_skills
-
-  @static_skills.setter
-  def static_skills(self, val: bool):
-    self.config.static_skills = val
-
-  @property
-  def prompt_caching(self) -> bool:
-    return self.config.prompt_caching
-
-  @prompt_caching.setter
-  def prompt_caching(self, val: bool):
-    self.config.prompt_caching = val
 
   def load_skills(self):
     """Scans all configured skills directories and loads/merges valid skill definitions."""
@@ -522,145 +403,7 @@ class ChatbotSession:
 
   def validate_command_safety(self, command: str) -> Optional[str]:
     """Validates that the shell command does not bypass dedicated tools."""
-    import shlex
-    
-    def check_cmd(cmd_str: str) -> Optional[str]:
-      cmd_str = cmd_str.strip()
-      if not cmd_str:
-        return None
-        
-      try:
-        tokens = shlex.split(cmd_str)
-      except ValueError:
-        tokens = cmd_str.split()
-        
-      sequencers = {'&&', '||', ';', '&', '(', '{', ')', '}'}
-      is_cmd_token = True
-      pipe_count = 0
-      
-      for token in tokens:
-        if is_cmd_token:
-          clean_token = os.path.basename(token.strip().lower())
-          
-          if clean_token in {'grep', 'egrep', 'fgrep', 'rgrep'}:
-            if pipe_count == 0:
-              return (
-                f"Error: Using '{token}' directly in run_command is prohibited to search files. "
-                "Please use the dedicated 'search_grep' tool instead."
-              )
-            else:
-              return (
-                f"Error: Using '{token}' directly in run_command is prohibited to filter output. "
-                "Please use the 'output_filter' parameter of run_command instead (which is also supported by its wait-for-termination counterpart, check_background_command)."
-              )
-          elif clean_token == 'find':
-            return (
-              f"Error: Using 'find' in run_command is prohibited to locate files. "
-              "Please use the dedicated 'locate_files' tool instead."
-            )
-          elif clean_token in {'kill', 'pkill', 'killall'}:
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to terminate processes. "
-              "Please use the dedicated 'kill_process' tool instead."
-            )
-          elif clean_token in {'cat', 'less', 'more'}:
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to view files. "
-              "Please use the dedicated 'read_file' tool instead."
-            )
-          elif clean_token in {'head', 'tail'}:
-            if pipe_count == 0:
-              return (
-                f"Error: Using '{token}' in run_command is prohibited to inspect files. "
-                "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
-              )
-            else:
-              return (
-                f"Error: Using '{token}' directly in run_command is prohibited to filter output. "
-                "Please use the 'head_lines' or 'tail_lines' parameter of run_command instead."
-              )
-          elif clean_token == 'awk':
-            if pipe_count == 0:
-              return (
-                f"Error: Using 'awk' in run_command is prohibited to inspect files. "
-                "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
-              )
-            else:
-              return (
-                f"Error: Using 'awk' directly in run_command is prohibited to filter output. "
-                "Please use the 'output_filter', 'head_lines', or 'tail_lines' parameters of run_command instead."
-              )
-          elif clean_token == 'sed':
-            return (
-              "Error: Using 'sed' in run_command is prohibited. "
-              "Please use the dedicated 'multi_patch' tool (for multiple exact replacements), 'edit_lines' (for a single line number range), or 'multi_edit_lines' tool instead."
-            )
-          elif clean_token == 'sleep':
-            return (
-              "Error: Using 'sleep' in run_command is prohibited to pause execution. "
-              "Please use the dedicated 'sleep' tool instead."
-            )
-          elif clean_token == 'wc':
-            if pipe_count == 0:
-              return (
-                "Error: Using 'wc' in run_command is prohibited to count lines, words, or bytes in files. "
-                "Please use the dedicated 'get_file_info' tool instead."
-              )
-            else:
-              return (
-                "Error: Using 'wc' directly in run_command is prohibited to count lines. "
-                "Please use dedicated tools like 'get_file_info' or 'locate_files' to check file/directory information instead."
-              )
-          elif clean_token == 'cp':
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to copy files or directories. "
-              "Please use the dedicated 'copy_file' tool instead."
-            )
-          elif clean_token == 'mv':
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to move or rename files or directories. "
-              "Please use the dedicated 'move_file' tool instead."
-            )
-          elif clean_token == 'rm':
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to delete files or directories. "
-              "Please use the dedicated 'delete_file' (for files) or 'delete_directory' (for directories) tool instead."
-            )
-          elif clean_token == 'rmdir':
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to delete directories. "
-              "Please use the dedicated 'delete_directory' tool instead."
-            )
-          elif clean_token == 'mkdir':
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to create directories. "
-              "Please use the dedicated 'make_directory' tool instead."
-            )
-          elif clean_token in {'ls', 'dir'}:
-            return (
-              f"Error: Using '{token}' in run_command is prohibited to list directory contents. "
-              "Please use the dedicated 'list_dir' tool instead."
-            )
-        
-        if token.strip() in {'|', '|&'}:
-          is_cmd_token = True
-          pipe_count += 1
-        elif token.strip() in sequencers:
-          is_cmd_token = True
-          pipe_count = 0
-        else:
-          is_cmd_token = False
-          
-      subshell_patterns = re.findall(r'\$\((.*?)\)|`(.*?)`', cmd_str)
-      for match in subshell_patterns:
-        for group in match:
-          if group:
-            err = check_cmd(group)
-            if err:
-              return err
-      return None
-
-    return check_cmd(command)
+    return validate_command_safety(command)
 
   def _apply_output_filters(
     self,

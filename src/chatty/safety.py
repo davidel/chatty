@@ -1,5 +1,7 @@
 import os
-from typing import List
+import re
+import shlex
+from typing import List, Optional
 
 
 def get_safe_path(sandbox_dir: str, target_path: str) -> str:
@@ -94,3 +96,145 @@ def count_lines(file_path: str) -> int:
   except Exception:
     pass
   return count
+
+
+def validate_command_safety(command: str) -> Optional[str]:
+  """Validates that the shell command does not bypass dedicated tools."""
+  
+  def check_cmd(cmd_str: str) -> Optional[str]:
+    cmd_str = cmd_str.strip()
+    if not cmd_str:
+      return None
+      
+    try:
+      tokens = shlex.split(cmd_str)
+    except ValueError:
+      tokens = cmd_str.split()
+      
+    sequencers = {'&&', '||', ';', '&', '(', '{', ')', '}'}
+    is_cmd_token = True
+    pipe_count = 0
+    
+    for token in tokens:
+      if is_cmd_token:
+        clean_token = os.path.basename(token.strip().lower())
+        
+        if clean_token in {'grep', 'egrep', 'fgrep', 'rgrep'}:
+          if pipe_count == 0:
+            return (
+              f"Error: Using '{token}' directly in run_command is prohibited to search files. "
+              "Please use the dedicated 'search_grep' tool instead."
+            )
+          else:
+            return (
+              f"Error: Using '{token}' directly in run_command is prohibited to filter output. "
+              "Please use the 'output_filter' parameter of run_command instead (which is also supported by its wait-for-termination counterpart, check_background_command)."
+            )
+        elif clean_token == 'find':
+          return (
+            f"Error: Using 'find' in run_command is prohibited to locate files. "
+            "Please use the dedicated 'locate_files' tool instead."
+          )
+        elif clean_token in {'kill', 'pkill', 'killall'}:
+          return (
+            f"Error: Using '{token}' in run_command is prohibited to terminate processes. "
+            "Please use the dedicated 'kill_process' tool instead."
+          )
+        elif clean_token in {'cat', 'less', 'more'}:
+          return (
+            f"Error: Using '{token}' in run_command is prohibited to view files. "
+            "Please use the dedicated 'read_file' tool instead."
+          )
+        elif clean_token in {'head', 'tail'}:
+          if pipe_count == 0:
+            return (
+              f"Error: Using '{token}' in run_command is prohibited to inspect files. "
+              "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
+            )
+          else:
+            return (
+              f"Error: Using '{token}' directly in run_command is prohibited to filter output. "
+              "Please use the 'head_lines' or 'tail_lines' parameter of run_command instead."
+            )
+        elif clean_token == 'awk':
+          if pipe_count == 0:
+            return (
+              f"Error: Using 'awk' in run_command is prohibited to inspect files. "
+              "Please use the dedicated 'read_file' tool with start_line and end_line parameters."
+            )
+          else:
+            return (
+              f"Error: Using 'awk' directly in run_command is prohibited to filter output. "
+              "Please use the 'output_filter', 'head_lines', or 'tail_lines' parameters of run_command instead."
+            )
+        elif clean_token == 'sed':
+          return (
+            "Error: Using 'sed' in run_command is prohibited. "
+            "Please use the dedicated 'multi_patch' tool (for multiple exact replacements), 'edit_lines' (for a single line number range), or 'multi_edit_lines' tool instead."
+          )
+        elif clean_token == 'sleep':
+          return (
+            "Error: Using 'sleep' in run_command is prohibited to pause execution. "
+            "Please use the dedicated 'sleep' tool instead."
+          )
+        elif clean_token == 'wc':
+          if pipe_count == 0:
+            return (
+              "Error: Using 'wc' in run_command is prohibited to count lines, words, or bytes in files. "
+              "Please use the dedicated 'get_file_info' tool instead."
+            )
+          else:
+            return (
+              "Error: Using 'wc' directly in run_command is prohibited to count lines. "
+              "Please use dedicated tools like 'get_file_info' or 'locate_files' to check file/directory information instead."
+            )
+        elif clean_token == 'cp':
+          return (
+            f"Error: Using '{token}' in run_command is prohibited to copy files or directories. "
+            "Please use the dedicated 'copy_file' tool instead."
+          )
+        elif clean_token == 'mv':
+          return (
+            f"Error: Using '{token}' in run_command is prohibited to move or rename files or directories. "
+            "Please use the dedicated 'move_file' tool instead."
+          )
+        elif clean_token == 'rm':
+          return (
+            f"Error: Using '{token}' in run_command is prohibited to delete files or directories. "
+            "Please use the dedicated 'delete_file' (for files) or 'delete_directory' (for directories) tool instead."
+          )
+        elif clean_token == 'rmdir':
+          return (
+            f"Error: Using '{token}' in run_command is prohibited to delete directories. "
+            "Please use the dedicated 'delete_directory' tool instead."
+          )
+        elif clean_token == 'mkdir':
+          return (
+            f"Error: Using '{token}' in run_command is prohibited to create directories. "
+            "Please use the dedicated 'make_directory' tool instead."
+          )
+        elif clean_token in {'ls', 'dir'}:
+          return (
+            f"Error: Using '{token}' in run_command is prohibited to list directory contents. "
+            "Please use the dedicated 'list_dir' tool instead."
+          )
+      
+      if token.strip() in {'|', '|&'}:
+        is_cmd_token = True
+        pipe_count += 1
+      elif token.strip() in sequencers:
+        is_cmd_token = True
+        pipe_count = 0
+      else:
+        is_cmd_token = False
+        
+    subshell_patterns = re.findall(r'\$\((.*?)\)|`(.*?)`', cmd_str)
+    for match in subshell_patterns:
+      for group in match:
+        if group:
+          err = check_cmd(group)
+          if err:
+            return err
+    return None
+
+  return check_cmd(command)
