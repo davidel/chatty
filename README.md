@@ -1,8 +1,6 @@
 # Chatty
 
-<p align="center">
-  <img src="assets/logo.svg" alt="Chatty Logo" width="600">
-</p>
+![Chatty](https://raw.githubusercontent.com/davidel/chatty/main/assets/LOGO.png)
 
 An advanced AI Chatbot CLI with a rich terminal interface, sandboxed file system tools, multi-provider LLM support (Ollama and OpenRouter), syntax verification, dynamic skills, and cost/token optimization.
 
