@@ -88,8 +88,20 @@ int main(int argc, char** argv) {
         return 1;
       }
 
+      struct stat statbuf;
+      if (fstat(fd, &statbuf) < 0) {
+        fprintf(stderr, "Failed to stat RO path: %s\n", argv[i]);
+        close(fd);
+        return 1;
+      }
+
+      __u64 allowed = ACCESS_RO;
+      if (!S_ISDIR(statbuf.st_mode)) {
+        allowed &= (LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_EXECUTE);
+      }
+
       struct landlock_path_beneath_attr path_beneath = {
-          .allowed_access = ACCESS_RO, .parent_fd = fd};
+          .allowed_access = allowed, .parent_fd = fd};
       if (landlock_add_rule(ruleset_fd, LANDLOCK_RULE_PATH_BENEATH,
                             &path_beneath, 0)) {
         perror("failed to add RO rule");
@@ -109,8 +121,21 @@ int main(int argc, char** argv) {
         return 1;
       }
 
+      struct stat statbuf;
+      if (fstat(fd, &statbuf) < 0) {
+        fprintf(stderr, "Failed to stat RW path: %s\n", argv[i]);
+        close(fd);
+        return 1;
+      }
+
+      __u64 allowed = ACCESS_RW;
+      if (!S_ISDIR(statbuf.st_mode)) {
+        allowed &= (LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_EXECUTE |
+                    LANDLOCK_ACCESS_FS_WRITE_FILE);
+      }
+
       struct landlock_path_beneath_attr path_beneath = {
-          .allowed_access = ACCESS_RW, .parent_fd = fd};
+          .allowed_access = allowed, .parent_fd = fd};
       if (landlock_add_rule(ruleset_fd, LANDLOCK_RULE_PATH_BENEATH,
                             &path_beneath, 0)) {
         perror("failed to add RW rule");

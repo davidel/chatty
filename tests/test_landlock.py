@@ -123,3 +123,20 @@ class TestLandlock(unittest.TestCase):
     self.assertIn("Permission denied", res_write_outside)
     self.assertFalse(os.path.exists(test_file_outside))
 
+  def test_dev_null_write(self):
+    if sys.platform != "linux":
+      self.skipTest("Landlock is only supported on Linux")
+
+    binary_path = compile_landlock_binary()
+    self.assertIsNotNone(binary_path)
+
+    cmd_args = wrap_command_with_landlock(
+      binary_path,
+      self.sandbox_dir,
+      "echo 'hello' > /dev/null"
+    )
+
+    proc = subprocess.run(cmd_args, capture_output=True, text=True)
+    self.assertEqual(proc.returncode, 0, f"Failed to write to /dev/null: {proc.stderr}")
+
+

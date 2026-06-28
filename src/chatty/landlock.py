@@ -70,6 +70,8 @@ def compile_landlock_binary() -> Optional[str]:
 
 def wrap_command_with_landlock(binary_path: str, sandbox_dir: str, command: str) -> List[str]:
   rw_paths = [sandbox_dir, tempfile.gettempdir()]
+  if os.path.exists("/dev/null"):
+    rw_paths.append("/dev/null")
   # Remove duplicate paths and resolve them
   rw_paths = list(dict.fromkeys(os.path.realpath(p) for p in rw_paths))
 
