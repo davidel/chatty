@@ -46,6 +46,72 @@ logger = logging.getLogger("chatty")
 console = Console()
 
 
+class CachedList(list):
+  """A list subclass that triggers a callback when mutated in place."""
+
+  def __init__(self, *args, on_change=None, **kwargs):
+    if len(args) == 1 and isinstance(args[0], list) and not kwargs:
+      super().__init__(args[0])
+    else:
+      super().__init__(*args, **kwargs)
+    self.on_change = on_change
+
+  def _trigger(self):
+    if self.on_change:
+      self.on_change()
+
+  def append(self, item):
+    super().append(item)
+    self._trigger()
+
+  def extend(self, iterable):
+    super().extend(iterable)
+    self._trigger()
+
+  def insert(self, index, item):
+    super().insert(index, item)
+    self._trigger()
+
+  def remove(self, item):
+    super().remove(item)
+    self._trigger()
+
+  def pop(self, index=-1):
+    val = super().pop(index)
+    self._trigger()
+    return val
+
+  def clear(self):
+    super().clear()
+    self._trigger()
+
+  def sort(self, *args, **kwargs):
+    super().sort(*args, **kwargs)
+    self._trigger()
+
+  def reverse(self):
+    super().reverse()
+    self._trigger()
+
+  def __setitem__(self, key, value):
+    super().__setitem__(key, value)
+    self._trigger()
+
+  def __delitem__(self, key):
+    super().__delitem__(key)
+    self._trigger()
+
+  def __iadd__(self, other):
+    res = super().__iadd__(other)
+    self._trigger()
+    return res
+
+  def __imul__(self, other):
+    res = super().__imul__(other)
+    self._trigger()
+    return res
+
+
 @dataclass
 class SessionConfig:
   provider: str
@@ -213,7 +279,8 @@ class ChatbotSession:
     self._finalizer = weakref.finalize(self, ChatbotSession._cleanup_resources, self.background_commands)
     
     # Internal state
-    self.messages: List[Dict[str, Any]] = []
+    self._cached_history_tokens = None
+    self._messages = CachedList([], on_change=self._invalidate_token_cache)
     self.current_loop = 0
     default_prompt = (
       "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
@@ -260,10 +327,34 @@ class ChatbotSession:
     # Initialize and register commands registry
     self._commands = COMMANDS
     
-    # Load active skills
-    self.skills = {}
     self.load_skills()
     logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}")
+
+  @property
+  def messages(self) -> List[Dict[str, Any]]:
+    return self._messages
+
+  @messages.setter
+  def messages(self, value: List[Dict[str, Any]]):
+    self._messages = CachedList(value, on_change=self._invalidate_token_cache)
+    self._invalidate_token_cache()
+
+  def _invalidate_token_cache(self):
+    self._cached_history_tokens = None
+
+  def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
+    total_tokens = 0
+    if messages:
+      sys_msg = messages[0]
+      total_tokens += count_tokens(sys_msg.get("content") or "")
+      for msg in messages[1:]:
+        content = msg.get("content") or ""
+        if msg.get("tool_calls"):
+          content += json.dumps(msg["tool_calls"])
+        if msg.get("tool_call_id"):
+          content += msg["tool_call_id"]
+        total_tokens += count_tokens(content) + 12
+    return total_tokens
 
   def _print(self, *args, **kwargs):
     if not self.headless:
@@ -1173,6 +1264,9 @@ class ChatbotSession:
             "content": "Please continue the task using the tool output above."
           })
         
+        # Cache token count for the status bar during streaming
+        self._cached_history_tokens = self._calculate_tokens_for_messages(active_messages)
+
         # Start LLM stream call
         tool_calls_accumulated = []
         content_accumulated = ""
@@ -1218,6 +1312,12 @@ class ChatbotSession:
             chunk_id = None
             resp_model = None
             sys_fp = None
+            last_extra_fields = {
+              "reasoning": None,
+              "reasoning_content": None,
+              "reasoning_details": None,
+              "thought_signature": None
+            }
             for chunk in stream:
               # Capture usage if present
               if hasattr(chunk, "usage") and chunk.usage:
@@ -1254,12 +1354,22 @@ class ChatbotSession:
                   
                 if val is not None:
                   has_new_reasoning = True
-                  if extra_fields_accumulated[field] is None:
-                    extra_fields_accumulated[field] = val
-                  elif isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
+                  
+                  # Determine if we should append or replace to prevent duplicate metadata / emoji bloat
+                  should_append = False
+                  if field in ("reasoning", "reasoning_content"):
+                    if isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
+                      is_duplicate = (val == last_extra_fields[field])
+                      is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
+                      if not (is_duplicate and is_metadata_like):
+                        should_append = True
+                  
+                  if should_append:
                     extra_fields_accumulated[field] += val
                   else:
                     extra_fields_accumulated[field] = val
+                    
+                  last_extra_fields[field] = val
               
               # Process streaming content
               if delta.content:
@@ -1685,18 +1795,10 @@ class ChatbotSession:
 
   def get_rich_status_bar(self):
     """Returns a Rich Table rendering the status bar."""
-    total_tokens = 0
-    active_messages = self.prune_history(log=False)
-    if active_messages:
-      sys_msg = active_messages[0]
-      total_tokens += count_tokens(sys_msg.get("content") or "")
-      for msg in active_messages[1:]:
-        content = msg.get("content") or ""
-        if msg.get("tool_calls"):
-          content += json.dumps(msg["tool_calls"])
-        if msg.get("tool_call_id"):
-          content += msg["tool_call_id"]
-        total_tokens += count_tokens(content) + 12
+    if not hasattr(self, "_cached_history_tokens") or self._cached_history_tokens is None:
+      self._cached_history_tokens = self._calculate_tokens_for_messages(self.prune_history(log=False))
+    
+    total_tokens = self._cached_history_tokens
 
     table = Table(
       show_header=False,
