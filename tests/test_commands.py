@@ -92,5 +92,40 @@ class TestCommandsRegistry(unittest.TestCase):
     self.assertEqual(repair_json('{"key": "val",}'), '{"key": "val"}')
 
 
+  def test_chatty_completer(self):
+    from prompt_toolkit.document import Document
+    from chatty.session import ChattyCompleter
+
+    completer = ChattyCompleter(["/exit", "/help", "/load"])
+    
+    # 1. Test completing a prefix of a slash command
+    completions = list(completer.get_completions(Document("/he"), None))
+    self.assertEqual(len(completions), 1)
+    self.assertEqual(completions[0].text, "/help")
+    self.assertEqual(completions[0].start_position, -3)
+
+    # 2. Test completing all slash commands when typing just slash
+    completions_all = list(completer.get_completions(Document("/"), None))
+    self.assertEqual(len(completions_all), 3)
+    self.assertEqual([c.text for c in completions_all], ["/exit", "/help", "/load"])
+
+    # 3. Test that path completion is invoked for '/load '
+    # Create a dummy file in the sandbox directory (which is the current working directory)
+    dummy_file = os.path.join(self.sandbox_dir, "test_file_completion.txt")
+    with open(dummy_file, "w") as f:
+      f.write("")
+
+    completions_path = list(completer.get_completions(Document("/load test_file_comp"), None))
+    self.assertTrue(any(c.display_text == "test_file_completion.txt" for c in completions_path))
+
+    # 4. Test inline path autocompletion in general sentences
+    completions_general = list(completer.get_completions(Document("look at test_file_comp"), None))
+    self.assertTrue(any(c.display_text == "test_file_completion.txt" for c in completions_general))
+
+    # 5. Test that inline path autocompletion is not triggered for non-path-like words
+    completions_normal = list(completer.get_completions(Document("look at non_existent_file"), None))
+    self.assertEqual(len(completions_normal), 0)
+
+
 if __name__ == "__main__":
   unittest.main()

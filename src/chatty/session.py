@@ -25,6 +25,8 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
+from prompt_toolkit.completion import Completer, Completion, PathCompleter
+from prompt_toolkit.document import Document
 
 from chatty.utils import (
   count_tokens,
@@ -97,6 +99,45 @@ def optional_live(renderable, console, enabled=True, **kwargs):
       def update(self, *args, **kwargs):
         pass
     yield DummyLive()
+
+
+class ChattyCompleter(Completer):
+  def __init__(self, commands):
+    self.commands = sorted(commands)
+    self.path_completer = PathCompleter(expanduser=True)
+
+  def _safe_listdir(self):
+    try:
+      return os.listdir('.')
+    except Exception:
+      return []
+
+  def get_completions(self, document, complete_event):
+    text = document.text_before_cursor
+    if text.startswith('/'):
+      if ' ' not in text:
+        for cmd in self.commands:
+          if cmd.startswith(text):
+            yield Completion(cmd, start_position=-len(text))
+      else:
+        parts = text.split(maxsplit=1)
+        cmd = parts[0].lower()
+        if cmd in ('/load', '/save', '/save_session', '/load_session'):
+          path_text = parts[1] if len(parts) > 1 else ""
+          sub_doc = Document(path_text, cursor_position=len(path_text))
+          for completion in self.path_completer.get_completions(sub_doc, complete_event):
+            yield completion
+    else:
+      if text and not text.endswith(' ') and not text.endswith('\n'):
+        words = text.split()
+        if words:
+          last_word = words[-1]
+          if '/' in last_word or '.' in last_word or '~' in last_word or any(
+              entry.startswith(last_word) for entry in self._safe_listdir()
+          ):
+            sub_doc = Document(last_word, cursor_position=len(last_word))
+            for completion in self.path_completer.get_completions(sub_doc, complete_event):
+              yield completion
 
 
 class ChatbotSession:
@@ -1693,10 +1734,12 @@ class ChatbotSession:
     toolbar_style = Style.from_dict({
       'bottom-toolbar': 'bg:#222222 fg:#e0e0e0 noreverse',
     })
+    completer = ChattyCompleter(self._commands.keys())
     session = PromptSession(
       history=FileHistory(history_file),
       key_bindings=kb,
-      style=toolbar_style
+      style=toolbar_style,
+      completer=completer
     )
     
     # Display starting banner
