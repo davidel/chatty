@@ -205,7 +205,13 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`run_tests`**: Runs test scripts (`pytest`, `npm test`, custom targets).
 
 ### Web & Information Retrieval
-- **`search_web`**: Searches the web for a query and returns titles, URLs, and snippets.
+- **`search_web`**: Searches the web for a query and returns titles, URLs, and snippets. Supports multiple backends via environment variables (checked in priority order):
+  - **Tavily**: Set `TAVILY_API_KEY` (highly recommended for clean, parsed AI search results).
+  - **Brave Search**: Set `BRAVE_API_KEY` (independent, privacy-focused search).
+  - **Google Custom Search**: Set `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` (legacy Google search engine).
+  - **Serper**: Set `SERPER_API_KEY` (Google search proxy).
+  - **SerpApi**: Set `SERPAPI_API_KEY` (Google search proxy).
+  - **Yahoo Scraper**: Default fallback if no keys are provided (unreliable for heavy use).
 - **`fetch_url`**: Fetches the text content of a public URL (converting HTML to clean text).
 
 ### Command & Background Execution

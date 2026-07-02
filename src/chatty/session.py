@@ -1788,7 +1788,8 @@ class ChatbotSession:
     table = Table(title="Available Sandboxed Tools", show_header=True, header_style="bold yellow")
     table.add_column("Tool Name", style="cyan")
     table.add_column("Description", style="white")
-    for tool in TOOLS_SCHEMA:
+    sorted_tools = sorted(TOOLS_SCHEMA, key=lambda t: t["function"]["name"])
+    for tool in sorted_tools:
       func = tool["function"]
       table.add_row(func["name"], func["description"])
     self._print(table)

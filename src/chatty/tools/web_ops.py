@@ -14,21 +14,64 @@ def tool_search_web(query: str, max_results: int = 10) -> str:
   """Search the web for a query and return formatted results (title, URL, snippet).
 
   Supports multiple backends based on environment variables:
-  1. Google Custom Search: GOOGLE_API_KEY and GOOGLE_CSE_ID
-  2. Serper: SERPER_API_KEY
-  3. SerpApi: SERPAPI_API_KEY
-  4. Yahoo HTML Scraper (Fallback when no keys are provided)
+  1. Tavily: TAVILY_API_KEY
+  2. Brave Search: BRAVE_API_KEY
+  3. Google Custom Search: GOOGLE_API_KEY and GOOGLE_CSE_ID
+  4. Serper: SERPER_API_KEY
+  5. SerpApi: SERPAPI_API_KEY
+  6. Yahoo HTML Scraper (Fallback when no keys are provided)
   """
   results = []
   backend_used = ""
 
+  tavily_key = os.environ.get("TAVILY_API_KEY")
+  brave_key = os.environ.get("BRAVE_API_KEY")
   google_key = os.environ.get("GOOGLE_API_KEY")
   google_cx = os.environ.get("GOOGLE_CSE_ID")
   serper_key = os.environ.get("SERPER_API_KEY")
   serpapi_key = os.environ.get("SERPAPI_API_KEY")
 
   try:
-    if google_key and google_cx:
+    if tavily_key:
+      backend_used = "Tavily Search API"
+      url = "https://api.tavily.com/search"
+      payload = {
+        "api_key": tavily_key,
+        "query": query,
+        "max_results": max_results
+      }
+      r = requests.post(url, json=payload, timeout=10)
+      r.raise_for_status()
+      data = r.json()
+      for item in data.get("results", []):
+        results.append({
+          "title": item.get("title", ""),
+          "url": item.get("url", ""),
+          "snippet": item.get("content", "")
+        })
+
+    elif brave_key:
+      backend_used = "Brave Search API"
+      url = "https://api.search.brave.com/res/v1/web/search"
+      headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": brave_key
+      }
+      params = {
+        "q": query,
+        "count": min(max_results, 20)
+      }
+      r = requests.get(url, headers=headers, params=params, timeout=10)
+      r.raise_for_status()
+      data = r.json()
+      for item in data.get("web", {}).get("results", []):
+        results.append({
+          "title": item.get("title", ""),
+          "url": item.get("url", ""),
+          "snippet": item.get("description", "")
+        })
+
+    elif google_key and google_cx:
       backend_used = "Google Custom Search API"
       url = "https://www.googleapis.com/customsearch/v1"
       params = {
