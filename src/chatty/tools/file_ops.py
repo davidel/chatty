@@ -174,7 +174,7 @@ def tool_get_file_info(sandbox_dir: str, path: str) -> str:
 def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
   """Write text content to a file inside the sandbox."""
   try:
-    safe_p = get_safe_path(sandbox_dir, path)
+    safe_p = get_safe_path(sandbox_dir, path, write=True)
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     old_content = ""
@@ -200,7 +200,7 @@ def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
 def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> str:
   """Replace a specific unique block of text/code in a file with new content."""
   try:
-    safe_p = get_safe_path(sandbox_dir, path)
+    safe_p = get_safe_path(sandbox_dir, path, write=True)
     if not os.path.exists(safe_p):
       return f"Error: File '{path}' does not exist. Use write_file to create new files."
     if not os.path.isfile(safe_p):
@@ -257,7 +257,7 @@ def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> s
 def tool_multi_patch(sandbox_dir: str, path: str, patches: List[Dict[str, str]]) -> str:
   """Apply multiple non-contiguous exact text replacements to a file inside the sandbox."""
   try:
-    safe_p = get_safe_path(sandbox_dir, path)
+    safe_p = get_safe_path(sandbox_dir, path, write=True)
     if not os.path.exists(safe_p):
       return f"Error: File '{path}' does not exist. Use write_file to create new files."
     if not os.path.isfile(safe_p):
@@ -356,7 +356,7 @@ def tool_multi_patch(sandbox_dir: str, path: str, patches: List[Dict[str, str]])
 def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int, replacement: str) -> str:
   """Replace a range of lines in a file (1-indexed, inclusive) with new content."""
   try:
-    safe_p = get_safe_path(sandbox_dir, path)
+    safe_p = get_safe_path(sandbox_dir, path, write=True)
     if not os.path.exists(safe_p):
       return f"Error: File '{path}' does not exist. Use write_file to create new files."
     if not os.path.isfile(safe_p):
@@ -414,7 +414,7 @@ def tool_multi_edit_lines(sandbox_dir: str, path: str, edits: List[Dict[str, Any
   overlap.
   """
   try:
-    safe_p = get_safe_path(sandbox_dir, path)
+    safe_p = get_safe_path(sandbox_dir, path, write=True)
     if not os.path.exists(safe_p):
       return f"Error: File '{path}' does not exist. Use write_file to create new files."
     if not os.path.isfile(safe_p):
@@ -541,7 +541,7 @@ def get_available_formatters() -> List[str]:
 def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_path: str = None) -> str:
   """Automatically format a source code file using the appropriate formatter."""
   try:
-    safe_p = get_safe_path(sandbox_dir, path)
+    safe_p = get_safe_path(sandbox_dir, path, write=True)
     if not os.path.exists(safe_p):
       return f"Error: File '{path}' does not exist."
     if not os.path.isfile(safe_p):
@@ -715,8 +715,8 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
 def tool_move_file(sandbox_dir: str, src: str, dest: str) -> str:
   """Move or rename a file or directory inside the sandbox."""
   try:
-    safe_src = get_safe_path(sandbox_dir, src)
-    safe_dest = get_safe_path(sandbox_dir, dest)
+    safe_src = get_safe_path(sandbox_dir, src, write=True)
+    safe_dest = get_safe_path(sandbox_dir, dest, write=True)
     
     if not os.path.exists(safe_src):
       return f"Error: Source path '{src}' does not exist."
@@ -737,8 +737,8 @@ def tool_move_file(sandbox_dir: str, src: str, dest: str) -> str:
 def tool_copy_file(sandbox_dir: str, src: str, dest: str) -> str:
   """Copy a file or directory inside the sandbox."""
   try:
-    safe_src = get_safe_path(sandbox_dir, src)
-    safe_dest = get_safe_path(sandbox_dir, dest)
+    safe_src = get_safe_path(sandbox_dir, src, write=False)
+    safe_dest = get_safe_path(sandbox_dir, dest, write=True)
     
     if not os.path.exists(safe_src):
       return f"Error: Source path '{src}' does not exist."
@@ -762,7 +762,7 @@ def tool_copy_file(sandbox_dir: str, src: str, dest: str) -> str:
 def tool_delete_file(sandbox_dir: str, path: str) -> str:
   """Delete a file inside the sandbox. Fails if the path is a directory."""
   try:
-    safe_path = get_safe_path(sandbox_dir, path)
+    safe_path = get_safe_path(sandbox_dir, path, write=True)
     
     if not os.path.exists(safe_path):
       return f"Error: Path '{path}' does not exist."
@@ -780,7 +780,7 @@ def tool_delete_file(sandbox_dir: str, path: str) -> str:
 def tool_delete_directory(sandbox_dir: str, path: str, recursive: bool = False) -> str:
   """Delete a directory inside the sandbox."""
   try:
-    safe_path = get_safe_path(sandbox_dir, path)
+    safe_path = get_safe_path(sandbox_dir, path, write=True)
     
     if not os.path.exists(safe_path):
       return f"Error: Path '{path}' does not exist."
@@ -810,7 +810,7 @@ def tool_delete_directory(sandbox_dir: str, path: str, recursive: bool = False) 
 def tool_make_directory(sandbox_dir: str, path: str) -> str:
   """Create a new directory (and any parent directories) inside the sandbox."""
   try:
-    safe_path = get_safe_path(sandbox_dir, path)
+    safe_path = get_safe_path(sandbox_dir, path, write=True)
     
     if os.path.exists(safe_path):
       if os.path.isdir(safe_path):

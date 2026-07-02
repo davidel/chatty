@@ -7,7 +7,7 @@ import sys
 import time
 import uuid
 import weakref
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Set
 from dataclasses import dataclass, field
 
 import openai
@@ -39,7 +39,7 @@ from chatty.utils import (
   repair_json
 )
 from chatty.tools import execute_tool, TOOLS_SCHEMA
-from chatty.safety import validate_command_safety
+from chatty.safety import validate_command_safety, active_session_var
 from chatty.commands import COMMANDS
 
 logger = logging.getLogger("chatty")
@@ -326,6 +326,12 @@ class ChatbotSession:
     
     # Initialize and register commands registry
     self._commands = COMMANDS
+    
+    # Whitelist and Interactive Permission Sets
+    self.allowed_ro_paths: Set[str] = set()
+    self.allowed_rw_paths: Set[str] = set()
+    self.temp_allowed_ro_paths: Set[str] = set()
+    self.temp_allowed_rw_paths: Set[str] = set()
     
     self.load_skills()
     logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}")
@@ -1531,20 +1537,26 @@ class ChatbotSession:
             t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
         else:
           # Execute tool
-          if t_name == "ask_question":
-            logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
-            t_result = execute_tool(t_name, args_parsed, self)
-          else:
-            exec_panel = Panel(
-              f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
-              title="🔧 Executing Tool",
-              border_style="yellow"
-            )
-            with optional_live(Group(exec_panel, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
+          token = active_session_var.set(self)
+          try:
+            if t_name == "ask_question":
               logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
               t_result = execute_tool(t_name, args_parsed, self)
-              # Remove status bar before exiting Live context
-              live.update(exec_panel)
+            else:
+              exec_panel = Panel(
+                f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
+                title="🔧 Executing Tool",
+                border_style="yellow"
+              )
+              with optional_live(Group(exec_panel, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
+                logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
+                t_result = execute_tool(t_name, args_parsed, self)
+                # Remove status bar before exiting Live context
+                live.update(exec_panel)
+          finally:
+            active_session_var.reset(token)
+            self.temp_allowed_ro_paths.clear()
+            self.temp_allowed_rw_paths.clear()
               
         # Print result summary nicely
         self._print(Panel(
@@ -1704,6 +1716,120 @@ class ChatbotSession:
     
     self._print("[bold green]Conversation history cleared and recap reloaded.[/bold green]")
 
+  def has_path_permission(self, path: str, write: bool = False) -> bool:
+    """Checks if an absolute path is whitelisted for the given access mode."""
+    abs_path = os.path.realpath(path)
+    
+    # A path whitelisted for RW implicitly has RO access as well
+    for allowed in self.allowed_rw_paths:
+      if os.path.commonpath([allowed, abs_path]) == allowed:
+        return True
+    for allowed in self.temp_allowed_rw_paths:
+      if os.path.commonpath([allowed, abs_path]) == allowed:
+        return True
+        
+    # Check RO whitelist only if we don't need write access
+    if not write:
+      for allowed in self.allowed_ro_paths:
+        if os.path.commonpath([allowed, abs_path]) == allowed:
+          return True
+      for allowed in self.temp_allowed_ro_paths:
+        if os.path.commonpath([allowed, abs_path]) == allowed:
+          return True
+          
+    return False
+
+  def prompt_for_path_permission(self, target_path: str, write: bool = False) -> bool:
+    """Prompts the user to allow/deny access to a path, specifying RO/RW mode."""
+    if self.headless:
+      return False
+
+    abs_path = os.path.realpath(target_path)
+    mode_str = "READ-WRITE" if write else "READ-ONLY"
+    
+    self._print(f"\n[bold yellow]⚠️  Warning: AI is attempting {mode_str} access to a path outside the sandbox:[/bold yellow]")
+    self._print(f"   Target path: [cyan]{abs_path}[/cyan]\n")
+    
+    try:
+      prompt_msg = f"Allow {mode_str} access? [y]es / [n]o / [a]lways (whitelist file) / [p]arents (whitelist upper folder): "
+      response = input(prompt_msg).strip().lower()
+      
+      if response == 'a':
+        if write:
+          self.allowed_rw_paths.add(abs_path)
+        else:
+          self.allowed_ro_paths.add(abs_path)
+        logger.info(f"User whitelisted {mode_str} access to: {abs_path}")
+        return True
+        
+      elif response == 'p':
+        # Compile parent directories up to the root
+        parents = []
+        curr = os.path.dirname(abs_path)
+        while True:
+          parents.append(curr)
+          next_curr = os.path.dirname(curr)
+          if next_curr == curr:
+            break
+          curr = next_curr
+          
+        # Limit display to the top 5 closest parent directories to keep terminal clean
+        parents = parents[:5]
+        
+        self._print("\n[bold cyan]Select an upper directory to whitelist recursively:[/bold cyan]")
+        for idx, parent in enumerate(parents, 1):
+          self._print(f"  {idx}: {parent}")
+        self._print("  c: Cancel\n")
+        
+        choice = input("Enter choice (1-N or c): ").strip().lower()
+        if choice == 'c':
+          return False
+        try:
+          choice_idx = int(choice) - 1
+          if 0 <= choice_idx < len(parents):
+            chosen_parent = parents[choice_idx]
+            if write:
+              self.allowed_rw_paths.add(chosen_parent)
+            else:
+              self.allowed_ro_paths.add(chosen_parent)
+            logger.info(f"User whitelisted parent path {mode_str} access to: {chosen_parent}")
+            return True
+          else:
+            self._print("[bold red]Invalid selection.[/bold red]")
+            return False
+        except ValueError:
+          self._print("[bold red]Invalid selection.[/bold red]")
+          return False
+          
+      elif response in ('y', 'yes'):
+        if write:
+          self.temp_allowed_rw_paths.add(abs_path)
+        else:
+          self.temp_allowed_ro_paths.add(abs_path)
+        logger.info(f"User allowed {mode_str} access once to: {abs_path}")
+        return True
+      else:
+        logger.info(f"User denied access to: {abs_path}")
+        return False
+    except (KeyboardInterrupt, EOFError):
+      return False
+
+  def show_whitelist(self):
+    """Displays whitelisted paths and their permissions."""
+    table = Table(title="Whitelisted Paths", show_header=True, header_style="bold magenta")
+    table.add_column("Path", style="cyan")
+    table.add_column("Permissions", style="green")
+    
+    if not self.allowed_ro_paths and not self.allowed_rw_paths:
+      table.add_row("(No whitelisted paths)", "")
+    else:
+      for path in sorted(self.allowed_ro_paths):
+        table.add_row(path, "Read-Only (RO)")
+      for path in sorted(self.allowed_rw_paths):
+        table.add_row(path, "Read-Write (RW)")
+        
+    self._print(table)
+
   def show_help(self):
     """Displays formatted CLI usage guide."""
     table = Table(title="Slash Commands", show_header=True, header_style="bold magenta")
@@ -1727,6 +1853,7 @@ class ChatbotSession:
     table.add_row("/undo [count]", "Undo the last conversation turn(s)")
     table.add_row("/pop <index>", "Truncate history from index (1-based) onwards")
     table.add_row("/tools", "List available sandbox tools and schemas")
+    table.add_row("/whitelist [add <path> [ro|rw] | remove <path> | clear]", "Manage whitelisted out-of-sandbox paths")
     table.add_row("/clear / /reset", "Clear conversation memory")
     table.add_row("/compress", "Summarize history, clear context, and reload summary")
     table.add_row("/exit / /quit", "Exit the application")

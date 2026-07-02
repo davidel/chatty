@@ -310,6 +310,66 @@ def cmd_pop(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_whitelist(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    # No argument: display the whitelist table
+    session.show_whitelist()
+    return True
+    
+  parts = arg.split(maxsplit=2)
+  subcmd = parts[0].lower()
+  
+  if subcmd == "clear":
+    session.allowed_ro_paths.clear()
+    session.allowed_rw_paths.clear()
+    console.print("[bold green]Whitelisted paths cleared successfully.[/bold green]")
+    
+  elif subcmd == "add":
+    if len(parts) < 2:
+      console.print("[bold red]Usage: /whitelist add <path> [ro|rw][/bold red]")
+      return True
+    path = parts[1]
+    mode = parts[2].lower() if len(parts) >= 3 else "rw"
+    
+    if mode not in ("ro", "rw"):
+      console.print("[bold red]Invalid permission mode. Choose 'ro' (Read-Only) or 'rw' (Read-Write).[/bold red]")
+      return True
+      
+    abs_path = os.path.realpath(path)
+    if mode == "ro":
+      session.allowed_ro_paths.add(abs_path)
+      console.print(f"[bold green]Added Read-Only path:[/bold green] {abs_path}")
+    else:
+      session.allowed_rw_paths.add(abs_path)
+      console.print(f"[bold green]Added Read-Write path:[/bold green] {abs_path}")
+      
+  elif subcmd == "remove":
+    if len(parts) < 2:
+      console.print("[bold red]Usage: /whitelist remove <path>[/bold red]")
+      return True
+    path = parts[1]
+    abs_path = os.path.realpath(path)
+    
+    removed = False
+    if abs_path in session.allowed_ro_paths:
+      session.allowed_ro_paths.remove(abs_path)
+      removed = True
+    if abs_path in session.allowed_rw_paths:
+      session.allowed_rw_paths.remove(abs_path)
+      removed = True
+      
+    if removed:
+      console.print(f"[bold green]Removed path from whitelist:[/bold green] {abs_path}")
+    else:
+      console.print(f"[bold red]Path not found in whitelist:[/bold red] {abs_path}")
+      
+  else:
+    console.print(f"[bold red]Unknown whitelist command '{subcmd}'. Use 'clear', 'add <path> [ro|rw]', or 'remove <path>'.[/bold red]")
+    
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -335,5 +395,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/history": cmd_history,
   "/undo": cmd_undo,
   "/pop": cmd_pop,
+  "/whitelist": cmd_whitelist,
+  "/permissions": cmd_whitelist,
 }
 

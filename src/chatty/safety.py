@@ -2,9 +2,12 @@ import os
 import re
 import shlex
 from typing import List, Optional
+import contextvars
+
+active_session_var = contextvars.ContextVar("active_session", default=None)
 
 
-def get_safe_path(sandbox_dir: str, target_path: str) -> str:
+def get_safe_path(sandbox_dir: str, target_path: str, write: bool = False) -> str:
   """
   Resolves the absolute path of target_path and ensures it lies strictly inside sandbox_dir.
   Raises PermissionError if a directory traversal attempt is made.
@@ -20,11 +23,20 @@ def get_safe_path(sandbox_dir: str, target_path: str) -> str:
   # Check if target is inside the sandbox folder by finding their common prefix
   common_prefix = os.path.commonpath([abs_sandbox, resolved_path])
   if common_prefix != abs_sandbox:
+    session = active_session_var.get()
+    if session:
+      if session.has_path_permission(resolved_path, write=write):
+        return resolved_path
+      if session.prompt_for_path_permission(resolved_path, write=write):
+        return resolved_path
+
+    mode_err = "Write/Modify" if write else "Read"
     raise PermissionError(
-      f"Access Denied: Path '{target_path}' resolves to '{resolved_path}' "
+      f"Access Denied: {mode_err} Access to path '{target_path}' resolves to '{resolved_path}' "
       f"which is outside the sandbox directory '{abs_sandbox}'."
     )
   return resolved_path
+
 
 
 def load_ignore_patterns(sandbox_dir: str) -> List[str]:
