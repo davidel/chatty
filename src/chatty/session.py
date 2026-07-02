@@ -164,6 +164,10 @@ def optional_live(renderable, console, enabled=True, **kwargs):
     class DummyLive:
       def update(self, *args, **kwargs):
         pass
+      def stop(self):
+        pass
+      def start(self):
+        pass
     yield DummyLive()
 
 
@@ -274,6 +278,7 @@ class ChatbotSession:
     self.background_commands = {}
     self.next_task_id = 1
     self.max_completed_tasks = 10
+    self._active_live = None
     
     # Register weakref finalizer for automatic cleanup on garbage collection or program exit
     self._finalizer = weakref.finalize(self, ChatbotSession._cleanup_resources, self.background_commands)
@@ -361,6 +366,18 @@ class ChatbotSession:
           content += msg["tool_call_id"]
         total_tokens += count_tokens(content) + 12
     return total_tokens
+
+  @contextlib.contextmanager
+  def _pause_live(self):
+    live = getattr(self, "_active_live", None)
+    if live is not None:
+      live.stop()
+      try:
+        yield
+      finally:
+        live.start()
+    else:
+      yield
 
   def _print(self, *args, **kwargs):
     if not self.headless:
@@ -1549,8 +1566,12 @@ class ChatbotSession:
                 border_style="yellow"
               )
               with optional_live(Group(exec_panel, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
-                logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
-                t_result = execute_tool(t_name, args_parsed, self)
+                self._active_live = live
+                try:
+                  logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
+                  t_result = execute_tool(t_name, args_parsed, self)
+                finally:
+                  self._active_live = None
                 # Remove status bar before exiting Live context
                 live.update(exec_panel)
           finally:
@@ -1751,66 +1772,75 @@ class ChatbotSession:
     self._print(f"   Target path: [cyan]{abs_path}[/cyan]\n")
     
     try:
-      prompt_msg = f"Allow {mode_str} access? [y]es / [n]o / [a]lways (whitelist file) / [p]arents (whitelist upper folder): "
-      response = input(prompt_msg).strip().lower()
-      
-      if response == 'a':
-        if write:
-          self.allowed_rw_paths.add(abs_path)
-        else:
-          self.allowed_ro_paths.add(abs_path)
-        logger.info(f"User whitelisted {mode_str} access to: {abs_path}")
-        return True
+      with self._pause_live():
+        self._print(
+          f"Allow {mode_str} access? "
+          f"[bold green]\\[y][/bold green]es / "
+          f"[bold red]\\[n][/bold red]o / "
+          f"[bold cyan]\\[a][/bold cyan]lways (whitelist file) / "
+          f"[bold magenta]\\[p][/bold magenta]arents (whitelist upper folder): ",
+          end=""
+        )
+        response = input().strip().lower()
         
-      elif response == 'p':
-        # Compile parent directories up to the root
-        parents = []
-        curr = os.path.dirname(abs_path)
-        while True:
-          parents.append(curr)
-          next_curr = os.path.dirname(curr)
-          if next_curr == curr:
-            break
-          curr = next_curr
-          
-        # Limit display to the top 5 closest parent directories to keep terminal clean
-        parents = parents[:5]
-        
-        self._print("\n[bold cyan]Select an upper directory to whitelist recursively:[/bold cyan]")
-        for idx, parent in enumerate(parents, 1):
-          self._print(f"  {idx}: {parent}")
-        self._print("  c: Cancel\n")
-        
-        choice = input("Enter choice (1-N or c): ").strip().lower()
-        if choice == 'c':
-          return False
-        try:
-          choice_idx = int(choice) - 1
-          if 0 <= choice_idx < len(parents):
-            chosen_parent = parents[choice_idx]
-            if write:
-              self.allowed_rw_paths.add(chosen_parent)
-            else:
-              self.allowed_ro_paths.add(chosen_parent)
-            logger.info(f"User whitelisted parent path {mode_str} access to: {chosen_parent}")
-            return True
+        if response == 'a':
+          if write:
+            self.allowed_rw_paths.add(abs_path)
           else:
+            self.allowed_ro_paths.add(abs_path)
+          logger.info(f"User whitelisted {mode_str} access to: {abs_path}")
+          return True
+          
+        elif response == 'p':
+          # Compile parent directories up to the root
+          parents = []
+          curr = os.path.dirname(abs_path)
+          while True:
+            parents.append(curr)
+            next_curr = os.path.dirname(curr)
+            if next_curr == curr:
+              break
+            curr = next_curr
+            
+          # Limit display to the top 5 closest parent directories to keep terminal clean
+          parents = parents[:5]
+          
+          self._print("\n[bold cyan]Select an upper directory to whitelist recursively:[/bold cyan]")
+          for idx, parent in enumerate(parents, 1):
+            self._print(f"  {idx}: {parent}")
+          self._print("  c: Cancel\n")
+          
+          self._print("Enter choice (1-N or c): ", end="")
+          choice = input().strip().lower()
+          if choice == 'c':
+            return False
+          try:
+            choice_idx = int(choice) - 1
+            if 0 <= choice_idx < len(parents):
+              chosen_parent = parents[choice_idx]
+              if write:
+                self.allowed_rw_paths.add(chosen_parent)
+              else:
+                self.allowed_ro_paths.add(chosen_parent)
+              logger.info(f"User whitelisted parent path {mode_str} access to: {chosen_parent}")
+              return True
+            else:
+              self._print("[bold red]Invalid selection.[/bold red]")
+              return False
+          except ValueError:
             self._print("[bold red]Invalid selection.[/bold red]")
             return False
-        except ValueError:
-          self._print("[bold red]Invalid selection.[/bold red]")
-          return False
-          
-      elif response in ('y', 'yes'):
-        if write:
-          self.temp_allowed_rw_paths.add(abs_path)
+            
+        elif response in ('y', 'yes'):
+          if write:
+            self.temp_allowed_rw_paths.add(abs_path)
+          else:
+            self.temp_allowed_ro_paths.add(abs_path)
+          logger.info(f"User allowed {mode_str} access once to: {abs_path}")
+          return True
         else:
-          self.temp_allowed_ro_paths.add(abs_path)
-        logger.info(f"User allowed {mode_str} access once to: {abs_path}")
-        return True
-      else:
-        logger.info(f"User denied access to: {abs_path}")
-        return False
+          logger.info(f"User denied access to: {abs_path}")
+          return False
     except (KeyboardInterrupt, EOFError):
       return False
 
