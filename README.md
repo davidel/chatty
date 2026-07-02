@@ -113,6 +113,7 @@ python3 -m chatty [options]
 | `--context-size` | `-c` | integer | `8192` | Target context window length constraint in tokens. |
 | `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. |
 | `--skills-path` | `-k` | string | *None* | Custom directory paths to scan for Skills (can be specified multiple times). |
+| `--whitelist` | `-w` | string | *None* | Add an out-of-sandbox path to the initial whitelist. Can end with `:ro` or `:rw` to set mode (defaults to `ro`). Can be specified multiple times. |
 | `--static-skills` | *None* | bool | *Auto* | Load all skills statically into system instructions (defaults to `True` for OpenRouter to maximize cache hit rates, `False` for Ollama). |
 | `--max-loops` | `-l` | integer | `20` | Maximum sequential tool executions allowed in a single user turn. |
 | `--config-prompt` | `-f` | string | *None* | Path to a YAML or plain text file containing custom system prompt guidelines. |
@@ -161,6 +162,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/provider` | `[ollama\|openrouter]` | View current provider or switch backend on the fly. Re-authenticates APIs dynamically. |
 | `/model` | `[name]` | View active model name or switch to another available model. |
 | `/sandbox` | `[path]` | View sandbox path or change it. Instantly loads any skills found in the new sandbox. |
+| `/whitelist` / `/permissions` | `[add <path> [ro\|rw] \| remove <path> \| clear]` | View or manage whitelisted out-of-sandbox paths. |
 | `/context` | `[tokens]` | View or update target context memory window limit in tokens. |
 | `/loops` | `[iterations]` | View or modify the limit of sequential agent loops allowed per turn. |
 | `/api_key` | `[key]` | Configure your OpenRouter cloud client token dynamically. |
@@ -257,6 +259,20 @@ The [landlock_exec](file:///tmp/chatty/src/chatty/landlock_exec.c) binary intera
 
 #### Fallback Behavior
 If Landlock is unavailable (non-Linux systems, older kernels, or missing compilers), Chatty automatically falls back to standard user-space process execution limited by the working directory (`cwd`) configuration and command regex validations.
+
+#### Out-of-Sandbox Path Whitelisting
+To allow the chatbot to access files or directories outside the sandboxed folder:
+* **CLI Startup Whitelist**: Use the `--whitelist` (or `-w`) option to whitelist paths at startup.
+  ```bash
+  chatty -w /usr/include:ro -w /home/user/project
+  ```
+  Paths default to Read-Only (`ro`) unless suffixed with `:rw` (Read-Write).
+* **Interactive Whitelisting**: If the agent attempts to read or write a file outside the sandbox that is not whitelisted, Chatty will prompt you interactively:
+  * `[y]es`: Allow access for this operation once.
+  * `[n]o`: Deny access.
+  * `[a]lways`: Whitelist the specific file for the rest of the session.
+  * `[p]arents`: Show a menu to select and recursively whitelist a parent directory.
+* **Session Management**: Use the `/whitelist` (or `/permissions`) slash command to inspect or manage whitelisted paths on the fly.
 
 ---
 
