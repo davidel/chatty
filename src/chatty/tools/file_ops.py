@@ -823,3 +823,122 @@ def tool_make_directory(sandbox_dir: str, path: str) -> str:
     return f"Successfully created directory '{rel_path}'."
   except Exception as e:
     return f"Error creating directory: {str(e)}"
+
+
+def tool_hex_dump(
+    sandbox_dir: str,
+    path: str,
+    start_offset: int = 0,
+    size: int = 256,
+    format: str = "canonical",
+    word_size: int = 8,
+    endian: str = "little",
+    signed: bool = False
+) -> str:
+  """Inspect a binary file by dumping its content as formatted hex/integers."""
+  try:
+    safe_p = get_safe_path(sandbox_dir, path)
+    if not os.path.exists(safe_p):
+      return f"Error: File '{path}' does not exist."
+    if not os.path.isfile(safe_p):
+      return f"Error: Path '{path}' is not a file."
+      
+    file_size = os.path.getsize(safe_p)
+    if start_offset < 0 or start_offset >= file_size:
+      if file_size == 0 and start_offset == 0:
+        return f"File '{path}' is empty (0 bytes)."
+      return f"Error: start_offset {start_offset} is out of range. File '{path}' is {file_size} bytes."
+      
+    if size <= 0:
+      return "Error: size must be greater than 0."
+    
+    # Cap size to prevent huge dumps (e.g. max 16KB)
+    max_dump_bytes = 16384
+    if size > max_dump_bytes:
+      size = max_dump_bytes
+      truncated_msg = f"\n\n[WARNING: Hex dump size truncated to max limit of {max_dump_bytes} bytes.]"
+    else:
+      truncated_msg = ""
+      
+    with open(safe_p, "rb") as f:
+      f.seek(start_offset)
+      data = f.read(size)
+      
+    if not data:
+      return f"No bytes read from file '{path}' at offset {start_offset}."
+      
+    # Validate word size
+    word_bytes = word_size // 8
+    if word_bytes not in (1, 2, 4, 8) or word_size % 8 != 0:
+      return f"Error: Unsupported word_size {word_size}-bit. Must be 8, 16, 32, or 64."
+      
+    if endian not in ("little", "big"):
+      return f"Error: Unsupported endianness '{endian}'. Must be 'little' or 'big'."
+      
+    # Validate format parameter
+    valid_formats = ("canonical", "hex", "dec", "int", "raw")
+    if format not in valid_formats:
+      return f"Error: Unsupported format '{format}'. Supported formats: {', '.join(valid_formats)}."
+
+    # If raw format is requested, return simple hex of raw bytes (only makes sense for 8-bit/byte level)
+    if format == "raw":
+      if word_size != 8:
+        return "Error: format 'raw' is only supported with word_size=8."
+      return data.hex() + truncated_msg
+
+    # Handling canonical 8-bit layout (hexdump -C layout)
+    if word_size == 8 and format == "canonical":
+      lines = []
+      for i in range(0, len(data), 16):
+        chunk = data[i:i+16]
+        addr = start_offset + i
+        h1 = " ".join(f"{b:02x}" for b in chunk[:8])
+        h2 = " ".join(f"{b:02x}" for b in chunk[8:])
+        hex_str = f"{h1:<23}  {h2:<23}"
+        ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append(f"{addr:08x}  {hex_str}  |{ascii_str}|")
+      return "\n".join(lines) + truncated_msg
+
+    # Otherwise, parse bytes into integers of requested word size
+    num_words = len(data) // word_bytes
+    leftover = len(data) % word_bytes
+    
+    chunks = [data[i * word_bytes : (i + 1) * word_bytes] for i in range(num_words)]
+    values = [int.from_bytes(chunk, byteorder=endian, signed=signed) for chunk in chunks]
+    
+    leftover_msg = ""
+    if leftover > 0:
+      leftover_msg = f"\n\n[WARNING: Ignored {leftover} trailing byte(s) because they do not fit into the {word_size}-bit word size.]"
+
+    lines = []
+    for i, val in enumerate(values):
+      addr = start_offset + i * word_bytes
+      
+      if format == "canonical":
+        # Formatted details including address, hex representation, and decimal value
+        if word_size == 16:
+          lines.append(f"{addr:08x}  0x{val:04x}  ({val})")
+        elif word_size == 32:
+          lines.append(f"{addr:08x}  0x{val:08x}  ({val})")
+        elif word_size == 64:
+          lines.append(f"{addr:08x}  0x{val:016x}  ({val})")
+        else: # word_size == 8 (non-canonical hex list with dec)
+          lines.append(f"{addr:08x}  0x{val:02x}  ({val})")
+          
+      elif format == "hex":
+        if word_size == 8:
+          lines.append(f"{addr:08x}: 0x{val:02x}")
+        elif word_size == 16:
+          lines.append(f"{addr:08x}: 0x{val:04x}")
+        elif word_size == 32:
+          lines.append(f"{addr:08x}: 0x{val:08x}")
+        elif word_size == 64:
+          lines.append(f"{addr:08x}: 0x{val:016x}")
+          
+      elif format in ("dec", "int"):
+        lines.append(f"{addr:08x}: {val}")
+
+    return "\n".join(lines) + truncated_msg + leftover_msg
+  except Exception as e:
+    return f"Error performing hex dump: {str(e)}"
+

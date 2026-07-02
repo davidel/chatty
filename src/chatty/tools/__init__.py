@@ -17,7 +17,8 @@ from chatty.tools.file_ops import (
   tool_copy_file,
   tool_delete_file,
   tool_delete_directory,
-  tool_make_directory
+  tool_make_directory,
+  tool_hex_dump
 )
 from chatty.tools.search_ops import (
   tool_locate_files,
@@ -323,6 +324,47 @@ TOOLS_SCHEMA = [
           "line_numbers": {
             "type": "boolean",
             "description": "Set to true to include 1-indexed line numbers at the beginning of each line (formatted as 'line_num: line_content'). Defaults to false."
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "hex_dump",
+      "description": "Inspect binary files by performing a hex dump or parsing slices of data into integers of various widths (8/16/32/64-bit), endianness, and signedness.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The file path relative to the sandbox root."
+          },
+          "start_offset": {
+            "type": "integer",
+            "description": "Optional starting byte offset (0-indexed). Defaults to 0."
+          },
+          "size": {
+            "type": "integer",
+            "description": "Optional number of bytes to read. Defaults to 256. Maximum is 16384."
+          },
+          "format": {
+            "type": "string",
+            "description": "Output representation. 'canonical' (hex + ASCII for 8-bit, or formatted address lines for larger widths), 'hex' (prefixed hex values e.g. 0x0f1a), 'dec' (decimal integers), 'raw' (raw continuous hex string, only valid for 8-bit). Defaults to 'canonical'."
+          },
+          "word_size": {
+            "type": "integer",
+            "description": "Group width in bits. Supported values: 8, 16, 32, 64. Defaults to 8."
+          },
+          "endian": {
+            "type": "string",
+            "description": "Byte order for multi-byte integers. Supported: 'little', 'big'. Defaults to 'little'."
+          },
+          "signed": {
+            "type": "boolean",
+            "description": "Whether to treat multi-byte integers as signed (true) or unsigned (false). Defaults to false."
           }
         },
         "required": ["path"]
@@ -647,6 +689,23 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
       return "Error: start_line and end_line must be valid integers."
     line_numbers = bool(arguments.get("line_numbers")) if arguments.get("line_numbers") is not None else False
     return tool_read_file(session.sandbox, path, start_line, end_line, max_chars=session.max_read_chars, line_numbers=line_numbers)
+  elif name == "hex_dump":
+    path = arguments.get("path")
+    if not path:
+      return "Error: Missing parameter 'path'."
+    try:
+      start_offset = int(arguments.get("start_offset")) if arguments.get("start_offset") is not None else 0
+      size = int(arguments.get("size")) if arguments.get("size") is not None else 256
+    except (ValueError, TypeError):
+      return "Error: start_offset and size must be valid integers."
+    format_type = arguments.get("format", "canonical")
+    try:
+      word_size = int(arguments.get("word_size")) if arguments.get("word_size") is not None else 8
+    except (ValueError, TypeError):
+      return "Error: word_size must be a valid integer."
+    endian = arguments.get("endian", "little")
+    signed = bool(arguments.get("signed", False))
+    return tool_hex_dump(session.sandbox, path, start_offset, size, format_type, word_size, endian, signed)
   elif name == "write_file":
     path = arguments.get("path")
     content = arguments.get("content")

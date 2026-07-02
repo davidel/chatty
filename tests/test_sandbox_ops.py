@@ -422,6 +422,51 @@ class TestSandboxOps(unittest.TestCase):
     self.assertEqual(parsed[0]["function"]["name"], "multi_edit_lines")
     self.assertIn("src/vector_regfile.sv", parsed[0]["function"]["arguments"])
 
+  def test_hex_dump(self):
+    from chatty.tools.file_ops import tool_hex_dump
+    
+    bin_file = "test_dump.bin"
+    # Write some bytes: hello\x00world\x01\x02\x03\x04\xff
+    with open(os.path.join(self.sandbox_dir, bin_file), "wb") as f:
+      f.write(b"hello\x00world\x01\x02\x03\x04\xff")
+      
+    # 1. Canonical format check (8-bit)
+    res_canonical = tool_hex_dump(self.sandbox_dir, bin_file, start_offset=0, size=16, format="canonical")
+    self.assertIn("68 65 6c 6c 6f 00 77 6f", res_canonical)
+    self.assertIn("|hello.world.....|", res_canonical)
+    self.assertTrue(res_canonical.startswith("00000000"))
+    
+    # 2. Hex format check (8-bit)
+    res_hex = tool_hex_dump(self.sandbox_dir, bin_file, start_offset=0, size=16, format="hex")
+    self.assertEqual(res_hex, "00000000: 0x68\n00000001: 0x65\n00000002: 0x6c\n00000003: 0x6c\n00000004: 0x6f\n00000005: 0x00\n00000006: 0x77\n00000007: 0x6f\n00000008: 0x72\n00000009: 0x6c\n0000000a: 0x64\n0000000b: 0x01\n0000000c: 0x02\n0000000d: 0x03\n0000000e: 0x04\n0000000f: 0xff")
+    
+    # 3. Raw format check (8-bit)
+    res_raw = tool_hex_dump(self.sandbox_dir, bin_file, start_offset=0, size=16, format="raw")
+    self.assertEqual(res_raw, "68656c6c6f00776f726c6401020304ff")
+    
+    # 4. Offset check
+    res_offset = tool_hex_dump(self.sandbox_dir, bin_file, start_offset=6, size=5, format="raw")
+    self.assertEqual(res_offset, "776f726c64")  # "world"
+
+    # 5. 32-bit little endian unsigned (hello = 68 65 6c 6c -> 0x6c6c6568 = 1819043176)
+    res_32_le = tool_hex_dump(self.sandbox_dir, bin_file, start_offset=0, size=8, format="dec", word_size=32, endian="little")
+    self.assertIn("00000000: 1819043176", res_32_le)
+    
+    # 6. 32-bit big endian unsigned (hello = 68 65 6c 6c -> 0x68656c6c = 1751477356)
+    res_32_be = tool_hex_dump(self.sandbox_dir, bin_file, start_offset=0, size=8, format="dec", word_size=32, endian="big")
+    self.assertIn("00000000: 1751477356", res_32_be)
+
+    # 7. Signed vs unsigned logic check
+    # Write some bytes: \xff\xff\xff\xff (which is -1 signed, or 4294967295 unsigned)
+    with open(os.path.join(self.sandbox_dir, "test_signed.bin"), "wb") as f:
+      f.write(b"\xff\xff\xff\xff")
+      
+    res_unsigned = tool_hex_dump(self.sandbox_dir, "test_signed.bin", start_offset=0, size=4, format="dec", word_size=32, signed=False)
+    self.assertIn("00000000: 4294967295", res_unsigned)
+
+    res_signed = tool_hex_dump(self.sandbox_dir, "test_signed.bin", start_offset=0, size=4, format="dec", word_size=32, signed=True)
+    self.assertIn("00000000: -1", res_signed)
+
 
 if __name__ == "__main__":
   unittest.main()

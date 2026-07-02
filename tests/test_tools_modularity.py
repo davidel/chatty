@@ -28,6 +28,7 @@ class TestToolsModularity(unittest.TestCase):
     self.assertIn("read_file", names)
     self.assertIn("write_file", names)
     self.assertIn("search_grep", names)
+    self.assertIn("hex_dump", names)
 
   def test_file_ops_modular(self):
     write_res = tool_write_file(self.sandbox_dir, "test.txt", "Hello Modular Tools")
