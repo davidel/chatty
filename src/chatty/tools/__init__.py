@@ -396,7 +396,7 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "search_grep",
-      "description": "Search for a regular expression pattern inside files in the sandbox directory (recursively) or inside a specific file.",
+      "description": "Search for a regular expression pattern inside files in the sandbox directory (recursively) or inside a specific file. Binary files are automatically ignored.",
       "parameters": {
         "type": "object",
         "properties": {

@@ -6,7 +6,8 @@ from typing import List
 from chatty.safety import (
   get_safe_path,
   load_ignore_patterns,
-  is_path_ignored
+  is_path_ignored,
+  is_text_file
 )
 
 
@@ -51,7 +52,7 @@ def tool_locate_files(sandbox_dir: str, pattern: str, path: str = ".") -> str:
 
 
 def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_results: int = 100, line_numbers: bool = False) -> str:
-  """Search for a regex pattern inside files in the sandbox, ignoring files in .gitignore and common cache directories."""
+  """Search for a regex pattern inside files in the sandbox, ignoring binary files, files in .gitignore, and common cache directories."""
   try:
     safe_p = get_safe_path(sandbox_dir, path)
     if not os.path.exists(safe_p):
@@ -64,6 +65,8 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_result
     if os.path.isfile(safe_p):
       rel_path = os.path.relpath(safe_p, sandbox_dir)
       if not is_path_ignored(rel_path, ignore_patterns):
+        if not is_text_file(safe_p):
+          return f"Error: File '{path}' is a binary file; searching is skipped."
         with open(safe_p, 'r', encoding='utf-8', errors='ignore') as f:
           for line_num, line in enumerate(f, 1):
             if regex.search(line):
@@ -91,6 +94,8 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_result
             safe_file_path = get_safe_path(sandbox_dir, file_path)
             rel_path = os.path.relpath(safe_file_path, sandbox_dir)
             if is_path_ignored(rel_path, ignore_patterns):
+              continue
+            if not is_text_file(safe_file_path):
               continue
               
             with open(safe_file_path, 'r', encoding='utf-8', errors='ignore') as f:

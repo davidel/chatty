@@ -270,6 +270,18 @@ class TestSandboxOps(unittest.TestCase):
     res = tool_search_grep(self.sandbox_dir, "NOMATCH", "file1.txt")
     self.assertEqual(res, "No matches found.")
 
+    # Test binary file search directly
+    bin_file = "binary.bin"
+    with open(os.path.join(self.sandbox_dir, bin_file), "wb") as f:
+      f.write(b"hello\x00pattern FF00 here\n")
+    res = tool_search_grep(self.sandbox_dir, "FF00", "binary.bin")
+    self.assertIn("is a binary file; searching is skipped", res)
+
+    # Test recursive search ignores binary file
+    res = tool_search_grep(self.sandbox_dir, "FF00", ".")
+    self.assertIn("subdir/file2.txt: pattern FF00 here", res)
+    self.assertNotIn("binary.bin", res)
+
   def test_multi_patch(self):
     test_file = "test_multi.py"
     file_path = os.path.join(self.sandbox_dir, test_file)
