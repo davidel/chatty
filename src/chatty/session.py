@@ -134,6 +134,7 @@ class SessionConfig:
   static_skills: Optional[bool] = None
   prompt_caching: bool = False
   headless: bool = False
+  whitelist: List[str] = field(default_factory=list)
 
 
 class LazyMarkdown:
@@ -235,6 +236,7 @@ class ChatbotSession:
     static_skills: Optional[bool] = None,
     prompt_caching: bool = False,
     headless: bool = False,
+    whitelist: Optional[List[str]] = None,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -265,7 +267,8 @@ class ChatbotSession:
         max_dir_items=max_dir_items,
         static_skills=static_skills,
         prompt_caching=prompt_caching,
-        headless=headless
+        headless=headless,
+        whitelist=whitelist or []
       )
 
     # Ensure static_skills defaults correctly if not provided
@@ -338,6 +341,28 @@ class ChatbotSession:
     self.temp_allowed_ro_paths: Set[str] = set()
     self.temp_allowed_rw_paths: Set[str] = set()
     
+    # Process initial whitelist from arguments or config
+    whitelist_paths = whitelist if whitelist is not None else (self.config.whitelist if hasattr(self.config, "whitelist") else [])
+    for val in whitelist_paths:
+      mode = "ro"
+      path = val
+      if ":" in val:
+        if val.endswith(":ro"):
+          mode = "ro"
+          path = val[:-3]
+        elif val.endswith(":rw"):
+          mode = "rw"
+          path = val[:-3]
+      abs_path = os.path.realpath(path)
+      if mode == "ro":
+        self.allowed_ro_paths.add(abs_path)
+        if not self.config.headless:
+          console.print(f"[bold green]Added Whitelisted Read-Only path:[/bold green] {abs_path}")
+      else:
+        self.allowed_rw_paths.add(abs_path)
+        if not self.config.headless:
+          console.print(f"[bold green]Added Whitelisted Read-Write path:[/bold green] {abs_path}")
+          
     self.load_skills()
     logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}")
 

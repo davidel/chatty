@@ -44,6 +44,12 @@ def main():
     help="Custom directories to search for skills. Can be specified multiple times."
   )
   parser.add_argument(
+    "--whitelist", "-w",
+    action="append",
+    default=[],
+    help="Add an out-of-sandbox path to the initial whitelist. Can end with :ro or :rw to set mode (defaults to ro). Can be specified multiple times."
+  )
+  parser.add_argument(
     "--static-skills",
     action="store_true",
     default=None,
@@ -201,7 +207,8 @@ def main():
     max_dir_items=args.max_dir_items,
     static_skills=args.static_skills,
     prompt_caching=args.prompt_caching,
-    headless=args.headless
+    headless=args.headless,
+    whitelist=args.whitelist
   )
   
   if not args.headless:

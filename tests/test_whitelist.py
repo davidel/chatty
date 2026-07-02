@@ -138,6 +138,24 @@ class TestWhitelistAndPermissions(unittest.TestCase):
     cmd_whitelist(self.session, "clear")
     self.assertEqual(len(self.session.allowed_rw_paths), 0)
 
+  def test_initial_whitelist_processing(self):
+    # Test initialization of whitelist paths with modes from constructor
+    path1 = "/tmp/initial_ro"
+    path2 = "/tmp/initial_rw"
+    path3 = "/tmp/initial_default"
+    
+    session = ChatbotSession(
+      provider="ollama",
+      model="mock-model",
+      sandbox=self.sandbox_dir,
+      headless=True,
+      whitelist=[f"{path1}:ro", f"{path2}:rw", path3]
+    )
+    
+    self.assertIn(os.path.realpath(path1), session.allowed_ro_paths)
+    self.assertIn(os.path.realpath(path2), session.allowed_rw_paths)
+    self.assertIn(os.path.realpath(path3), session.allowed_ro_paths)
+
 
 if __name__ == '__main__':
   unittest.main()
