@@ -222,6 +222,7 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
   - *Output Controls*: Supports `output_filter` (regex matching), `head_lines`, and `tail_lines` parameters to prevent token overflow.
   - *Asynchronous Process Execution*: Commands that block or run indefinitely are automatically backgrounded by the session, returning a `Task ID` (e.g., `task_1`).
 - **`check_background_command`**: Inspects status or reads output of background processes using their `task_id`.
+- **`peek_task_output`**: Peeks at the currently accumulated output of a background task without blocking or changing its running status.
 - **`kill_process`**: Kills a running background subprocess.
 - **`sleep`**: Pauses execution for a specified number of seconds.
 - **`ask_question`**: Prompts the user with a question or selectable options to confirm decisions or resolve ambiguity.

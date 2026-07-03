@@ -503,6 +503,31 @@ TOOLS_SCHEMA = [
   {
     "type": "function",
     "function": {
+      "name": "peek_task_output",
+      "description": "Peek at the currently accumulated output of a background task without blocking or changing its running status.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "The Task ID of the background command (e.g. 'task_1')."
+          },
+          "tail_lines": {
+            "type": "integer",
+            "description": "Optional. The number of recent lines of the output to peek (default: 20)."
+          },
+          "output_filter": {
+            "type": "string",
+            "description": "Optional regular expression pattern. If specified, only lines matching this pattern will be returned."
+          }
+        },
+        "required": ["task_id"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "locate_files",
       "description": "Locate files recursively inside the sandbox directory matching a glob pattern.",
       "parameters": {
@@ -814,6 +839,18 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
     if not task_id:
       return "Error: Missing parameter 'task_id'."
     return session.tool_kill_process(task_id)
+  elif name == "peek_task_output":
+    task_id = arguments.get("task_id")
+    if not task_id:
+      return "Error: Missing parameter 'task_id'."
+    tail_lines = arguments.get("tail_lines", 20)
+    if tail_lines is not None:
+      try:
+        tail_lines = int(tail_lines)
+      except (ValueError, TypeError):
+        return "Error: tail_lines must be a valid integer."
+    output_filter = arguments.get("output_filter")
+    return session.tool_peek_task_output(task_id, tail_lines=tail_lines, output_filter=output_filter)
   elif name == "locate_files":
     pattern = arguments.get("pattern")
     path = arguments.get("path", ".")

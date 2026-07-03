@@ -456,6 +456,41 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("task_3", self.session.background_commands)
       self.assertIn("task_4", self.session.background_commands)
 
+  def test_peek_task_output(self):
+    import subprocess
+    import tempfile
+    from chatty.tools import execute_tool
+
+    # Create temporary stdout/stderr output files to simulate a running task
+    stdout_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+    stdout_f.write("line1\nline2\nline3\n")
+    stdout_f.close()
+
+    mock_proc = unittest.mock.MagicMock(spec=subprocess.Popen)
+    mock_proc.poll.return_value = None  # Simulates still running
+
+    self.session.background_commands = {
+      "task_peek_1": {
+        "proc": mock_proc,
+        "command": "dummy",
+        "stdout_path": stdout_f.name,
+        "stdout_file": stdout_f,
+      }
+    }
+
+    # Test peeking at output using execute_tool
+    res = execute_tool("peek_task_output", {"task_id": "task_peek_1", "tail_lines": 2}, self.session)
+    self.assertIn("STILL RUNNING", res)
+    self.assertIn("line2", res)
+    self.assertIn("line3", res)
+    self.assertNotIn("line1", res)
+
+    # Clean up temp file
+    try:
+      os.unlink(stdout_f.name)
+    except Exception:
+      pass
+
 
 from chatty.safety import validate_command_safety
 

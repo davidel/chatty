@@ -292,7 +292,7 @@ class ChatbotSession:
     self.current_loop = 0
     default_prompt = (
       "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
-      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), copying files/directories (copy_file), moving/renaming files/directories (move_file), deleting files (delete_file), deleting directories (delete_directory), creating directories (make_directory), formatting files (format_file), patching files (patch_file), applying multiple patches (multi_patch), editing line ranges (edit_lines), applying multiple line range edits (multi_edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), terminating background processes (kill_process), sleeping (sleep), and asking questions (ask_question).\n"
+      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), copying files/directories (copy_file), moving/renaming files/directories (move_file), deleting files (delete_file), deleting directories (delete_directory), creating directories (make_directory), formatting files (format_file), patching files (patch_file), applying multiple patches (multi_patch), editing line ranges (edit_lines), applying multiple line range edits (multi_edit_lines), searching regex patterns (search_grep), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), peeking at background task output (peek_task_output), terminating background processes (kill_process), sleeping (sleep), and asking questions (ask_question).\n"
       "All paths provided to the tools will resolve relative to the sandbox directory.\n"
       "You are strictly prohibited from writing files outside the sandbox folder.\n"
       "CRITICAL: When you need to ask the user a question, clarify instructions, confirm decisions, or present a set of choices/options, you MUST use the dedicated 'ask_question' tool instead of asking questions in your conversational text response. This allows the CLI to prompt the user interactively and return their response to you in the tool execution loop.\n"
@@ -300,7 +300,7 @@ class ChatbotSession:
       "CRITICAL: For performing search-and-replace edits (similar to 'sed'), you MUST use 'multi_patch' (for multiple non-contiguous exact replacements), 'edit_lines' (for a single line number range), or 'multi_edit_lines' (for multiple non-contiguous line range edits) instead of using 'sed' or custom scripts in run_command.\n"
       "CRITICAL: When you need to reformat source code files or enforce layout/style guidelines (such as indentation, line-splitting, or spacing), you MUST use the dedicated 'format_file' tool instead of manually editing the files using 'edit_lines', 'patch_file', or 'multi_patch'.\n"
       "CRITICAL: You are strictly prohibited from using the shell 'sleep' command inside run_command to pause execution. You MUST use the dedicated 'sleep' tool instead.\n"
-      "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output or wait for its progress/completion by calling check_background_command with the Task ID and a timeout parameter. You are strictly prohibited from using the 'sleep' tool to wait for background commands; you MUST use check_background_command with a timeout parameter instead. Perform other file tasks (read, patch, edit) while waiting.\n"
+      "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output or wait for its progress/completion by calling check_background_command with the Task ID and a timeout parameter. You can also peek at the accumulated output of a background task without blocking or waiting by calling peek_task_output. You are strictly prohibited from using the 'sleep' tool to wait for background commands; you MUST use check_background_command with a timeout parameter instead. Perform other file tasks (read, patch, edit) while waiting.\n"
       "To filter the output of run_command, use its optional 'output_filter' (regex), 'tail_lines', or 'head_lines' parameters rather than piping to grep or writing custom filtering scripts.\n"
       "When compilation, testing, verification, or running tools (like verilator, python scripts, compilers) is needed, you MUST execute them directly using the run_command tool instead of instructing the user to run them manually.\n"
       "Always use your tools proactively to solve tasks directly."
@@ -817,6 +817,64 @@ class ChatbotSession:
         f"Status: Task '{task_id}' FINISHED with exit code {status}.\n"
         + ("\n".join(output) if output else "(No output generated)")
       )
+
+  def tool_peek_task_output(
+    self,
+    task_id: str,
+    tail_lines: int = 20,
+    output_filter: Optional[str] = None
+  ) -> str:
+    """Peek at the currently accumulated output of a background task without blocking."""
+    logger.info(f"Peeking at background task output: '{task_id}' (tail_lines={tail_lines})")
+    task = self.background_commands.get(task_id)
+    if not task:
+      logger.warning(f"Peek background task failed: Task ID '{task_id}' not found")
+      return f"Error: Task ID '{task_id}' not found."
+
+    proc = task["proc"]
+    status = task.get("status")
+    if status is None:
+      status = proc.poll()
+      if status is not None:
+        task["status"] = status
+
+    try:
+      with open(task["stdout_path"], 'r', errors='replace') as f:
+        stdout_content = f.read()
+      if task.get("stderr_path"):
+        with open(task["stderr_path"], 'r', errors='replace') as f:
+          stderr_content = f.read()
+      else:
+        stderr_content = ""
+    except Exception as e:
+      stdout_content = f"Error reading output: {e}"
+      stderr_content = ""
+
+    if output_filter or tail_lines is not None:
+      stdout_content = self._apply_output_filters(stdout_content, output_filter, None, tail_lines)
+      stderr_content = self._apply_output_filters(stderr_content, output_filter, None, tail_lines)
+
+    output = []
+    if stdout_content:
+      output.append(f"Stdout:\n{truncate_output(stdout_content, max_chars=self.max_command_chars)}")
+    if stderr_content:
+      output.append(f"Stderr:\n{truncate_output(stderr_content, max_chars=self.max_command_chars)}")
+
+    if status is None:
+      status_msg = f"Status: Task '{task_id}' is STILL RUNNING"
+    else:
+      status_msg = f"Status: Task '{task_id}' FINISHED with exit code {status}"
+      try:
+        if task.get("stdout_file"):
+          task["stdout_file"].close()
+        if task.get("stderr_file"):
+          task["stderr_file"].close()
+      except Exception:
+        pass
+      self._prune_background_commands()
+
+    peek_output = "\n".join(output) if output else "(No output generated yet)"
+    return f"{status_msg}.\n{peek_output}"
 
   def tool_kill_process(self, task_id: str) -> str:
     """Terminate a background task/process by its Task ID."""
