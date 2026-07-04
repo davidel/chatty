@@ -153,6 +153,25 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("prohibited to count lines", err)
       self.assertIn("get_file_info", err)
 
+  def test_parameter_abuse_messages(self):
+    abused_cmds = [
+      "binary arg1 arg2 | tail_lines=50",
+      "binary arg1 arg2 | tail_lines 50",
+      "binary arg1 arg2 | head_lines=5",
+      "binary arg1 arg2 | head_lines 5",
+      "binary arg1 arg2 | output_filter=pattern",
+      "binary arg1 arg2 | output_filter pattern",
+      "tail_lines=50 binary arg1 arg2",
+      "head_lines=5 binary arg1 arg2",
+      "output_filter=pattern binary arg1 arg2"
+    ]
+    for cmd in abused_cmds:
+      with self.subTest(cmd=cmd):
+        err = self.session.validate_command_safety(cmd)
+        self.assertIsNotNone(err, f"Command should be blocked: {cmd}")
+        self.assertIn("inside the command string is prohibited", err)
+        self.assertIn("separate tool argument", err)
+
   def test_get_rich_status_bar(self):
     self.session.messages.append({"role": "user", "content": "Hello"})
     status_bar = self.session.get_rich_status_bar()

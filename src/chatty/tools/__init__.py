@@ -427,19 +427,19 @@ TOOLS_SCHEMA = [
         "properties": {
           "command": {
             "type": "string",
-            "description": "The exact shell command to execute."
+            "description": "The exact shell command to execute. DO NOT append or pipe 'tail_lines=N', 'head_lines=N', or 'output_filter=regex' to the command string itself. Instead, pass those as separate JSON arguments to this tool call."
           },
           "output_filter": {
             "type": "string",
-            "description": "Optional regular expression pattern. If specified, only lines from the output matching this pattern will be returned. Use this to filter large command outputs (e.g. to search for 'FAIL', 'Error', or specific test/log names) and prevent context window truncation."
+            "description": "Optional regular expression pattern. If specified, only lines from the output matching this pattern will be returned. Use this to filter large command outputs (e.g. to search for 'FAIL', 'Error', or specific test/log names) and prevent context window truncation. DO NOT pipe to grep or append '| output_filter=...' to the command parameter; pass it here as a separate argument."
           },
           "tail_lines": {
             "type": "integer",
-            "description": "Optional. Only return the last N lines of the command output (similar to 'tail -n N'). Useful for viewing the end of long execution or build logs."
+            "description": "Optional. Only return the last N lines of the command output (similar to 'tail -n N'). Useful for viewing the end of long execution or build logs. DO NOT pipe to tail or append '| tail_lines=N' to the command parameter; pass it here as a separate argument."
           },
           "head_lines": {
             "type": "integer",
-            "description": "Optional. Only return the first N lines of the command output (similar to 'head -n N'). Useful for viewing startup logs, headers, or initial error messages."
+            "description": "Optional. Only return the first N lines of the command output (similar to 'head -n N'). Useful for viewing startup logs, headers, or initial error messages. DO NOT pipe to head or append '| head_lines=N' to the command parameter; pass it here as a separate argument."
           },
           "combine_stderr": {
             "type": "boolean",
@@ -468,15 +468,15 @@ TOOLS_SCHEMA = [
           },
           "output_filter": {
             "type": "string",
-            "description": "Optional regular expression pattern to filter the output. If specified, only lines matching this pattern will be returned. Pass an empty string to clear any existing filter."
+            "description": "Optional regular expression pattern to filter the output. If specified, only lines matching this pattern will be returned. Pass an empty string to clear any existing filter. Pass it here as a separate argument; do NOT append or pipe it to the command."
           },
           "tail_lines": {
             "type": "integer",
-            "description": "Optional. Only return the last N lines of the command output. Pass -1 to clear any existing tail limit."
+            "description": "Optional. Only return the last N lines of the command output. Pass -1 to clear any existing tail limit. Pass it here as a separate argument; do NOT append or pipe it to the command."
           },
           "head_lines": {
             "type": "integer",
-            "description": "Optional. Only return the first N lines of the command output. Pass -1 to clear any existing head limit."
+            "description": "Optional. Only return the first N lines of the command output. Pass -1 to clear any existing head limit. Pass it here as a separate argument; do NOT append or pipe it to the command."
           }
         },
         "required": ["task_id"]

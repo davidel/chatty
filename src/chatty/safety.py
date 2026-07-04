@@ -131,6 +131,14 @@ def validate_command_safety(command: str) -> Optional[str]:
       if is_cmd_token:
         clean_token = os.path.basename(token.strip().lower())
         
+        token_name = clean_token.split('=')[0]
+        if token_name in {'tail_lines', 'head_lines', 'output_filter'}:
+          return (
+            f"Error: Using '{token_name}' inside the command string is prohibited. "
+            f"Please pass '{token_name}' as a separate tool argument (JSON parameter) "
+            "to run_command instead of piping or appending it inside the command string."
+          )
+        
         if clean_token in {'grep', 'egrep', 'fgrep', 'rgrep'}:
           if pipe_count == 0:
             return (
