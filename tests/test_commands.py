@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from chatty.session import ChatbotSession
-from chatty.commands import COMMANDS, cmd_multiline, cmd_provider, cmd_model, cmd_undo, cmd_pop
+from chatty.commands import COMMANDS, cmd_multiline, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop
 from chatty.utils import repair_json
 
 
@@ -32,6 +32,7 @@ class TestCommandsRegistry(unittest.TestCase):
     self.assertIn("/status", COMMANDS)
     self.assertIn("/provider", COMMANDS)
     self.assertIn("/model", COMMANDS)
+    self.assertIn("/models", COMMANDS)
     self.assertIn("/undo", COMMANDS)
     self.assertIn("/pop", COMMANDS)
 
@@ -53,6 +54,60 @@ class TestCommandsRegistry(unittest.TestCase):
     res = cmd_model(self.session, "custom-model")
     self.assertTrue(res)
     self.assertEqual(self.session.model, "custom-model")
+
+  def test_cmd_models_management(self):
+    self.assertIn("/models", COMMANDS)
+    
+    # Verify current model is listed (returns True)
+    self.assertTrue(cmd_models(self.session, ""))
+    
+    # Add a model
+    res = cmd_models(self.session, "add extra-model")
+    self.assertTrue(res)
+    self.assertIn("extra-model", self.session.models)
+    
+    # Add duplicate model (should be handled gracefully)
+    self.assertTrue(cmd_models(self.session, "add extra-model"))
+    self.assertEqual(self.session.models.count("extra-model"), 1)
+    
+    # Remove a model by name
+    res = cmd_models(self.session, "remove extra-model")
+    self.assertTrue(res)
+    self.assertNotIn("extra-model", self.session.models)
+    
+    # Remove a model by ID (1-based index)
+    cmd_models(self.session, "add model-a") # now self.session.models is ["test-model", "model-a"]
+    self.assertEqual(len(self.session.models), 2)
+    res = cmd_models(self.session, "remove 2")
+    self.assertTrue(res)
+    self.assertEqual(len(self.session.models), 1)
+    self.assertNotIn("model-a", self.session.models)
+
+  def test_cmd_model_switching_by_id(self):
+    # Setup multiple models
+    self.session.models = ["model-1", "model-2", "model-3"]
+    self.session.model = "model-1"
+    
+    # Switch using ID (integer string)
+    res = cmd_model(self.session, "2")
+    self.assertTrue(res)
+    self.assertEqual(self.session.model, "model-2")
+    
+    # Switch using model name that exists
+    res = cmd_model(self.session, "model-3")
+    self.assertTrue(res)
+    self.assertEqual(self.session.model, "model-3")
+    
+    # Switch using model name that does not exist (should add and switch)
+    res = cmd_model(self.session, "new-model")
+    self.assertTrue(res)
+    self.assertEqual(self.session.model, "new-model")
+    self.assertIn("new-model", self.session.models)
+    
+    # Invalid ID
+    res = cmd_model(self.session, "99")
+    self.assertTrue(res) # Command handled, printed error
+    self.assertEqual(self.session.model, "new-model") # unchanged
 
   def test_cmd_undo(self):
     self.session.messages = [

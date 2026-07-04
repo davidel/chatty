@@ -54,11 +54,108 @@ def cmd_provider(session: Any, arg: str) -> bool:
 
 
 def cmd_model(session: Any, arg: str) -> bool:
+  arg = arg.strip()
   if not arg:
     console.print(f"Current model: [bold cyan]{session.model}[/bold cyan]")
+    return True
+
+  # Try to parse as integer (1-based ID)
+  try:
+    idx = int(arg)
+    if 1 <= idx <= len(session.models):
+      new_model = session.models[idx - 1]
+      session.model = new_model
+      console.print(f"Switched model to: [bold green]{new_model}[/bold green] (ID: {idx})")
+    else:
+      console.print(f"[bold red]Error: Invalid model ID '{arg}'. Available IDs: 1 to {len(session.models)}.[/bold red]")
+  except ValueError:
+    # Treat as model name
+    if arg in session.models:
+      session.model = arg
+      idx = session.models.index(arg) + 1
+      console.print(f"Switched model to: [bold green]{arg}[/bold green] (ID: {idx})")
+    else:
+      session.models.append(arg)
+      session.model = arg
+      console.print(f"Added and switched model to: [bold green]{arg}[/bold green] (ID: {len(session.models)})")
+  return True
+
+
+def cmd_models(session: Any, arg: str) -> bool:
+  parts = arg.strip().split(maxsplit=1)
+  if not parts:
+    # List current models
+    if not hasattr(session, "models") or not session.models:
+      console.print("[bold yellow]No models configured.[/bold yellow]")
+      return True
+    
+    from rich.table import Table
+    table = Table(title="Configured Models", show_header=True, header_style="bold magenta")
+    table.add_column("ID", style="cyan", justify="right")
+    table.add_column("Active", style="green", justify="center")
+    table.add_column("Model Name", style="white")
+    
+    for idx, m in enumerate(session.models):
+      is_active = "[bold green]*[/bold green]" if m == session.model else ""
+      table.add_row(str(idx + 1), is_active, m)
+    
+    console.print(table)
+    console.print("\n[bold]Usage:[/bold]")
+    console.print("  [cyan]/model <ID>[/cyan] - Switch to model by ID")
+    console.print("  [cyan]/models add <model_name>[/cyan] - Add a new model")
+    console.print("  [cyan]/models remove <ID or model_name>[/cyan] - Remove a model")
+    return True
+
+  subcmd = parts[0].lower()
+  if subcmd == "add":
+    if len(parts) < 2:
+      console.print("[bold red]Error: Usage: /models add <model_name>[/bold red]")
+      return True
+    model_name = parts[1].strip()
+    if model_name in session.models:
+      console.print(f"[bold yellow]Model '{model_name}' is already in the list.[/bold yellow]")
+    else:
+      session.models.append(model_name)
+      console.print(f"[bold green]Added model:[/bold green] {model_name} (ID: {len(session.models)})")
+  elif subcmd in ("remove", "delete", "rm"):
+    if len(parts) < 2:
+      console.print("[bold red]Error: Usage: /models remove <ID or model_name>[/bold red]")
+      return True
+    target = parts[1].strip()
+    
+    # Try to parse target as ID
+    removed_model = None
+    try:
+      idx = int(target)
+      if 1 <= idx <= len(session.models):
+        removed_model = session.models.pop(idx - 1)
+      else:
+        console.print(f"[bold red]Error: Invalid model ID '{target}'. Available IDs: 1 to {len(session.models)}.[/bold red]")
+        return True
+    except ValueError:
+      # Treat target as model name
+      if target in session.models:
+        session.models.remove(target)
+        removed_model = target
+      else:
+        console.print(f"[bold red]Error: Model '{target}' not found in list.[/bold red]")
+        return True
+    
+    if removed_model:
+      console.print(f"[bold green]Removed model:[/bold green] {removed_model}")
+      # If we removed the active model, switch to another one
+      if session.model == removed_model:
+        if session.models:
+          session.model = session.models[0]
+          console.print(f"Active model switched to: [bold green]{session.model}[/bold green]")
+        else:
+          # Fallback if no models are left
+          fallback = "google/gemini-2.5-flash" if session.provider == "openrouter" else "qwen2.5-coder:7b"
+          session.models.append(fallback)
+          session.model = fallback
+          console.print(f"No models left. Fallback to default model: [bold green]{fallback}[/bold green]")
   else:
-    session.model = arg
-    console.print(f"Model updated to: [bold green]{session.model}[/bold green]")
+    console.print(f"[bold red]Unknown models command '{subcmd}'. Use '/models' to list, '/models add <name>', or '/models remove <id/name>'.[/bold red]")
   return True
 
 
@@ -163,6 +260,7 @@ def cmd_save(session: Any, arg: str) -> bool:
     session_data = {
       "provider": session.provider,
       "model": session.model,
+      "models": session.models,
       "context_size": session.context_size,
       "sandbox": session.sandbox,
       "max_loops": session.max_loops,
@@ -199,6 +297,8 @@ def cmd_load_session(session: Any, arg: str) -> bool:
         session.provider = session_data["provider"]
       if "model" in session_data:
         session.model = session_data["model"]
+      if "models" in session_data:
+        session.models = session_data["models"]
       if "context_size" in session_data:
         session.context_size = session_data["context_size"]
       if "sandbox" in session_data:
@@ -381,6 +481,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/tool_stats": cmd_tool_stats,
   "/provider": cmd_provider,
   "/model": cmd_model,
+  "/models": cmd_models,
   "/sandbox": cmd_sandbox,
   "/context": cmd_context,
   "/loops": cmd_loops,

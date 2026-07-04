@@ -27,6 +27,7 @@ class TestSessionPersist(unittest.TestCase):
     session = ChatbotSession(
       provider="ollama",
       model="test-model",
+      models=["test-model", "model-2", "model-3"],
       context_size=8000,
       sandbox=self.sandbox_dir,
       max_loops=15
@@ -54,6 +55,7 @@ class TestSessionPersist(unittest.TestCase):
       data = json.load(f)
     self.assertEqual(data["provider"], "ollama")
     self.assertEqual(data["model"], "test-model")
+    self.assertEqual(data["models"], ["test-model", "model-2", "model-3"])
     self.assertEqual(data["context_size"], 8000)
     self.assertEqual(data["max_loops"], 15)
     self.assertEqual(data["system_prompt"], "Custom system instructions")
@@ -79,6 +81,7 @@ class TestSessionPersist(unittest.TestCase):
     # Verify values are restored
     self.assertEqual(session2.provider, "ollama")
     self.assertEqual(session2.model, "test-model")
+    self.assertEqual(session2.models, ["test-model", "model-2", "model-3"])
     self.assertEqual(session2.context_size, 8000)
     self.assertEqual(session2.max_loops, 15)
     self.assertEqual(session2.system_prompt, "Custom system instructions")

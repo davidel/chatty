@@ -135,6 +135,7 @@ class SessionConfig:
   prompt_caching: bool = False
   headless: bool = False
   whitelist: List[str] = field(default_factory=list)
+  models: List[str] = field(default_factory=list)
 
 
 class LazyMarkdown:
@@ -237,6 +238,7 @@ class ChatbotSession:
     prompt_caching: bool = False,
     headless: bool = False,
     whitelist: Optional[List[str]] = None,
+    models: Optional[List[str]] = None,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -268,7 +270,8 @@ class ChatbotSession:
         static_skills=static_skills,
         prompt_caching=prompt_caching,
         headless=headless,
-        whitelist=whitelist or []
+        whitelist=whitelist or [],
+        models=models or ([model] if model else [])
       )
 
     # Ensure static_skills defaults correctly if not provided
@@ -277,6 +280,10 @@ class ChatbotSession:
 
     # Ensure sandbox path is absolute
     self.config.sandbox = os.path.abspath(self.config.sandbox)
+
+    # Ensure models list is never empty if we have an active model
+    if not self.config.models and self.config.model:
+      self.config.models = [self.config.model]
 
     self.background_commands = {}
     self.next_task_id = 1
@@ -1952,7 +1959,8 @@ class ChatbotSession:
     table.add_row("/status", "Display current session configuration")
     table.add_row("/tool_stats", "Show statistics on tool and external binary calls")
     table.add_row("/provider [ollama|openrouter]", "View or switch the LLM backend provider")
-    table.add_row("/model [name]", "View or switch the current LLM model")
+    table.add_row("/model [ID|name]", "View or switch the current LLM model by ID or name")
+    table.add_row("/models [add <name> | remove <ID/name>]", "List, add, or remove LLM models in the session")
     table.add_row("/sandbox [path]", "View or change the sandbox directory path")
     table.add_row("/context [tokens]", "View or modify the history token limit")
     table.add_row("/loops [iterations]", "View or modify the max sequential tool loops limit")

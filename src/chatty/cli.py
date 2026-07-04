@@ -24,7 +24,8 @@ def main():
   )
   parser.add_argument(
     "--model", "-m",
-    help="Model identifier to use. If omitted, default models will be resolved based on provider."
+    action="append",
+    help="Model identifier(s) to use. Can be specified multiple times or as comma-separated values. The first model becomes the active model."
   )
   parser.add_argument(
     "--context-size", "-c",
@@ -166,30 +167,40 @@ def main():
       sys.exit(1)
           
   # Resolve default models
-  model = args.model
-  if not model:
+  models = []
+  if args.model:
+    for m in args.model:
+      for part in m.split(','):
+        part = part.strip()
+        if part:
+          models.append(part)
+
+  if not models:
     if args.provider == "ollama":
       # Attempt to auto-detect model from local Ollama tags
       ollama_url = args.url or "http://localhost:11434/v1"
       local_models = get_ollama_models(ollama_url)
       if local_models:
         # Pick the first matching model
-        model = local_models[0]
+        models = [local_models[0]]
         if not args.headless:
-          console.print(f"[bold blue]Info:[/bold blue] Auto-detected local Ollama model: [bold green]{model}[/bold green]")
+          console.print(f"[bold blue]Info:[/bold blue] Auto-detected local Ollama model: [bold green]{models[0]}[/bold green]")
       else:
-        model = "qwen2.5-coder:7b"
+        models = ["qwen2.5-coder:7b"]
         if not args.headless:
-          console.print(f"[bold blue]Info:[/bold blue] No local Ollama models detected. Fallback default: [bold green]{model}[/bold green]")
+          console.print(f"[bold blue]Info:[/bold blue] No local Ollama models detected. Fallback default: [bold green]{models[0]}[/bold green]")
     else:
-      model = "google/gemini-2.5-flash"
+      models = ["google/gemini-2.5-flash"]
       if not args.headless:
-        console.print(f"[bold blue]Info:[/bold blue] OpenRouter provider selected. Default model: [bold green]{model}[/bold green]")
+        console.print(f"[bold blue]Info:[/bold blue] OpenRouter provider selected. Default model: [bold green]{models[0]}[/bold green]")
           
+  model = models[0]
+  
   # Initialize and execute chat session
   chat_session = ChatbotSession(
     provider=args.provider,
     model=model,
+    models=models,
     context_size=args.context_size,
     sandbox=args.sandbox,
     api_key=args.api_key,

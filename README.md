@@ -109,7 +109,7 @@ python3 -m chatty [options]
 | Parameter | Short | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `--provider` | `-p` | string | `ollama` | Backend provider to use (`ollama` or `openrouter`). |
-| `--model` | `-m` | string | *Auto-resolved* | Model identifier. Ollama: auto-detects first local model (falls back to `qwen2.5-coder:7b`). OpenRouter: defaults to `google/gemini-2.5-flash`. |
+| `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. Ollama: auto-detects first local model (falls back to `qwen2.5-coder:7b`). OpenRouter: defaults to `google/gemini-2.5-flash`. |
 | `--context-size` | `-c` | integer | `8192` | Target context window length constraint in tokens. |
 | `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. |
 | `--skills-path` | `-k` | string | *None* | Custom directory paths to scan for Skills (can be specified multiple times). |
@@ -160,7 +160,8 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/status` | None | Shows active session variables (provider, model, sandbox, tokens, loops, multiline, etc.). |
 | `/tool_stats` | None | Renders execution statistics (call counts, failures, and breakdowns for tools and binaries). |
 | `/provider` | `[ollama\|openrouter]` | View current provider or switch backend on the fly. Re-authenticates APIs dynamically. |
-| `/model` | `[name]` | View active model name or switch to another available model. |
+| `/model` | `[ID\|name]` | View active model name or switch to another model by name or 1-based index/ID. |
+| `/models` | `[add <name>\|remove <ID\|name>]` | List currently loaded models, or add/remove them dynamically. |
 | `/sandbox` | `[path]` | View sandbox path or change it. Instantly loads any skills found in the new sandbox. |
 | `/whitelist` / `/permissions` | `[add <path> [ro\|rw] \| remove <path> \| clear]` | View or manage whitelisted out-of-sandbox paths. |
 | `/context` | `[tokens]` | View or update target context memory window limit in tokens. |
