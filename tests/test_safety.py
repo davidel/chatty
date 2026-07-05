@@ -309,6 +309,33 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("FINISHED with exit code 0", status_res)
       self.assertNotIn("timed out", status_res)
 
+  def test_background_command_resource_usage(self):
+    import unittest.mock as mock
+    import subprocess
+
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired("long_running", 10)
+    mock_proc.pid = 99999
+    mock_proc.poll.return_value = None
+
+    self.session.cleanup_background_commands()
+    self.session.next_task_id = 1
+
+    with mock.patch.object(self.session, "_get_pgroup_resources", return_value={
+      "cpu_percent": 45.2,
+      "ram_bytes": 1024 * 1024 * 128,
+      "active_processes": 3
+    }):
+      with mock.patch("subprocess.Popen", return_value=mock_proc):
+        res = self.session.tool_run_command("long_running")
+        self.assertIn("Resource usage: Active processes: 3, CPU: 45.2%, RAM: 128.0 MB", res)
+
+        status_res = self.session.tool_check_background_command("task_1")
+        self.assertIn("STILL RUNNING (Active processes: 3, CPU: 45.2%, RAM: 128.0 MB)", status_res)
+
+        peek_res = self.session.tool_peek_task_output("task_1")
+        self.assertIn("STILL RUNNING (Active processes: 3, CPU: 45.2%, RAM: 128.0 MB)", peek_res)
+
   def test_check_background_command_filters_and_persistence(self):
     import unittest.mock as mock
     import subprocess

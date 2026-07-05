@@ -638,6 +638,78 @@ class ChatbotSession:
       lines = lines[-tail_lines:]
     return "\n".join(lines)
 
+  def _get_pgroup_resources(self, pid: Any) -> Optional[Dict[str, Any]]:
+    """Retrieve CPU and RAM usage statistics for the process group of the given pid.
+
+    Returns a dict with CPU percent, RSS RAM bytes, and active process count,
+    or None if the process group could not be queried or has exited.
+    """
+    if pid is None or not isinstance(pid, int):
+      return None
+    try:
+      import psutil
+      pgid = os.getpgid(pid)
+    except Exception:
+      return None
+
+    total_rss = 0
+    total_cpu_time = 0.0
+    active_processes = 0
+
+    pids_found = []
+    for proc in psutil.process_iter(['pid']):
+      try:
+        p_pid = proc.info['pid']
+        if os.getpgid(p_pid) == pgid:
+          pids_found.append(p_pid)
+          total_rss += proc.memory_info().rss
+          cpu_t = proc.cpu_times()
+          total_cpu_time += (cpu_t.user + cpu_t.system)
+          active_processes += 1
+      except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
+        continue
+
+    if not pids_found:
+      return None
+
+    time.sleep(0.1)
+
+    total_cpu_time_2 = 0.0
+    for p_pid in pids_found:
+      try:
+        proc = psutil.Process(p_pid)
+        cpu_t = proc.cpu_times()
+        total_cpu_time_2 += (cpu_t.user + cpu_t.system)
+      except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
+        continue
+
+    cpu_diff = total_cpu_time_2 - total_cpu_time
+    cpu_percent = (cpu_diff / 0.1) * 100.0 if cpu_diff >= 0 else 0.0
+
+    return {
+      "cpu_percent": cpu_percent,
+      "ram_bytes": total_rss,
+      "active_processes": active_processes
+    }
+
+  def _format_pgroup_resources(self, pid: Any) -> str:
+    """Format the process group resources as a user-friendly string."""
+    if pid is None or not isinstance(pid, int):
+      return ""
+    stats = self._get_pgroup_resources(pid)
+    if not stats or stats["active_processes"] == 0:
+      return ""
+
+    ram_mb = stats["ram_bytes"] / (1024 * 1024)
+    if ram_mb >= 1024:
+      ram_str = f"{ram_mb / 1024:.2f} GB"
+    else:
+      ram_str = f"{ram_mb:.1f} MB"
+
+    cpu_str = f"{stats['cpu_percent']:.1f}%"
+
+    return f"Active processes: {stats['active_processes']}, CPU: {cpu_str}, RAM: {ram_str}"
+
   def tool_run_command(self, command: str, output_filter: Optional[str] = None, tail_lines: Optional[int] = None, head_lines: Optional[int] = None, combine_stderr: bool = False) -> str:
     """Execute a shell command, transitioning to background execution if it takes too long."""
     logger.info(f"Running shell command: '{command}' (filter={output_filter}, tail={tail_lines}, head={head_lines}, combine_stderr={combine_stderr})")
@@ -727,10 +799,12 @@ class ChatbotSession:
           "head_lines": head_lines
         }
         self._prune_background_commands()
+        resource_usage = self._format_pgroup_resources(getattr(proc, "pid", None))
+        resource_msg = f"\nResource usage: {resource_usage}" if resource_usage else ""
         return (
           f"Info: The command is taking longer than 10 seconds. It is now running in the background.\n"
           f"Task ID: {task_id}\n"
-          "You must NOT block. Instead, check its output later by calling the 'check_background_command' tool."
+          f"You must NOT block. Instead, check its output later by calling the 'check_background_command' tool.{resource_msg}"
         )
     except Exception as e:
       if stdout_f:
@@ -809,6 +883,9 @@ class ChatbotSession:
       status_msg = f"Status: Task '{task_id}' is STILL RUNNING"
       if timeout is not None and timeout > 0 and timed_out_while_waiting:
         status_msg += f" (the check timed out after {timeout} seconds)"
+      resource_usage = self._format_pgroup_resources(getattr(proc, "pid", None))
+      if resource_usage:
+        status_msg += f" ({resource_usage})"
       status_msg += ".\n"
       return status_msg + ("\n".join(output) if output else "(No output generated yet)")
     else:
@@ -870,6 +947,9 @@ class ChatbotSession:
 
     if status is None:
       status_msg = f"Status: Task '{task_id}' is STILL RUNNING"
+      resource_usage = self._format_pgroup_resources(getattr(proc, "pid", None))
+      if resource_usage:
+        status_msg += f" ({resource_usage})"
     else:
       status_msg = f"Status: Task '{task_id}' FINISHED with exit code {status}"
       try:
