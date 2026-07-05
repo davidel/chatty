@@ -22,7 +22,18 @@ def cmd_clear(session: Any, arg: str) -> bool:
 
 
 def cmd_compress(session: Any, arg: str) -> bool:
-  session.compress_context()
+  arg = arg.strip()
+  keep_messages = None
+  if arg:
+    try:
+      keep_messages = int(arg)
+      if keep_messages < 0:
+        console.print("[bold red]Error: Number of messages to keep must be non-negative.[/bold red]")
+        return True
+    except ValueError:
+      console.print("[bold red]Error: Invalid argument for /compress. Must be an integer representing N messages to keep.[/bold red]")
+      return True
+  session.compress_context(keep_messages=keep_messages)
   return True
 
 

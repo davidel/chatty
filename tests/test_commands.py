@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from chatty.session import ChatbotSession
-from chatty.commands import COMMANDS, cmd_multiline, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop
+from chatty.commands import COMMANDS, cmd_multiline, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress
 from chatty.utils import repair_json
 
 
@@ -180,6 +180,142 @@ class TestCommandsRegistry(unittest.TestCase):
     # 5. Test that inline path autocompletion is not triggered for non-path-like words
     completions_normal = list(completer.get_completions(Document("look at non_existent_file"), None))
     self.assertEqual(len(completions_normal), 0)
+
+
+class TestCompressCommand(unittest.TestCase):
+
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = tempfile.mkdtemp()
+    self.session = ChatbotSession(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.sandbox_dir,
+      history_keep_messages=3
+    )
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
+    shutil.rmtree(self.sandbox_dir)
+
+  def test_compress_basic_and_rolling_window(self):
+    import unittest.mock as mock
+
+    # Mock the LLM stream call
+    class MockDelta:
+      def __init__(self, content=None):
+        self.content = content
+
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+
+    class MockChunk:
+      def __init__(self, choices):
+        self.choices = choices
+
+    mock_chunks = [
+      MockChunk([MockChoice(MockDelta(content="Structured Summary Content"))])
+    ]
+    self.session.client = mock.Mock()
+    self.session.client.chat.completions.create.return_value = mock_chunks
+
+    # Populate session messages
+    self.session.messages = [
+      {"role": "user", "content": "msg 1"},
+      {"role": "assistant", "content": "msg 2"},
+      {"role": "user", "content": "msg 3"},
+      {"role": "assistant", "content": "msg 4"},
+      {"role": "user", "content": "msg 5"},
+    ]
+
+    # Call cmd_compress with no arguments (should default to history_keep_messages = 3)
+    res = cmd_compress(self.session, "")
+    self.assertTrue(res)
+
+    # The new messages should be: [User_Summary_Prompt, Assistant_Summary, msg 3, msg 4, msg 5]
+    self.assertEqual(len(self.session.messages), 5)
+    self.assertEqual(self.session.messages[0]["role"], "user")
+    self.assertEqual(self.session.messages[1]["role"], "assistant")
+    self.assertEqual(self.session.messages[1]["content"], "Structured Summary Content")
+    self.assertEqual(self.session.messages[2], {"role": "user", "content": "msg 3"})
+    self.assertEqual(self.session.messages[3], {"role": "assistant", "content": "msg 4"})
+    self.assertEqual(self.session.messages[4], {"role": "user", "content": "msg 5"})
+
+    # Ensure the structured template was sent to LLM
+    call_args = self.session.client.chat.completions.create.call_args[1]
+    sent_messages = call_args["messages"]
+    # Last message sent is the summary instruction
+    self.assertEqual(sent_messages[-1]["role"], "user")
+    self.assertIn("Goal & Task Context", sent_messages[-1]["content"])
+    self.assertIn("Codebase Modifications", sent_messages[-1]["content"])
+
+  def test_compress_with_explicit_n(self):
+    import unittest.mock as mock
+    # Mock LLM
+    class MockDelta:
+      def __init__(self, content=None):
+        self.content = content
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+    class MockChunk:
+      def __init__(self, choices):
+        self.choices = choices
+    self.session.client = mock.Mock()
+    self.session.client.chat.completions.create.return_value = [
+      MockChunk([MockChoice(MockDelta(content="Summary"))])
+    ]
+
+    self.session.messages = [
+      {"role": "user", "content": "msg 1"},
+      {"role": "assistant", "content": "msg 2"},
+      {"role": "user", "content": "msg 3"},
+    ]
+
+    # Keep exactly 1 message
+    cmd_compress(self.session, "1")
+    # Result: [User_Summary, Assistant_Summary, msg 3]
+    self.assertEqual(len(self.session.messages), 3)
+    self.assertEqual(self.session.messages[-1], {"role": "user", "content": "msg 3"})
+
+  def test_compress_cumulative_detection(self):
+    import unittest.mock as mock
+    # Mock LLM
+    class MockDelta:
+      def __init__(self, content=None):
+        self.content = content
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+    class MockChunk:
+      def __init__(self, choices):
+        self.choices = choices
+    self.session.client = mock.Mock()
+    self.session.client.chat.completions.create.return_value = [
+      MockChunk([MockChoice(MockDelta(content="Summary 2"))])
+    ]
+
+    self.session.messages = [
+      {"role": "user", "content": "Summarize our progress and task context so far to optimize the context window."},
+      {"role": "assistant", "content": "Previous Summary Details"},
+      {"role": "user", "content": "new msg"},
+    ]
+
+    cmd_compress(self.session, "0")
+    
+    # Verify cumulative summarization instructions were sent to LLM
+    call_args = self.session.client.chat.completions.create.call_args[1]
+    sent_messages = call_args["messages"]
+    self.assertIn("IMPORTANT: A previous summary is present in the history", sent_messages[-1]["content"])
+
+  def test_compress_invalid_args(self):
+    # Invalid integer
+    res = cmd_compress(self.session, "abc")
+    self.assertTrue(res)
+    # Negative integer
+    res = cmd_compress(self.session, "-1")
+    self.assertTrue(res)
 
 
 if __name__ == "__main__":

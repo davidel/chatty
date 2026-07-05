@@ -177,7 +177,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/pop` | `<index>` | Truncates the conversation history by deleting all messages from the specified 1-based index onwards. |
 | `/tools` | None | Lists available sandboxed tools and their schema definitions. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
-| `/compress` | None | Directs the model to summarize current conversational state, resets history, and appends summary. |
+| `/compress` | `[N]` | Directs the model to summarize current conversational state using a structured format, resets older history, and keeps N (default 4) recent messages intact. |
 | `/exit` / `/quit` | None | Cleanly terminates background processes and exits Chatty. |
 
 ---

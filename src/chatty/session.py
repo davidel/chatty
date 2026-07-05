@@ -1716,20 +1716,46 @@ class ChatbotSession:
     console_print(f"[bold red]Unknown command:[/bold red] {cmd}. Type [cyan]/help[/cyan] for options.")
     return True
 
-  def compress_context(self):
+  def compress_context(self, keep_messages: Optional[int] = None):
     """Summarizes the history, clears the context, and reloads the summary."""
     if not self.messages:
       self._print("[bold yellow]History is empty. Nothing to compress.[/bold yellow]")
       return
 
+    if keep_messages is None:
+      keep_messages = self.history_keep_messages
+
+    keep_messages = min(keep_messages, len(self.messages))
+    keep_msgs = self.messages[-keep_messages:] if keep_messages > 0 else []
+
     # Prepare messages for summarization
     active_messages = self.prune_history()
     summary_instruction = (
-      "Summarize our progress, the current task we are focusing on, "
-      "any code modifications made so far, and the immediate next steps. "
+      "Summarize our progress and active context. You MUST structure your response exactly as follows:\n\n"
+      "### 📋 Goal & Task Context\n"
+      "<Describe the current high-level goal and active subtasks>\n\n"
+      "### 🛠️ Codebase Modifications & Environment State\n"
+      "<List files created/modified, active paths/permissions, and critical variables>\n\n"
+      "### ⚠️ Immediate Issues or Failures\n"
+      "<List recent failing tests, compilation errors, or blockages>\n\n"
+      "### ⏭️ Next Steps\n"
+      "<List 1-3 immediate action items>\n\n"
       "Keep the summary concise but preserve all technical details, filenames, "
       "function names, paths, and key design decisions."
     )
+
+    # Check for previous summaries in active messages
+    has_prev_summary = any(
+      "Summarize our progress and task context" in (msg.get("content") or "")
+      for msg in active_messages
+    )
+    if has_prev_summary:
+      summary_instruction += (
+        "\n\nIMPORTANT: A previous summary is present in the history. You must carry "
+        "forward all unresolved goals, code modifications, background context, and system "
+        "state from it into the new summary."
+      )
+
     active_messages.append({"role": "user", "content": summary_instruction})
 
     # Log request details in DEBUG mode
@@ -1824,6 +1850,8 @@ class ChatbotSession:
       "role": "assistant",
       "content": content_accumulated
     })
+    if keep_msgs:
+      self.messages.extend(keep_msgs)
     
     self._print("[bold green]Conversation history cleared and recap reloaded.[/bold green]")
 
@@ -1976,7 +2004,7 @@ class ChatbotSession:
     table.add_row("/tools", "List available sandbox tools and schemas")
     table.add_row("/whitelist [add <path> [ro|rw] | remove <path> | clear]", "Manage whitelisted out-of-sandbox paths")
     table.add_row("/clear / /reset", "Clear conversation memory")
-    table.add_row("/compress", "Summarize history, clear context, and reload summary")
+    table.add_row("/compress [N]", "Summarize history, clear context, reload summary, keeping N (default 4) recent messages")
     table.add_row("/exit / /quit", "Exit the application")
     self._print(table)
 
