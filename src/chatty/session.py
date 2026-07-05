@@ -286,6 +286,7 @@ class ChatbotSession:
       self.config.models = [self.config.model]
 
     self.background_commands = {}
+    self.whitelisted_script_signatures = set()
     self.next_task_id = 1
     self.max_completed_tasks = 10
     self._active_live = None
@@ -612,7 +613,7 @@ class ChatbotSession:
 
   def validate_command_safety(self, command: str) -> Optional[str]:
     """Validates that the shell command does not bypass dedicated tools."""
-    return validate_command_safety(command)
+    return validate_command_safety(command, session=self)
 
   def _apply_output_filters(
     self,
@@ -1958,6 +1959,51 @@ class ChatbotSession:
           return True
         else:
           logger.info(f"User denied access to: {abs_path}")
+          return False
+    except (KeyboardInterrupt, EOFError):
+      return False
+
+  def prompt_for_script_permission(self, code_str: str, signature: str) -> bool:
+    """Prompts the user to allow/deny execution of a Python script with an option to whitelist its signature."""
+    if self.headless:
+      return False
+
+    self._print("\n[bold yellow]================================================================================[/bold yellow]")
+    self._print("[bold yellow]⚠️  The LLM is trying to execute a Python script that accesses the filesystem.[/bold yellow]")
+    self._print("[bold yellow]================================================================================[/bold yellow]\n")
+
+    # Render syntax highlighted script
+    from rich.syntax import Syntax
+    syntax = Syntax(code_str, "python", theme="monokai", line_numbers=True)
+    self._print(Panel(syntax, title="[cyan]Python Code[/cyan]"))
+
+    self._print("\n[bold cyan]Signature (Operations):[/bold cyan]")
+    if signature:
+      for op in signature.split(','):
+        self._print(f"  - [yellow]{op}[/yellow]")
+    else:
+      self._print("  - [yellow](No forbidden filesystem operations detected in AST)[/yellow]")
+    self._print("")
+
+    try:
+      with self._pause_live():
+        self._print(
+          "Allow execution? "
+          "[bold green]\\[y][/bold green]es / "
+          "[bold red]\\[n][/bold red]o / "
+          "[bold cyan]\\[w][/bold cyan]hitelist (allow this class of scripts in this session): ",
+          end=""
+        )
+        response = input().strip().lower()
+        if response == 'w':
+          self.whitelisted_script_signatures.add(signature)
+          logger.info(f"User whitelisted script signature: {signature}")
+          return True
+        elif response in ('y', 'yes'):
+          logger.info("User allowed script execution once")
+          return True
+        else:
+          logger.info("User denied script execution")
           return False
     except (KeyboardInterrupt, EOFError):
       return False

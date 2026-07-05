@@ -1,7 +1,8 @@
+import ast
 import os
 import re
 import shlex
-from typing import List, Optional
+from typing import List, Optional, Set, Any
 import contextvars
 
 active_session_var = contextvars.ContextVar("active_session", default=None)
@@ -110,7 +111,61 @@ def count_lines(file_path: str) -> int:
   return count
 
 
-def validate_command_safety(command: str) -> Optional[str]:
+def get_structural_signature(code_str: str) -> str:
+  try:
+    tree = ast.parse(code_str)
+  except SyntaxError:
+    return "invalid_syntax"
+
+  ops = set()
+  for node in ast.walk(tree):
+    if isinstance(node, ast.Import):
+      for name in node.names:
+        ops.add(f"import:{name.name.split('.')[0]}")
+    elif isinstance(node, ast.ImportFrom):
+      if node.module:
+        ops.add(f"import:{node.module.split('.')[0]}")
+    elif isinstance(node, ast.Call):
+      if isinstance(node.func, ast.Name):
+        ops.add(f"call:{node.func.id}")
+      elif isinstance(node.func, ast.Attribute):
+        parts = []
+        curr = node.func
+        while isinstance(curr, ast.Attribute):
+          parts.append(curr.attr)
+          curr = curr.value
+        if isinstance(curr, ast.Name):
+          parts.append(curr.id)
+        parts.reverse()
+        ops.add(f"call:{'.'.join(parts)}")
+  return ",".join(sorted(ops))
+
+
+def is_signature_whitelisted(sig: str, whitelisted_sigs: Set[str]) -> bool:
+  if sig in whitelisted_sigs:
+    return True
+  sig_set = set(sig.split(',')) if sig else set()
+  for w_sig in whitelisted_sigs:
+    w_set = set(w_sig.split(',')) if w_sig else set()
+    if sig_set.issubset(w_set):
+      return True
+  return False
+
+
+def has_forbidden_filesystem_ops(sig: str) -> bool:
+  if not sig or sig == "invalid_syntax":
+    return False
+  for op in sig.split(','):
+    if op.startswith("import:") and op.split(":")[1] in {"os", "shutil", "pathlib", "glob", "fnmatch"}:
+      return True
+    if op == "call:open":
+      return True
+    if op.startswith("call:") and op.split(":")[1].split(".")[0] in {"os", "shutil", "pathlib", "glob", "fnmatch"}:
+      return True
+  return False
+
+
+def validate_command_safety(command: str, session: Optional[Any] = None) -> Optional[str]:
   """Validates that the shell command does not bypass dedicated tools."""
   
   def check_cmd(cmd_str: str) -> Optional[str]:
@@ -138,6 +193,54 @@ def validate_command_safety(command: str) -> Optional[str]:
             f"Please pass '{token_name}' as a separate tool argument (JSON parameter) "
             "to run_command instead of piping or appending it inside the command string."
           )
+          
+        if clean_token in {'python', 'python3', 'py', 'python2'}:
+          active_session = session if session is not None else active_session_var.get()
+          script_code = None
+          script_name = "inline script"
+          
+          # Check for inline script (-c "...")
+          for idx, t in enumerate(tokens):
+            if t == "-c" and idx + 1 < len(tokens):
+              script_code = tokens[idx + 1]
+              break
+              
+          # Check for file script
+          if not script_code:
+            for t in tokens:
+              if t.endswith(".py"):
+                target_path = t
+                if active_session and not os.path.isabs(target_path):
+                  target_path = os.path.join(active_session.sandbox, target_path)
+                if os.path.exists(target_path):
+                  try:
+                    with open(target_path, "r", encoding="utf-8") as f:
+                      script_code = f.read()
+                    script_name = t
+                  except Exception:
+                    pass
+                  break
+
+          if script_code:
+            sig = get_structural_signature(script_code)
+            if has_forbidden_filesystem_ops(sig):
+              if active_session:
+                if is_signature_whitelisted(sig, active_session.whitelisted_script_signatures):
+                  # Whitelisted, allow!
+                  pass
+                else:
+                  # Prompt user
+                  allowed = active_session.prompt_for_script_permission(script_code, sig)
+                  if not allowed:
+                    return (
+                      f"Error: Executing Python script ({script_name}) with direct filesystem operations is prohibited. "
+                      "Please use the dedicated workspace tools (like read_file, write_file, search_grep, list_dir) instead."
+                    )
+              else:
+                return (
+                  f"Error: Executing Python script ({script_name}) with direct filesystem operations is prohibited. "
+                  "Please use the dedicated workspace tools (like read_file, write_file, search_grep, list_dir) instead."
+                )
         
         if clean_token in {'grep', 'egrep', 'fgrep', 'rgrep'}:
           if pipe_count == 0:

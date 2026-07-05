@@ -562,6 +562,71 @@ class TestSafetyModuleAndDelegation(unittest.TestCase):
       shutil.rmtree(temp_dir)
 
 
+class TestPythonScriptSafety(unittest.TestCase):
+
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = tempfile.mkdtemp()
+    self.session = ChatbotSession(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.sandbox_dir
+    )
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
+    shutil.rmtree(self.sandbox_dir)
+
+  def test_ast_signature_generation(self):
+    from chatty.safety import get_structural_signature
+    code = "import os\nos.listdir('.')\n"
+    sig = get_structural_signature(code)
+    self.assertIn("import:os", sig)
+    self.assertIn("call:os.listdir", sig)
+
+  def test_python_safety_check_direct_block(self):
+    # Direct command without session should block forbidden script
+    err = validate_command_safety("python3 -c 'import os; os.listdir(\".\")'")
+    self.assertIsNotNone(err)
+    self.assertIn("filesystem operations is prohibited", err)
+
+    # Safe scripts (like math operations) should be allowed
+    err_safe = validate_command_safety("python3 -c 'import math; print(math.sqrt(4))'")
+    self.assertIsNone(err_safe)
+
+  def test_python_safety_check_session_prompt_and_whitelist(self):
+    import unittest.mock as mock
+
+    # Mock user input to 'y' (allow once)
+    with mock.patch("builtins.input", return_value="y"):
+      err = self.session.validate_command_safety("python3 -c 'import os; os.listdir(\".\")'")
+      self.assertIsNone(err)
+      # Should not have whitelisted it yet
+      self.assertEqual(len(self.session.whitelisted_script_signatures), 0)
+
+    # Mock user input to 'w' (whitelist)
+    with mock.patch("builtins.input", return_value="w"):
+      err = self.session.validate_command_safety("python3 -c 'import os; os.listdir(\".\")'")
+      self.assertIsNone(err)
+      self.assertEqual(len(self.session.whitelisted_script_signatures), 1)
+
+    # Running it again should not prompt (should be auto-approved)
+    with mock.patch("builtins.input", side_effect=AssertionError("Should not prompt!")):
+      err = self.session.validate_command_safety("python3 -c 'import os; os.listdir(\".\")'")
+      self.assertIsNone(err)
+
+    # Running a subset should also be auto-approved (subset matching)
+    with mock.patch("builtins.input", side_effect=AssertionError("Should not prompt!")):
+      err_subset = self.session.validate_command_safety("python3 -c 'import os'")
+      self.assertIsNone(err_subset)
+
+    # Mock user input to 'n' (deny)
+    with mock.patch("builtins.input", return_value="n"):
+      err_deny = self.session.validate_command_safety("python3 -c 'import shutil; shutil.copy(\"a\", \"b\")'")
+      self.assertIsNotNone(err_deny)
+      self.assertIn("filesystem operations is prohibited", err_deny)
+
+
 if __name__ == "__main__":
   unittest.main()
 

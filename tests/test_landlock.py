@@ -106,6 +106,7 @@ class TestLandlock(unittest.TestCase):
       self.assertEqual(f.read().strip(), "hello session")
 
     # Test reading outside sandbox via session (should succeed because of --ro /)
+    session.whitelisted_script_signatures.add("call:open,call:print,call:read")
     res_read = session.tool_run_command("python3 -c \"print(open('/etc/passwd').read()[:50])\"")
     self.assertIn("Command exited with code 0", res_read)
     self.assertIn("root:", res_read)
