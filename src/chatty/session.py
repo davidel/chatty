@@ -116,6 +116,7 @@ class CachedList(list):
 class SessionConfig:
   provider: str
   model: str
+  oracle_model: Optional[str] = None
   context_size: int = 8192
   sandbox: str = "./sandbox"
   api_key: Optional[str] = None
@@ -219,6 +220,7 @@ class ChatbotSession:
     self,
     provider: Optional[str] = None,
     model: Optional[str] = None,
+    oracle_model: Optional[str] = None,
     context_size: Optional[int] = None,
     sandbox: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -252,6 +254,7 @@ class ChatbotSession:
       self.config = SessionConfig(
         provider=provider,
         model=model,
+        oracle_model=oracle_model,
         context_size=context_size if context_size is not None else 8192,
         sandbox=sandbox if sandbox is not None else "./sandbox",
         api_key=api_key,
@@ -558,6 +561,66 @@ class ChatbotSession:
           "X-Title": "Chatty"
         }
       )
+
+  def get_oracle_model(self) -> str:
+    """Returns the configured oracle model, or determines a default based on provider."""
+    oracle_model = getattr(self.config, "oracle_model", None)
+    if oracle_model:
+      return oracle_model
+    if self.provider == "openrouter":
+      return "google/gemini-2.5-pro"
+    other_models = [m for m in self.models if m != self.model]
+    if other_models:
+      return other_models[0]
+    return self.model
+
+  def consult_oracle(self, query: str) -> str:
+    """Consults an oracle model for suggestions/assistance."""
+    oracle_model = self.get_oracle_model()
+    messages = [
+      {
+        "role": "system",
+        "content": (
+          "You are an AI oracle. You are assisting another AI agent that is currently "
+          "stuck or needs advice on a difficult logic, programming, or reasoning step. "
+          "Provide clear, concise, and highly accurate suggestions, code, or solutions "
+          "to help the agent proceed."
+        )
+      },
+      {
+        "role": "user",
+        "content": query
+      }
+    ]
+    logger.info(f"Consulting oracle (model={oracle_model}) with query: {query}")
+    content_accumulated = ""
+    panel = Panel("Connecting to Oracle LLM...", title="🔮 Oracle", border_style="purple")
+    try:
+      with optional_live(Group(panel), console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
+        stream = self.client.chat.completions.create(
+          model=oracle_model,
+          messages=messages,
+          stream=True
+        )
+        for chunk in stream:
+          if not chunk.choices:
+            continue
+          choice = chunk.choices[0]
+          delta = choice.delta
+          if delta.content:
+            content_accumulated += delta.content
+            panel = Panel(LazyMarkdown(content_accumulated), title="🔮 Oracle", border_style="purple")
+            live.update(Group(panel))
+      if content_accumulated:
+        self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
+      else:
+        self._print("[bold red]Oracle returned an empty response.[/bold red]")
+      return content_accumulated or "Error: Oracle returned an empty response."
+    except Exception as e:
+      err_msg = f"Error during oracle consultation: {str(e)}"
+      logger.exception(err_msg)
+      self._print(f"[bold red]{err_msg}[/bold red]")
+      return err_msg
 
   def tool_run_tests(self, command: str = None) -> str:
     """Run tests in the sandbox, auto-detecting the testing framework if no command is provided."""
@@ -2115,6 +2178,7 @@ class ChatbotSession:
     table.add_row("/provider [ollama|openrouter]", "View or switch the LLM backend provider")
     table.add_row("/model [ID|name]", "View or switch the current LLM model by ID or name")
     table.add_row("/models [add <name> | remove <ID/name>]", "List, add, or remove LLM models in the session")
+    table.add_row("/oracle [name]", "View or switch the oracle model used for suggestions")
     table.add_row("/sandbox [path]", "View or change the sandbox directory path")
     table.add_row("/context [tokens]", "View or modify the history token limit")
     table.add_row("/loops [iterations]", "View or modify the max sequential tool loops limit")
@@ -2141,6 +2205,7 @@ class ChatbotSession:
     table.add_column("Value", style="green")
     table.add_row("Provider", self.provider)
     table.add_row("Model", self.model)
+    table.add_row("Oracle Model", self.oracle_model or f"Not set (Default: {self.get_oracle_model()})")
     table.add_row("Sandbox Path", self.sandbox)
     table.add_row("Context Limit", f"{self.context_size} tokens")
     table.add_row("Max Loop Iterations", f"{self.max_loops} loops")

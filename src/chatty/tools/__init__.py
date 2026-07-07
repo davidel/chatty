@@ -661,6 +661,23 @@ TOOLS_SCHEMA = [
         "required": ["query"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "ask_oracle",
+      "description": "Consult a more advanced oracle model for advice or suggestions when stuck on a difficult reasoning step, logic problem, or complex code generation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The specific question, prompt, or explanation of the stuck state to ask the oracle model. Include all necessary context, code snippets, or logs."
+          }
+        },
+        "required": ["query"]
+      }
+    }
   }
 ]
 
@@ -899,5 +916,10 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
     except (ValueError, TypeError):
       max_results = 10
     return tool_search_web(query, max_results)
+  elif name == "ask_oracle":
+    query = arguments.get("query")
+    if not query:
+      return "Error: Missing parameter 'query'."
+    return session.consult_oracle(query)
   else:
     return f"Error: Tool '{name}' is not recognized."

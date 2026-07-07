@@ -28,6 +28,10 @@ def main():
     help="Model identifier(s) to use. Can be specified multiple times or as comma-separated values. The first model becomes the active model."
   )
   parser.add_argument(
+    "--oracle-model",
+    help="Model identifier to use as the oracle. Default determines based on provider."
+  )
+  parser.add_argument(
     "--context-size", "-c",
     type=int,
     default=8192,
@@ -201,6 +205,7 @@ def main():
     provider=args.provider,
     model=model,
     models=models,
+    oracle_model=args.oracle_model,
     context_size=args.context_size,
     sandbox=args.sandbox,
     api_key=args.api_key,

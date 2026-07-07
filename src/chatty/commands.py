@@ -92,6 +92,21 @@ def cmd_model(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_oracle(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    oracle = getattr(session, "oracle_model", None)
+    if oracle:
+      console.print(f"Current oracle model: [bold cyan]{oracle}[/bold cyan]")
+    else:
+      console.print(f"Current oracle model is not set. Defaulting to: [bold yellow]{session.get_oracle_model()}[/bold yellow]")
+    return True
+
+  session.oracle_model = arg
+  console.print(f"Switched oracle model to: [bold green]{arg}[/bold green]")
+  return True
+
+
 def cmd_models(session: Any, arg: str) -> bool:
   parts = arg.strip().split(maxsplit=1)
   if not parts:
@@ -272,6 +287,7 @@ def cmd_save(session: Any, arg: str) -> bool:
       "provider": session.provider,
       "model": session.model,
       "models": session.models,
+      "oracle_model": getattr(session, "oracle_model", None),
       "context_size": session.context_size,
       "sandbox": session.sandbox,
       "max_loops": session.max_loops,
@@ -310,6 +326,8 @@ def cmd_load_session(session: Any, arg: str) -> bool:
         session.model = session_data["model"]
       if "models" in session_data:
         session.models = session_data["models"]
+      if "oracle_model" in session_data:
+        session.oracle_model = session_data["oracle_model"]
       if "context_size" in session_data:
         session.context_size = session_data["context_size"]
       if "sandbox" in session_data:
@@ -493,6 +511,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/provider": cmd_provider,
   "/model": cmd_model,
   "/models": cmd_models,
+  "/oracle": cmd_oracle,
   "/sandbox": cmd_sandbox,
   "/context": cmd_context,
   "/loops": cmd_loops,
