@@ -326,6 +326,7 @@ class ChatbotSession:
       self.system_prompt = default_prompt
     self.multiline_mode = False
     self.client = None
+    self.last_api_call_time = 0.0
     
     # Ensure sandbox exists
     os.makedirs(self.sandbox, exist_ok=True)
@@ -562,6 +563,64 @@ class ChatbotSession:
         }
       )
 
+  def _throttle_request(self):
+    """Ensures at least 1.0 second has elapsed since the last API request."""
+    now = time.time()
+    elapsed = now - self.last_api_call_time
+    min_delay = 1.0
+    if elapsed < min_delay:
+      sleep_needed = min_delay - elapsed
+      logger.info(f"Pacing API requests: sleeping for {sleep_needed:.2f}s...")
+      time.sleep(sleep_needed)
+    self.last_api_call_time = time.time()
+
+  def _is_retryable_exception(self, e: Exception) -> bool:
+    """Checks if an API exception is transient or rate-limit related and should be retried."""
+    err_msg = str(e).lower()
+    if isinstance(e, openai.APIConnectionError):
+      return True
+    if isinstance(e, openai.RateLimitError):
+      return True
+    if isinstance(e, openai.APIStatusError):
+      status_code = getattr(e, "status_code", None)
+      if status_code is not None:
+        if status_code >= 500 or status_code == 429:
+          return True
+        if status_code == 400:
+          indicators = [
+            "high-frequency", "non-compliant", "rate limit", 
+            "too many requests", "comply with the platform", 
+            "usage agreement", "appeal, contact"
+          ]
+          if any(ind in err_msg for ind in indicators):
+            return True
+    if isinstance(e, openai.APIError):
+      indicators = [
+        "high-frequency", "non-compliant", "rate limit", 
+        "too many requests", "comply with the platform", 
+        "usage agreement", "appeal, contact"
+      ]
+      if any(ind in err_msg for ind in indicators):
+        return True
+    return False
+
+  def _resolve_model_and_provider(self, model_name: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Resolves model name and provider preferences (if colon syntax is present)."""
+    if not model_name or ":" not in model_name:
+      return model_name, None
+    parts = model_name.split(":", 1)
+    base_model = parts[0]
+    suffix = parts[1]
+    if suffix in ("free", "nitro", "floor"):
+      return model_name, None
+    extra_body = {
+      "provider": {
+        "order": [suffix],
+        "allow_fallbacks": False
+      }
+    }
+    return base_model, extra_body
+
   def get_oracle_model(self) -> str:
     """Returns the configured oracle model, or determines a default based on provider."""
     oracle_model = getattr(self.config, "oracle_model", None)
@@ -595,32 +654,47 @@ class ChatbotSession:
     logger.info(f"Consulting oracle (model={oracle_model}) with query: {query}")
     content_accumulated = ""
     panel = Panel("Connecting to Oracle LLM...", title="🔮 Oracle", border_style="purple")
-    try:
-      with optional_live(Group(panel), console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
-        stream = self.client.chat.completions.create(
-          model=oracle_model,
-          messages=messages,
-          stream=True
-        )
-        for chunk in stream:
-          if not chunk.choices:
-            continue
-          choice = chunk.choices[0]
-          delta = choice.delta
-          if delta.content:
-            content_accumulated += delta.content
-            panel = Panel(LazyMarkdown(content_accumulated), title="🔮 Oracle", border_style="purple")
-            live.update(Group(panel))
-      if content_accumulated:
-        self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
-      else:
-        self._print("[bold red]Oracle returned an empty response.[/bold red]")
-      return content_accumulated or "Error: Oracle returned an empty response."
-    except Exception as e:
-      err_msg = f"Error during oracle consultation: {str(e)}"
-      logger.exception(err_msg)
-      self._print(f"[bold red]{err_msg}[/bold red]")
-      return err_msg
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+      try:
+        with optional_live(Group(panel), console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
+          actual_model, extra_body = self._resolve_model_and_provider(oracle_model)
+          self._throttle_request()
+          kwargs = {
+            "model": actual_model,
+            "messages": messages,
+            "stream": True
+          }
+          if extra_body:
+            kwargs["extra_body"] = extra_body
+          stream = self.client.chat.completions.create(**kwargs)
+          for chunk in stream:
+            if not chunk.choices:
+              continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if delta.content:
+              content_accumulated += delta.content
+              panel = Panel(LazyMarkdown(content_accumulated), title="🔮 Oracle", border_style="purple")
+              live.update(Group(panel))
+        if content_accumulated:
+          self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
+        else:
+          self._print("[bold red]Oracle returned an empty response.[/bold red]")
+        break
+      except Exception as e:
+        logger.exception("Error during oracle consultation")
+        if attempt < max_retries and self._is_retryable_exception(e):
+          backoff_time = 2 ** attempt
+          self._print(f"[bold yellow]⚠️  Error calling Oracle API: {str(e)}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
+          time.sleep(backoff_time)
+          content_accumulated = ""
+          continue
+        else:
+          err_msg = f"Error during oracle consultation: {str(e)}"
+          self._print(f"[bold red]{err_msg}[/bold red]")
+          return err_msg
+    return content_accumulated or "Error: Oracle returned an empty response."
 
   def tool_run_tests(self, command: str = None) -> str:
     """Run tests in the sandbox, auto-detecting the testing framework if no command is provided."""
@@ -1544,23 +1618,33 @@ class ChatbotSession:
             # Log request details in DEBUG mode
             self._log_llm_request(active_messages, self.get_tools())
             
+            # Resolve model and provider
+            actual_model, extra_body = self._resolve_model_and_provider(self.model)
+            
+            self._throttle_request()
             # Try calling with stream_options={"include_usage": True}
             try:
-              stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=active_messages,
-                tools=self.get_tools(),
-                stream=True,
-                stream_options={"include_usage": True}
-              )
+              kwargs = {
+                "model": actual_model,
+                "messages": active_messages,
+                "tools": self.get_tools(),
+                "stream": True,
+                "stream_options": {"include_usage": True}
+              }
+              if extra_body:
+                kwargs["extra_body"] = extra_body
+              stream = self.client.chat.completions.create(**kwargs)
             except Exception as e:
               logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
-              stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=active_messages,
-                tools=self.get_tools(),
-                stream=True
-              )
+              kwargs = {
+                "model": actual_model,
+                "messages": active_messages,
+                "tools": self.get_tools(),
+                "stream": True
+              }
+              if extra_body:
+                kwargs["extra_body"] = extra_body
+              stream = self.client.chat.completions.create(**kwargs)
             
             first_metadata_chunk = True
             first_chunk = True
@@ -1703,8 +1787,14 @@ class ChatbotSession:
           )
         except Exception as e:
           logger.exception("Error calling LLM API")
-          self._print(f"[bold red]Error calling API:[/bold red] {str(e)}")
-          break
+          if attempt < max_retries and self._is_retryable_exception(e):
+            backoff_time = 2 ** attempt
+            self._print(f"[bold yellow]⚠️  Error calling API: {str(e)}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
+            time.sleep(backoff_time)
+            continue
+          else:
+            self._print(f"[bold red]Error calling API:[/bold red] {str(e)}")
+            break
             
         # If we didn't receive structured tool calls, try to extract them from text content
         if not tool_calls_accumulated and content_accumulated:
@@ -1907,78 +1997,98 @@ class ChatbotSession:
 
     content_accumulated = ""
     logger.info("Generating summary for /compress command")
-    try:
-      with optional_live(Panel("Connecting to LLM for summary...", title="Context Compression", border_style="yellow"),
-                        console=console, enabled=not self.headless, refresh_per_second=12) as live:
-        
-        try:
-          stream = self.client.chat.completions.create(
-            model=self.model,
-            messages=active_messages,
-            stream=True,
-            stream_options={"include_usage": True}
-          )
-        except Exception as e:
-          logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
-          stream = self.client.chat.completions.create(
-            model=self.model,
-            messages=active_messages,
-            stream=True
-          )
-        
-        first_metadata_chunk = True
-        first_content_chunk = True
-        usage_metadata = None
-        chunk_id = None
-        resp_model = None
-        sys_fp = None
-        finish_reason = None
-        for chunk in stream:
-          # Capture usage if present
-          if hasattr(chunk, "usage") and chunk.usage:
-            usage_metadata = chunk.usage
-          elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
-            usage_metadata = chunk.model_extra["usage"]
-
-          # Log metadata on first chunk
-          if first_metadata_chunk:
-            chunk_id = getattr(chunk, "id", None)
-            resp_model = getattr(chunk, "model", None)
-            sys_fp = getattr(chunk, "system_fingerprint", None)
-            logger.debug(
-              f"LLM context compression response started. Chunk ID: {chunk_id}, Model: {resp_model}, System Fingerprint: {sys_fp}"
-            )
-            first_metadata_chunk = False
-
-          if not chunk.choices:
-            continue
-          choice = chunk.choices[0]
-          delta = choice.delta
-          if hasattr(choice, "finish_reason") and choice.finish_reason:
-            finish_reason = choice.finish_reason
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+      try:
+        with optional_live(Panel("Connecting to LLM for summary...", title="Context Compression", border_style="yellow"),
+                          console=console, enabled=not self.headless, refresh_per_second=12) as live:
           
-          if delta.content:
-            if first_content_chunk:
-              live.update(Panel("", title="Context Summary", border_style="yellow"))
-              first_content_chunk = False
-            content_accumulated += delta.content
-            live.update(Panel(Markdown(content_accumulated), title="Context Summary", border_style="yellow"))
+          # Resolve model and provider
+          actual_model, extra_body = self._resolve_model_and_provider(self.model)
+          
+          self._throttle_request()
+          try:
+            kwargs = {
+              "model": actual_model,
+              "messages": active_messages,
+              "stream": True,
+              "stream_options": {"include_usage": True}
+            }
+            if extra_body:
+              kwargs["extra_body"] = extra_body
+            stream = self.client.chat.completions.create(**kwargs)
+          except Exception as e:
+            logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
+            kwargs = {
+              "model": actual_model,
+              "messages": active_messages,
+              "stream": True
+            }
+            if extra_body:
+              kwargs["extra_body"] = extra_body
+            stream = self.client.chat.completions.create(**kwargs)
+          
+          first_metadata_chunk = True
+          first_content_chunk = True
+          usage_metadata = None
+          chunk_id = None
+          resp_model = None
+          sys_fp = None
+          finish_reason = None
+          for chunk in stream:
+            # Capture usage if present
+            if hasattr(chunk, "usage") and chunk.usage:
+              usage_metadata = chunk.usage
+            elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+              usage_metadata = chunk.model_extra["usage"]
+
+            # Log metadata on first chunk
+            if first_metadata_chunk:
+              chunk_id = getattr(chunk, "id", None)
+              resp_model = getattr(chunk, "model", None)
+              sys_fp = getattr(chunk, "system_fingerprint", None)
+              logger.debug(
+                f"LLM context compression response started. Chunk ID: {chunk_id}, Model: {resp_model}, System Fingerprint: {sys_fp}"
+              )
+              first_metadata_chunk = False
+
+            if not chunk.choices:
+              continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if hasattr(choice, "finish_reason") and choice.finish_reason:
+              finish_reason = choice.finish_reason
             
-      logger.info("Summary generation succeeded")
-      self._log_llm_response_summary(
-        content_accumulated=content_accumulated,
-        tool_calls_accumulated=[],
-        extra_fields_accumulated={},
-        finish_reason=finish_reason,
-        usage=usage_metadata,
-        response_model=resp_model,
-        system_fingerprint=sys_fp,
-        chunk_id=chunk_id
-      )
-    except Exception as e:
-      logger.exception("Error calling LLM API for context summary")
-      self._print(f"[bold red]Error calling API for summary:[/bold red] {str(e)}")
-      return
+            if delta.content:
+              if first_content_chunk:
+                live.update(Panel("", title="Context Summary", border_style="yellow"))
+                first_content_chunk = False
+              content_accumulated += delta.content
+              live.update(Panel(Markdown(content_accumulated), title="Context Summary", border_style="yellow"))
+              
+        logger.info("Summary generation succeeded")
+        self._log_llm_response_summary(
+          content_accumulated=content_accumulated,
+          tool_calls_accumulated=[],
+          extra_fields_accumulated={},
+          finish_reason=finish_reason,
+          usage=usage_metadata,
+          response_model=resp_model,
+          system_fingerprint=sys_fp,
+          chunk_id=chunk_id
+        )
+        break
+      except Exception as e:
+        logger.exception("Error calling LLM API for context summary")
+        if attempt < max_retries and self._is_retryable_exception(e):
+          backoff_time = 2 ** attempt
+          self._print(f"[bold yellow]⚠️  Error calling API for summary: {str(e)}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
+          time.sleep(backoff_time)
+          content_accumulated = ""
+          continue
+        else:
+          self._print(f"[bold red]Error calling API for summary:[/bold red] {str(e)}")
+          return
 
     if not content_accumulated.strip():
       self._print("[bold red]Failed to generate summary. Context was not cleared.[/bold red]")

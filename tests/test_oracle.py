@@ -115,3 +115,24 @@ class TestOracle(unittest.TestCase):
     # Execute tool
     res = execute_tool("ask_oracle", {"query": "Explain quantum physics"}, self.session)
     self.assertEqual(res, "Oracle suggestion")
+
+  def test_model_and_provider_resolution(self):
+    # Test without colon
+    model, extra = self.session._resolve_model_and_provider("xiaomi/mimo-v2.5")
+    self.assertEqual(model, "xiaomi/mimo-v2.5")
+    self.assertIsNone(extra)
+
+    # Test with standard suffix (nitro)
+    model, extra = self.session._resolve_model_and_provider("xiaomi/mimo-v2.5:nitro")
+    self.assertEqual(model, "xiaomi/mimo-v2.5:nitro")
+    self.assertIsNone(extra)
+
+    # Test with provider suffix (xiaomi)
+    model, extra = self.session._resolve_model_and_provider("xiaomi/mimo-v2.5:xiaomi")
+    self.assertEqual(model, "xiaomi/mimo-v2.5")
+    self.assertEqual(extra, {
+      "provider": {
+        "order": ["xiaomi"],
+        "allow_fallbacks": False
+      }
+    })
