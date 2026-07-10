@@ -564,10 +564,10 @@ class ChatbotSession:
       )
 
   def _throttle_request(self):
-    """Ensures at least 1.0 second has elapsed since the last API request."""
+    """Ensures at least 1.5 seconds have elapsed since the last API request or response."""
     now = time.time()
     elapsed = now - self.last_api_call_time
-    min_delay = 1.0
+    min_delay = 1.5
     if elapsed < min_delay:
       sleep_needed = min_delay - elapsed
       logger.info(f"Pacing API requests: sleeping for {sleep_needed:.2f}s...")
@@ -677,12 +677,14 @@ class ChatbotSession:
               content_accumulated += delta.content
               panel = Panel(LazyMarkdown(content_accumulated), title="🔮 Oracle", border_style="purple")
               live.update(Group(panel))
+        self.last_api_call_time = time.time()
         if content_accumulated:
           self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
         else:
           self._print("[bold red]Oracle returned an empty response.[/bold red]")
         break
       except Exception as e:
+        self.last_api_call_time = time.time()
         logger.exception("Error during oracle consultation")
         if attempt < max_retries and self._is_retryable_exception(e):
           backoff_time = 2 ** attempt
@@ -1635,6 +1637,8 @@ class ChatbotSession:
                 kwargs["extra_body"] = extra_body
               stream = self.client.chat.completions.create(**kwargs)
             except Exception as e:
+              if self._is_retryable_exception(e):
+                raise
               logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
               kwargs = {
                 "model": actual_model,
@@ -1785,7 +1789,9 @@ class ChatbotSession:
             system_fingerprint=sys_fp,
             chunk_id=chunk_id
           )
+          self.last_api_call_time = time.time()
         except Exception as e:
+          self.last_api_call_time = time.time()
           logger.exception("Error calling LLM API")
           if attempt < max_retries and self._is_retryable_exception(e):
             backoff_time = 2 ** attempt
@@ -2018,6 +2024,8 @@ class ChatbotSession:
               kwargs["extra_body"] = extra_body
             stream = self.client.chat.completions.create(**kwargs)
           except Exception as e:
+            if self._is_retryable_exception(e):
+              raise
             logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
             kwargs = {
               "model": actual_model,
@@ -2077,8 +2085,10 @@ class ChatbotSession:
           system_fingerprint=sys_fp,
           chunk_id=chunk_id
         )
+        self.last_api_call_time = time.time()
         break
       except Exception as e:
+        self.last_api_call_time = time.time()
         logger.exception("Error calling LLM API for context summary")
         if attempt < max_retries and self._is_retryable_exception(e):
           backoff_time = 2 ** attempt
