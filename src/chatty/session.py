@@ -261,6 +261,7 @@ class ChatbotSession:
       "When running shell commands using run_command, if a command takes longer than 10 seconds, it will automatically transition to run in the background and return a 'Task ID'. You must NOT block. Instead, check its output or wait for its progress/completion by calling check_background_command with the Task ID and a timeout parameter. You can also peek at the accumulated output of a background task without blocking or waiting by calling peek_task_output. You are strictly prohibited from using the 'sleep' tool to wait for background commands; you MUST use check_background_command with a timeout parameter instead. Perform other file tasks (read, patch, edit) while waiting.\n"
       "To filter the output of run_command, use its optional 'output_filter' (regex), 'tail_lines', or 'head_lines' parameters rather than piping to grep or writing custom filtering scripts.\n"
       "When compilation, testing, verification, or running tools (like verilator, python scripts, compilers) is needed, you MUST execute them directly using the run_command tool instead of instructing the user to run them manually.\n"
+      "CRITICAL: Keep your internal thinking/reasoning process concise, structured, and goal-oriented. Do not repeat the same thoughts or arguments. Transition to final content or tool calls as quickly as possible. If you are stuck or require more information, immediately stop thinking and state the problem or ask a question.\n"
       "Always use your tools proactively to solve tasks directly."
     )
     

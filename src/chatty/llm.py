@@ -427,6 +427,13 @@ def _log_llm_response_summary(
   logger.debug("============================")
 
 
+class ThinkingBudgetExceeded(RuntimeError):
+  """Raised when the LLM's internal thinking stream exceeds the configured limit."""
+  def __init__(self, message: str, accumulated_thinking: str):
+    super().__init__(message)
+    self.accumulated_thinking = accumulated_thinking
+
+
 def run_llm_cycle(self):
   """Executes a full inference cycle, resolving tool calls recursively."""
   self.load_skills()
@@ -440,6 +447,7 @@ def run_llm_cycle(self):
     api_succeeded = False
     finish_reason = None
     
+    last_aborted_thinking = None
     for attempt in range(1, max_retries + 1):
       # Prepare message payloads based on limit settings
       active_messages = self.prune_history()
@@ -451,6 +459,18 @@ def run_llm_cycle(self):
           "role": "user",
           "content": "Please continue the task using the tool output above."
         })
+      
+      # If the previous attempt was aborted due to an internal thinking loop, feed it back
+      if last_aborted_thinking:
+        active_messages.append({
+          "role": "user",
+          "content": (
+            "⚠️ The system aborted your previous attempt because you got stuck in an internal thinking loop. "
+            "Review your thinking path below, identify the repetition/deadlock, and use a completely different approach or respond directly:\n\n"
+            f"--- ABORTED THINKING PATH ---\n{last_aborted_thinking}\n------------------------------"
+          )
+        })
+        last_aborted_thinking = None
       
       # Cache token count for the status bar during streaming
       self._cached_history_tokens = self._calculate_tokens_for_messages(active_messages)
@@ -579,6 +599,24 @@ def run_llm_cycle(self):
             reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
                                      extra_fields_accumulated.get("reasoning") or "")
             
+            # Guard against endless internal thinking loops
+            max_thinking_chars = getattr(self.config, "max_thinking_chars", 12000)
+            if (len(reasoning_accumulated) > max_thinking_chars 
+                and not content_accumulated 
+                and not delta.content 
+                and not tool_calls_accumulated 
+                and not delta.tool_calls):
+              logger.warning(f"Aborting stream: LLM exceeded maximum internal thinking budget of {max_thinking_chars} chars.")
+              if hasattr(stream, "close"):
+                try:
+                  stream.close()
+                except Exception:
+                  pass
+              raise ThinkingBudgetExceeded(
+                "LLM exceeded maximum internal thinking budget.",
+                reasoning_accumulated
+              )
+            
             if delta.content or has_new_reasoning:
               first_chunk = False
               renderables = []
@@ -645,6 +683,17 @@ def run_llm_cycle(self):
           chunk_id=chunk_id
         )
         self.last_api_call_time = time.time()
+      except ThinkingBudgetExceeded as e:
+        self.last_api_call_time = time.time()
+        logger.warning(f"Thinking budget exceeded on attempt {attempt}")
+        last_aborted_thinking = e.accumulated_thinking
+        if attempt < max_retries:
+          self._print(f"[bold yellow]⚠️  LLM exceeded internal thinking budget. Retrying with self-correction nudge (attempt {attempt}/{max_retries})...[/bold yellow]")
+          time.sleep(1)
+          continue
+        else:
+          self._print("[bold red]Error: LLM repeatedly exceeded internal thinking budget without producing output.[/bold red]")
+          break
       except Exception as e:
         self.last_api_call_time = time.time()
         logger.exception("Error calling LLM API")
