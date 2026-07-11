@@ -146,3 +146,24 @@ class TestOracle(unittest.TestCase):
         "allow_fallbacks": False
       }
     })
+
+  def test_is_retryable_exception(self):
+    import openai
+    # Construct mock/real APIStatusError
+    mock_response = MagicMock()
+    mock_response.status_code = 400
+    
+    # 1. Test "provider returned error" and rate limit indicators
+    err_msg = "Error code: 400 - {'error': {'message': 'Provider returned error', 'code': 400, 'metadata': {'raw': '...'}}}"
+    exc = openai.APIStatusError(message=err_msg, response=mock_response, body=None)
+    self.assertTrue(self.session._is_retryable_exception(exc))
+    
+    # 2. Test "rate-limited" indicator
+    err_msg2 = "xiaomi/mimo-v2.5 is temporarily rate-limited upstream"
+    exc2 = openai.APIStatusError(message=err_msg2, response=mock_response, body=None)
+    self.assertTrue(self.session._is_retryable_exception(exc2))
+
+    # 3. Test non-retryable 400 error
+    err_msg3 = "Invalid request parameter: max_tokens"
+    exc3 = openai.APIStatusError(message=err_msg3, response=mock_response, body=None)
+    self.assertFalse(self.session._is_retryable_exception(exc3))

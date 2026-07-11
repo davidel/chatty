@@ -604,17 +604,19 @@ class ChatbotSession:
           return True
         if status_code == 400:
           indicators = [
-            "high-frequency", "non-compliant", "rate limit", 
-            "too many requests", "comply with the platform", 
-            "usage agreement", "appeal, contact"
+            "high-frequency", "non-compliant", "rate limit", "rate-limit",
+            "rate_limited", "rate-limited", "too many requests", "comply with the platform",
+            "usage agreement", "appeal, contact", "provider returned error",
+            "risk_control", "risk control"
           ]
           if any(ind in err_msg for ind in indicators):
             return True
     if isinstance(e, openai.APIError):
       indicators = [
-        "high-frequency", "non-compliant", "rate limit", 
-        "too many requests", "comply with the platform", 
-        "usage agreement", "appeal, contact"
+        "high-frequency", "non-compliant", "rate limit", "rate-limit",
+        "rate_limited", "rate-limited", "too many requests", "comply with the platform",
+        "usage agreement", "appeal, contact", "provider returned error",
+        "risk_control", "risk control"
       ]
       if any(ind in err_msg for ind in indicators):
         return True
@@ -1355,7 +1357,14 @@ class ChatbotSession:
         return None
       if "name" in data and "arguments" in data:
         args = data["arguments"]
-        args_str = json.dumps(args) if isinstance(args, dict) else str(args)
+        if isinstance(args, str):
+          try:
+            json.loads(args)
+            args_str = args
+          except Exception:
+            args_str = json.dumps(args)
+        else:
+          args_str = json.dumps(args)
         return {
           "id": "call_text_parsed",
           "type": "function",
@@ -1368,7 +1377,14 @@ class ChatbotSession:
         func = data["function"]
         if isinstance(func, dict) and "name" in func and "arguments" in func:
           args = func["arguments"]
-          args_str = json.dumps(args) if isinstance(args, dict) else str(args)
+          if isinstance(args, str):
+            try:
+              json.loads(args)
+              args_str = args
+            except Exception:
+              args_str = json.dumps(args)
+          else:
+            args_str = json.dumps(args)
           return {
             "id": "call_text_parsed",
             "type": "function",
@@ -1846,10 +1862,26 @@ class ChatbotSession:
       if not api_succeeded:
         break
               
-      # Ensure every accumulated tool call has a unique ID
+      # Ensure every accumulated tool call has a unique ID and valid JSON arguments
       for tc in tool_calls_accumulated:
         if not tc.get("id") or tc.get("id") == "call_text_parsed":
           tc["id"] = f"call_{uuid.uuid4().hex[:12]}"
+        
+        func_obj = tc.get("function")
+        if isinstance(func_obj, dict):
+          t_args_raw = func_obj.get("arguments")
+          if not isinstance(t_args_raw, str):
+            func_obj["arguments"] = json.dumps(t_args_raw) if t_args_raw is not None else "{}"
+          else:
+            try:
+              json.loads(t_args_raw)
+            except Exception:
+              try:
+                repaired = repair_json(t_args_raw)
+                json.loads(repaired)
+                func_obj["arguments"] = repaired
+              except Exception:
+                func_obj["arguments"] = "{}"
               
       # Construct assistant message record
       assistant_msg = {"role": "assistant"}

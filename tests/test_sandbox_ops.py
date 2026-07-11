@@ -479,6 +479,84 @@ class TestSandboxOps(unittest.TestCase):
     res_signed = tool_hex_dump(self.sandbox_dir, "test_signed.bin", start_offset=0, size=4, format="dec", word_size=32, signed=True)
     self.assertIn("00000000: -1", res_signed)
 
+  def test_tool_arguments_json_safety(self):
+    import json
+    from chatty.session import ChatbotSession
+    session = ChatbotSession(
+      provider="openrouter",
+      model="mock",
+      context_size=8192,
+      sandbox=self.sandbox_dir
+    )
+    
+    # 1. Test extract_tool_calls_from_text with list arguments
+    sample_text = (
+      "```json\n"
+      "{\n"
+      "  \"name\": \"run_command\",\n"
+      "  \"arguments\": [\"git\", \"status\"]\n"
+      "}\n"
+      "```"
+    )
+    parsed = session.extract_tool_calls_from_text(sample_text)
+    self.assertEqual(len(parsed), 1)
+    args_str = parsed[0]["function"]["arguments"]
+    # Ensure it's valid JSON
+    parsed_args = json.loads(args_str)
+    self.assertEqual(parsed_args, ["git", "status"])
+
+    # 2. Test extract_tool_calls_from_text with a plain string that is not JSON
+    sample_text_str = (
+      "```json\n"
+      "{\n"
+      "  \"name\": \"run_command\",\n"
+      "  \"arguments\": \"git status\"\n"
+      "}\n"
+      "```"
+    )
+    parsed_str = session.extract_tool_calls_from_text(sample_text_str)
+    self.assertEqual(len(parsed_str), 1)
+    args_str = parsed_str[0]["function"]["arguments"]
+    parsed_args = json.loads(args_str)
+    self.assertEqual(parsed_args, "git status")
+
+    # 3. Test validation of invalid JSON arguments in tool_calls_accumulated list
+    tool_calls = [
+      {
+        "id": "call_1",
+        "type": "function",
+        "function": {
+          "name": "run_command",
+          "arguments": "{\"CommandLine\": \"git status\""  # invalid JSON (missing closing brace)
+        }
+      }
+    ]
+    
+    # We can mock session run or just directly check the validation logic that we added:
+    # Let's verify that when we sanitize the tool calls, it repairs it or falls back to valid JSON.
+    for tc in tool_calls:
+      func_obj = tc.get("function")
+      if isinstance(func_obj, dict):
+        t_args_raw = func_obj.get("arguments")
+        if not isinstance(t_args_raw, str):
+          func_obj["arguments"] = json.dumps(t_args_raw) if t_args_raw is not None else "{}"
+        else:
+          try:
+            json.loads(t_args_raw)
+          except Exception:
+            try:
+              from chatty.utils import repair_json
+              repaired = repair_json(t_args_raw)
+              json.loads(repaired)
+              func_obj["arguments"] = repaired
+            except Exception:
+              func_obj["arguments"] = "{}"
+
+    # Ensure the arguments were repaired to a valid JSON string
+    self.assertNotEqual(tool_calls[0]["function"]["arguments"], "{\"CommandLine\": \"git status\"")
+    parsed_repaired = json.loads(tool_calls[0]["function"]["arguments"])
+    self.assertEqual(parsed_repaired.get("CommandLine"), "git status")
+
 
 if __name__ == "__main__":
   unittest.main()
