@@ -2,6 +2,7 @@ import os
 import time
 import json
 import logging
+import re
 from typing import List, Dict, Any, Tuple, Optional
 
 import openai
@@ -427,6 +428,44 @@ def _log_llm_response_summary(
   logger.debug("============================")
 
 
+def is_safe_to_interrupt(text: str) -> bool:
+  """Checks if the accumulated text is at a safe sentence/markdown boundary to interrupt."""
+  # If we are inside an unfinished code block, do not interrupt
+  if text.count("```") % 2 != 0:
+    return False
+
+  # If we are inside inline code, do not interrupt
+  if text.count("`") % 2 != 0:
+    return False
+
+  # Check basic bracket/parenthesis balancing to avoid breaking in the middle of a math expression or reference
+  if text.count("(") != text.count(")"):
+    return False
+  if text.count("[") != text.count("]"):
+    return False
+  if text.count("{") != text.count("}"):
+    return False
+
+  stripped = text.rstrip()
+  if not stripped:
+    return False
+
+  # If we just finished a code block, that is a clean boundary
+  if stripped.endswith("```"):
+    return True
+
+  # Check if the last character of the stripped text is punctuation,
+  # or punctuation followed by closing quotes/parentheses
+  if re.search(r"[.!?]['\")\]]*$", stripped):
+    return True
+
+  # Or ends with a newline, which is a paragraph or line break
+  if text.endswith("\n") or text.endswith("\r"):
+    return True
+
+  return False
+
+
 class ThinkingBudgetExceeded(RuntimeError):
   """Raised when the LLM's internal thinking stream exceeds the configured limit."""
   def __init__(self, message: str, accumulated_thinking: str):
@@ -601,12 +640,24 @@ def run_llm_cycle(self):
             
             # Guard against endless internal thinking loops
             max_thinking_chars = getattr(self.config, "max_thinking_chars", 12000)
-            if (len(reasoning_accumulated) > max_thinking_chars 
+            leeway = getattr(self.config, "max_thinking_leeway_chars", 2000)
+            
+            exceeded_budget = len(reasoning_accumulated) > max_thinking_chars
+            exceeded_hard_limit = len(reasoning_accumulated) > (max_thinking_chars + leeway)
+            
+            should_abort = False
+            if exceeded_hard_limit:
+              should_abort = True
+            elif exceeded_budget:
+              if is_safe_to_interrupt(reasoning_accumulated):
+                should_abort = True
+
+            if (should_abort 
                 and not content_accumulated 
                 and not delta.content 
                 and not tool_calls_accumulated 
                 and not delta.tool_calls):
-              logger.warning(f"Aborting stream: LLM exceeded maximum internal thinking budget of {max_thinking_chars} chars.")
+              logger.warning(f"Aborting stream: LLM exceeded maximum internal thinking budget of {max_thinking_chars} chars (accumulated: {len(reasoning_accumulated)}).")
               if hasattr(stream, "close"):
                 try:
                   stream.close()

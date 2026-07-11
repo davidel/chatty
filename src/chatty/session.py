@@ -154,6 +154,8 @@ class SessionConfig:
   headless: bool = False
   whitelist: List[str] = field(default_factory=list)
   models: List[str] = field(default_factory=list)
+  max_thinking_chars: int = 12000
+  max_thinking_leeway_chars: int = 2000
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter
@@ -187,6 +189,8 @@ class ChatbotSession:
     headless: bool = False,
     whitelist: Optional[List[str]] = None,
     models: Optional[List[str]] = None,
+    max_thinking_chars: int = 12000,
+    max_thinking_leeway_chars: int = 2000,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -220,7 +224,9 @@ class ChatbotSession:
         prompt_caching=prompt_caching,
         headless=headless,
         whitelist=whitelist or [],
-        models=models or ([model] if model else [])
+        models=models or ([model] if model else []),
+        max_thinking_chars=max_thinking_chars,
+        max_thinking_leeway_chars=max_thinking_leeway_chars
       )
 
     # Ensure static_skills defaults correctly if not provided
