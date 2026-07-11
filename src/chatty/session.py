@@ -574,6 +574,22 @@ class ChatbotSession:
       time.sleep(sleep_needed)
     self.last_api_call_time = time.time()
 
+  def _format_api_error(self, e: Exception) -> str:
+    """Formats an API exception, appending rate-limit headers if available."""
+    err_msg = str(e)
+    response = getattr(e, "response", None)
+    if response is not None:
+      headers = getattr(response, "headers", None)
+      if headers:
+        rate_limit_info = []
+        for header_name in ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after"]:
+          val = headers.get(header_name)
+          if val is not None:
+            rate_limit_info.append(f"{header_name}: {val}")
+        if rate_limit_info:
+          err_msg += f" | Headers: ({', '.join(rate_limit_info)})"
+    return err_msg
+
   def _is_retryable_exception(self, e: Exception) -> bool:
     """Checks if an API exception is transient or rate-limit related and should be retried."""
     err_msg = str(e).lower()
@@ -688,12 +704,14 @@ class ChatbotSession:
         logger.exception("Error during oracle consultation")
         if attempt < max_retries and self._is_retryable_exception(e):
           backoff_time = 2 ** attempt
-          self._print(f"[bold yellow]⚠️  Error calling Oracle API: {str(e)}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
+          formatted_err = self._format_api_error(e)
+          self._print(f"[bold yellow]⚠️  Error calling Oracle API: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
           time.sleep(backoff_time)
           content_accumulated = ""
           continue
         else:
-          err_msg = f"Error during oracle consultation: {str(e)}"
+          formatted_err = self._format_api_error(e)
+          err_msg = f"Error during oracle consultation: {formatted_err}"
           self._print(f"[bold red]{err_msg}[/bold red]")
           return err_msg
     return content_accumulated or "Error: Oracle returned an empty response."
@@ -1793,13 +1811,14 @@ class ChatbotSession:
         except Exception as e:
           self.last_api_call_time = time.time()
           logger.exception("Error calling LLM API")
+          formatted_err = self._format_api_error(e)
           if attempt < max_retries and self._is_retryable_exception(e):
             backoff_time = 2 ** attempt
-            self._print(f"[bold yellow]⚠️  Error calling API: {str(e)}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
+            self._print(f"[bold yellow]⚠️  Error calling API: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
             time.sleep(backoff_time)
             continue
           else:
-            self._print(f"[bold red]Error calling API:[/bold red] {str(e)}")
+            self._print(f"[bold red]Error calling API:[/bold red] {formatted_err}")
             break
             
         # If we didn't receive structured tool calls, try to extract them from text content
@@ -2090,14 +2109,15 @@ class ChatbotSession:
       except Exception as e:
         self.last_api_call_time = time.time()
         logger.exception("Error calling LLM API for context summary")
+        formatted_err = self._format_api_error(e)
         if attempt < max_retries and self._is_retryable_exception(e):
           backoff_time = 2 ** attempt
-          self._print(f"[bold yellow]⚠️  Error calling API for summary: {str(e)}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
+          self._print(f"[bold yellow]⚠️  Error calling API for summary: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
           time.sleep(backoff_time)
           content_accumulated = ""
           continue
         else:
-          self._print(f"[bold red]Error calling API for summary:[/bold red] {str(e)}")
+          self._print(f"[bold red]Error calling API for summary:[/bold red] {formatted_err}")
           return
 
     if not content_accumulated.strip():
