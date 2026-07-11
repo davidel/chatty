@@ -608,7 +608,7 @@ class ChatbotSession:
     """Resolves model name and provider preferences (if colon syntax is present)."""
     if not model_name or ":" not in model_name:
       return model_name, None
-    parts = model_name.split(":", 1)
+    parts = model_name.rsplit(":", 1)
     base_model = parts[0]
     suffix = parts[1]
     if suffix in ("free", "nitro", "floor"):

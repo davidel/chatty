@@ -136,3 +136,13 @@ class TestOracle(unittest.TestCase):
         "allow_fallbacks": False
       }
     })
+
+    # Test with both variant suffix and provider suffix
+    model, extra = self.session._resolve_model_and_provider("xiaomi/mimo-v2.5:nitro:together")
+    self.assertEqual(model, "xiaomi/mimo-v2.5:nitro")
+    self.assertEqual(extra, {
+      "provider": {
+        "order": ["together"],
+        "allow_fallbacks": False
+      }
+    })
