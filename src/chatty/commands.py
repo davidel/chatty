@@ -277,34 +277,9 @@ def cmd_save(session: Any, arg: str) -> bool:
   if not arg:
     console.print("[bold red]Error: Usage: /save_session <file_path>[/bold red]")
   else:
-    file_path = os.path.expanduser(arg.strip())
-    if not os.path.isabs(file_path):
-      file_path = os.path.join(session.sandbox, file_path)
-    dir_name = os.path.dirname(file_path)
-    if dir_name:
-      os.makedirs(dir_name, exist_ok=True)
-    session_data = {
-      "provider": session.provider,
-      "model": session.model,
-      "models": session.models,
-      "oracle_model": getattr(session, "oracle_model", None),
-      "context_size": session.context_size,
-      "sandbox": session.sandbox,
-      "max_loops": session.max_loops,
-      "system_prompt": session.system_prompt,
-      "messages": session.messages,
-      "tool_calls_count": session.tool_calls_count,
-      "external_binaries_count": session.external_binaries_count,
-      "external_binaries_breakdown": session.external_binaries_breakdown,
-    }
-    if session.api_key:
-      session_data["api_key"] = session.api_key
-    if session.url:
-      session_data["url"] = session.url
     try:
-      with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(session_data, f, indent=2, default=str)
-      console.print(f"[bold green]Session saved successfully to {file_path}[/bold green]")
+      session.save_session(arg.strip())
+      console.print(f"[bold green]Session saved successfully to {arg.strip()}[/bold green]")
     except Exception as e:
       console.print(f"[bold red]Error saving session: {str(e)}[/bold red]")
   return True
@@ -314,45 +289,9 @@ def cmd_load_session(session: Any, arg: str) -> bool:
   if not arg:
     console.print("[bold red]Error: Usage: /load_session <file_path>[/bold red]")
   else:
-    file_path = os.path.expanduser(arg.strip())
-    if not os.path.isabs(file_path):
-      file_path = os.path.join(session.sandbox, file_path)
     try:
-      with open(file_path, "r", encoding="utf-8") as f:
-        session_data = json.load(f)
-      if "provider" in session_data:
-        session.provider = session_data["provider"]
-      if "model" in session_data:
-        session.model = session_data["model"]
-      if "models" in session_data:
-        session.models = session_data["models"]
-      if "oracle_model" in session_data:
-        session.oracle_model = session_data["oracle_model"]
-      if "context_size" in session_data:
-        session.context_size = session_data["context_size"]
-      if "sandbox" in session_data:
-        sandbox_path = os.path.abspath(session_data["sandbox"])
-        if os.path.exists(sandbox_path):
-          session.sandbox = sandbox_path
-      if "max_loops" in session_data:
-        session.max_loops = session_data["max_loops"]
-      if "system_prompt" in session_data:
-        session.system_prompt = session_data["system_prompt"]
-      if "messages" in session_data:
-        session.messages = session_data["messages"]
-      if "tool_calls_count" in session_data:
-        session.tool_calls_count = session_data["tool_calls_count"]
-      if "external_binaries_count" in session_data:
-        session.external_binaries_count = session_data["external_binaries_count"]
-      if "external_binaries_breakdown" in session_data:
-        session.external_binaries_breakdown = session_data["external_binaries_breakdown"]
-      if "api_key" in session_data:
-        session.api_key = session_data["api_key"]
-      if "url" in session_data:
-        session.url = session_data["url"]
-      session.init_client()
-      session.load_skills()
-      console.print(f"[bold green]Session loaded successfully from {file_path}[/bold green]")
+      session.load_session(arg.strip())
+      console.print(f"[bold green]Session loaded successfully from {arg.strip()}[/bold green]")
     except Exception as e:
       console.print(f"[bold red]Error loading session: {str(e)}[/bold red]")
   return True
@@ -450,8 +389,7 @@ def cmd_whitelist(session: Any, arg: str) -> bool:
   subcmd = parts[0].lower()
   
   if subcmd == "clear":
-    session.allowed_ro_paths.clear()
-    session.allowed_rw_paths.clear()
+    session.clear_whitelist_paths()
     console.print("[bold green]Whitelisted paths cleared successfully.[/bold green]")
     
   elif subcmd == "add":
@@ -465,12 +403,10 @@ def cmd_whitelist(session: Any, arg: str) -> bool:
       console.print("[bold red]Invalid permission mode. Choose 'ro' (Read-Only) or 'rw' (Read-Write).[/bold red]")
       return True
       
-    abs_path = os.path.realpath(path)
+    abs_path = session.add_whitelist_path(path, mode)
     if mode == "ro":
-      session.allowed_ro_paths.add(abs_path)
       console.print(f"[bold green]Added Read-Only path:[/bold green] {abs_path}")
     else:
-      session.allowed_rw_paths.add(abs_path)
       console.print(f"[bold green]Added Read-Write path:[/bold green] {abs_path}")
       
   elif subcmd == "remove":
@@ -478,15 +414,7 @@ def cmd_whitelist(session: Any, arg: str) -> bool:
       console.print("[bold red]Usage: /whitelist remove <path>[/bold red]")
       return True
     path = parts[1]
-    abs_path = os.path.realpath(path)
-    
-    removed = False
-    if abs_path in session.allowed_ro_paths:
-      session.allowed_ro_paths.remove(abs_path)
-      removed = True
-    if abs_path in session.allowed_rw_paths:
-      session.allowed_rw_paths.remove(abs_path)
-      removed = True
+    abs_path, removed = session.remove_whitelist_path(path)
       
     if removed:
       console.print(f"[bold green]Removed path from whitelist:[/bold green] {abs_path}")
