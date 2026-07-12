@@ -471,6 +471,26 @@ def is_safe_to_interrupt(text: str) -> bool:
   return False
 
 
+def detect_repetition_loop(text: str) -> bool:
+  """Detects if the streaming text suffix contains repeating blocks indicating an infinite loop."""
+  n = len(text)
+  if n < 300:
+    return False
+  # Check for consecutive repeating blocks of length p (from 100 up to n // 2)
+  # We require 3 consecutive occurrences for blocks under 250 chars,
+  # and 2 consecutive occurrences for blocks 250 chars or longer.
+  for p in range(100, min(1500, n // 2 + 1)):
+    # 2 consecutive occurrences of block of length p:
+    if p >= 250 and text[-2 * p: -p] == text[-p:]:
+      if len(set(text[-p:])) > 10:
+        return True
+    # 3 consecutive occurrences of block of length p:
+    if 3 * p <= n and text[-3 * p: -2 * p] == text[-2 * p: -p] == text[-p:]:
+      if len(set(text[-p:])) > 10:
+        return True
+  return False
+
+
 class ThinkingBudgetExceeded(RuntimeError):
   """Raised when the LLM's internal thinking stream exceeds the configured limit."""
   def __init__(self, message: str, accumulated_thinking: str):
@@ -696,6 +716,28 @@ def run_llm_cycle(self):
                     should_abort = True
                     logger.info("User decided to stop thinking. Aborting stream.")
 
+            # Check for repetition loops or exceeding absolute high ceiling
+            is_repeating = detect_repetition_loop(reasoning_accumulated)
+            exceeded_absolute_ceiling = len(reasoning_accumulated) > 48000
+            
+            if (is_repeating or exceeded_absolute_ceiling) and not content_accumulated and not delta.content and not tool_calls_accumulated and not delta.tool_calls:
+              logger.warning(f"Aborting stream: LLM got stuck in a repetitive loop or exceeded absolute thinking ceiling (len={len(reasoning_accumulated)}, repeating={is_repeating}).")
+              if not self.headless:
+                with self._pause_live():
+                  if is_repeating:
+                    self._print("\n[bold red]⚠️  LLM got stuck in an infinite thinking loop. Aborting attempt to self-correct...[/bold red]")
+                  else:
+                    self._print("\n[bold red]⚠️  LLM exceeded absolute thinking limit (48k chars). Aborting attempt to self-correct...[/bold red]")
+              if hasattr(stream, "close"):
+                try:
+                  stream.close()
+                except Exception:
+                  pass
+              raise ThinkingBudgetExceeded(
+                "LLM got stuck in an infinite thinking loop." if is_repeating else "LLM exceeded absolute thinking limit.",
+                reasoning_accumulated
+              )
+
             if (should_abort 
                 and not content_accumulated 
                 and not delta.content 
@@ -716,7 +758,10 @@ def run_llm_cycle(self):
               first_chunk = False
               renderables = []
               if reasoning_accumulated.strip():
-                renderables.append(Panel(LazyMarkdown(reasoning_accumulated), title="Thinking", border_style="yellow"))
+                disp_reasoning = reasoning_accumulated
+                if len(disp_reasoning) > 3000:
+                  disp_reasoning = "... [thinking output truncated for terminal performance] ...\n" + disp_reasoning[-3000:]
+                renderables.append(Panel(LazyMarkdown(disp_reasoning), title="Thinking", border_style="yellow"))
               if content_accumulated:
                 renderables.append(Panel(LazyMarkdown(content_accumulated), title="Assistant", border_style="green"))
               
@@ -755,7 +800,10 @@ def run_llm_cycle(self):
         # Reconstruct and print the final panels permanently to console
         final_panels = []
         if reasoning_accumulated.strip():
-          final_panels.append(Panel(Markdown(reasoning_accumulated), title="Thinking", border_style="yellow"))
+          disp_reasoning = reasoning_accumulated
+          if len(disp_reasoning) > 3000:
+            disp_reasoning = "... [thinking output truncated for terminal performance] ...\n" + disp_reasoning[-3000:]
+          final_panels.append(Panel(Markdown(disp_reasoning), title="Thinking", border_style="yellow"))
         if content_accumulated:
           final_panels.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
         

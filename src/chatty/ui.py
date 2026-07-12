@@ -33,14 +33,19 @@ class LazyMarkdown:
 
   def __init__(self, text: str):
     self.text = text
+    self._md = None
+
+  def _get_markdown(self) -> Markdown:
+    if self._md is None:
+      self._md = Markdown(self.text)
+    return self._md
 
   def __rich_console__(self, console: Console, options: Any) -> Any:
-    md = Markdown(self.text)
-    return md.__rich_console__(console, options)
+    return self._get_markdown().__rich_console__(console, options)
 
   def __rich_measure__(self, console: Console, options: Any) -> Any:
-    md = Markdown(self.text)
-    return md.__rich_measure__(console, options)
+    return self._get_markdown().__rich_measure__(console, options)
+
 
 
 @contextlib.contextmanager

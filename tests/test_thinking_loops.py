@@ -425,6 +425,107 @@ class TestThinkingLoops(unittest.TestCase):
     # 2. Only one API call was made
     self.assertEqual(mock_client.chat.completions.create.call_count, 1)
 
+  def test_detect_repetition_loop(self):
+    from chatty.llm import detect_repetition_loop
+    
+    # 1. Normal non-repetitive text (should be False)
+    text1 = "This is a normal thinking path where we explore various ideas. " * 3
+    self.assertFalse(detect_repetition_loop(text1))
+
+    # 2. Block of length 300+ repeating twice consecutively (should be True)
+    block_large = "This is a large block of thinking text that is definitely longer than three hundred characters. " \
+                  "We want to verify that when it repeats twice consecutively, it triggers the repetition detector. " \
+                  "Let us add some more characters to make sure it exceeds the three hundred character limit. " \
+                  "Indeed, it is quite long and detailed. "
+    text2 = block_large + block_large
+    self.assertTrue(detect_repetition_loop(text2))
+
+    # 3. Block of length 100+ repeating three times consecutively (should be True)
+    block_medium = "This is a medium block of thinking text that is at least one hundred characters. " \
+                   "Let's add more text to make it longer than 100. "
+    text3 = block_medium * 3
+    self.assertTrue(detect_repetition_loop(text3))
+
+    # 4. Short repeating block under 100 characters (should be False)
+    block_short = "short repetition "
+    text4 = block_short * 10
+    self.assertFalse(detect_repetition_loop(text4))
+
+  @patch("chatty.session.openai.OpenAI")
+  def test_thinking_loop_aborts_on_repetition(self, mock_openai):
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+
+    # A repeating stream of thoughts
+    block = "This is a long thinking path that will repeat and trigger loop detection. Let's make sure it is at least 150 characters long so it triggers on the third repetition. Yes, indeed, we are writing a very verbose repeating block. "
+    
+    # We will simulate 3 chunks yielding this block successively
+    chunks = []
+    for idx in range(3):
+      delta = SimpleNamespace(
+        content=None,
+        tool_calls=None,
+        reasoning=block,
+        reasoning_content=None,
+        reasoning_details=None,
+        thought_signature=None,
+        model_extra=None
+      )
+      choice = SimpleNamespace(
+        delta=delta,
+        finish_reason=None
+      )
+      chunk = SimpleNamespace(
+        choices=[choice],
+        id=f"chunk-{idx}",
+        model="test-model",
+        system_fingerprint=None
+      )
+      chunks.append(chunk)
+
+    mock_stream1 = MagicMock()
+    mock_stream1.__iter__.return_value = chunks
+    mock_stream1.close = MagicMock()
+
+    # Attempt 2: Successful stream with final response
+    delta2 = SimpleNamespace(
+      content="Success.",
+      tool_calls=None,
+      reasoning=None,
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice2 = SimpleNamespace(
+      delta=delta2,
+      finish_reason="stop"
+    )
+    chunk2 = SimpleNamespace(
+      choices=[choice2],
+      id="chunk-success",
+      model="test-model",
+      system_fingerprint=None
+    )
+    mock_stream2 = MagicMock()
+    mock_stream2.__iter__.return_value = [chunk2]
+
+    def mock_create(*args, **kwargs):
+      if mock_client.chat.completions.create.call_count == 1:
+        return mock_stream1
+      return mock_stream2
+
+    mock_client.chat.completions.create.side_effect = mock_create
+
+    # Run the cycle
+    self.session.run_llm_cycle()
+
+    # The stream should be aborted after the third chunk (index 2)
+    mock_stream1.close.assert_called_once()
+    self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+    self.assertEqual(self.session.messages[-1]["content"], "Success.")
+
 
 if __name__ == "__main__":
   unittest.main()
