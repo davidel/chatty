@@ -213,7 +213,7 @@ def main():
   model = models[0]
   
   # Initialize and execute chat session
-  chat_session = ChatbotSession(
+  with ChatbotSession(
     provider=args.provider,
     model=model,
     models=models,
@@ -239,10 +239,9 @@ def main():
     whitelist=args.whitelist,
     max_thinking_chars=args.max_thinking_chars,
     max_thinking_leeway_chars=args.max_thinking_leeway_chars
-  )
-  
-  if not args.headless:
-    chat_session.start_loop()
+  ) as chat_session:
+    if not args.headless:
+      chat_session.start_loop()
 
 
 if __name__ == "__main__":

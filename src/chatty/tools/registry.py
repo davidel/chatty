@@ -262,7 +262,7 @@ def handle_fetch_url(arguments: Dict[str, Any], session: Any) -> str:
   url = arguments.get("url")
   if not url:
     return "Error: Missing parameter 'url'."
-  return tool_fetch_url(url, max_chars=session.max_url_chars)
+  return tool_fetch_url(url, max_chars=session.max_url_chars, sandbox_path=session.sandbox)
 
 
 def handle_sleep(arguments: Dict[str, Any], session: Any) -> str:

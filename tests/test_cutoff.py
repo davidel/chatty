@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 import sys
 
 # Ensure src is in python path
@@ -562,6 +563,66 @@ class TestAutoContinuation(unittest.TestCase):
     self.assertEqual(len(assistant_msgs), 2)
     self.assertEqual(assistant_msgs[0]["content"], "I am doing the task ")
     self.assertEqual(assistant_msgs[1]["content"], "and it is completed.")
+
+
+class TestUrlCaching(unittest.TestCase):
+
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = tempfile.mkdtemp()
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
+    shutil.rmtree(self.sandbox_dir)
+
+  @unittest.mock.patch('requests.get')
+  def test_tool_fetch_url_caching(self, mock_get):
+    import unittest.mock as mock
+    mock_response = mock.Mock()
+    mock_response.status_code = 200
+    mock_response.text = "<html><body>" + ("a" * 100) + "</body></html>"
+    mock_get.return_value = mock_response
+
+    # Fetch URL with max_chars = 10, sandbox_path = self.sandbox_dir
+    res = tool_fetch_url("https://example.com/some/path", max_chars=10, sandbox_path=self.sandbox_dir)
+
+    # Check warning and cache path in result
+    self.assertIn("WARNING: URL content truncated", res)
+    self.assertIn("Full content cached in sandbox at:", res)
+
+    # Verify the file actually exists inside sandbox_dir under .url_cache
+    cache_dir = os.path.join(self.sandbox_dir, ".url_cache")
+    self.assertTrue(os.path.exists(cache_dir))
+
+    # Verify the cached file contains the full cleaned text
+    files = os.listdir(cache_dir)
+    self.assertEqual(len(files), 1)
+    with open(os.path.join(cache_dir, files[0]), 'r', encoding='utf-8') as f:
+      content = f.read()
+      self.assertEqual(content, "a" * 100)
+
+    # Test cleaning up
+    from chatty.runner import cleanup_resources
+    cleanup_resources({}, self.sandbox_dir)
+    self.assertFalse(os.path.exists(cache_dir))
+
+  def test_session_context_manager_cleanup(self):
+    # Initialize session as a context manager
+    with ChatbotSession(
+      provider="ollama",
+      model="mock-model",
+      context_size=1000,
+      sandbox=self.sandbox_dir
+    ) as session:
+      # Simulate a cached URL file
+      cache_dir = os.path.join(self.sandbox_dir, ".url_cache")
+      os.makedirs(cache_dir, exist_ok=True)
+      with open(os.path.join(cache_dir, "test.txt"), "w") as f:
+        f.write("content")
+      self.assertTrue(os.path.exists(cache_dir))
+
+    # After exiting context block, the directory should be cleaned up automatically
+    self.assertFalse(os.path.exists(cache_dir))
 
 
 if __name__ == "__main__":

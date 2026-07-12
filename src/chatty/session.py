@@ -251,7 +251,7 @@ class ChatbotSession:
     
     self.runner = SubprocessRunner(session=self)
     # Register weakref finalizer for automatic cleanup on garbage collection or program exit
-    self._finalizer = weakref.finalize(self, cleanup_resources, self.background_commands)
+    self._finalizer = weakref.finalize(self, cleanup_resources, self.background_commands, self.sandbox)
     
     # Internal state
     self._cached_history_tokens = None
@@ -1220,3 +1220,9 @@ class ChatbotSession:
     """Runs the interactive input/output CLI loop."""
     from chatty.ui import start_interactive_loop
     start_interactive_loop(self)
+
+  def __enter__(self):
+    return self
+
+  def __exit__(self, exc_type, exc_val, exc_tb):
+    self.cleanup_background_commands()

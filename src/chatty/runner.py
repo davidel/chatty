@@ -12,7 +12,7 @@ from chatty.utils import record_command_binaries, truncate_output
 logger = logging.getLogger("chatty")
 
 
-def cleanup_resources(background_commands: Dict[str, Any]):
+def cleanup_resources(background_commands: Dict[str, Any], sandbox: Optional[str] = None):
   """Kills all active background tasks and removes temporary files."""
   if background_commands:
     if logger is not None:
@@ -46,6 +46,20 @@ def cleanup_resources(background_commands: Dict[str, Any]):
     except Exception:
       pass
   background_commands.clear()
+  if sandbox:
+    try:
+      import os as local_os
+      cache_dir = local_os.path.join(sandbox, ".url_cache")
+      if local_os.path.exists(cache_dir):
+        import shutil
+        shutil.rmtree(cache_dir)
+        if logger is not None:
+          try:
+            logger.info("URL cache cleaned up.")
+          except Exception:
+            pass
+    except Exception:
+      pass
   if logger is not None:
     try:
       logger.info("Background commands cleanup finished.")
@@ -508,7 +522,7 @@ class SubprocessRunner:
 
   def cleanup_background_commands(self):
     """Kills all active background tasks and removes temporary files."""
-    cleanup_resources(self.session.background_commands)
+    cleanup_resources(self.session.background_commands, self.session.sandbox)
 
   def _prune_background_commands(self):
     """Ensures we only keep the latest max_completed_tasks completed background task outputs, unlinking older ones."""

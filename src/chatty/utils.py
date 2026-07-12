@@ -264,7 +264,7 @@ def print_diff(path: str, old_content: str, new_content: str):
   ))
 
 
-def tool_fetch_url(url: str, max_chars: int = 24000) -> str:
+def tool_fetch_url(url: str, max_chars: int = 24000, sandbox_path: Optional[str] = None) -> str:
   """Fetch the text content of a public URL and convert it to clean text (removes HTML tags)."""
   try:
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -288,7 +288,34 @@ def tool_fetch_url(url: str, max_chars: int = 24000) -> str:
         cleaned_lines.append("")
     full_text = "\n".join(cleaned_lines).strip()
     if len(full_text) > max_chars:
-      return full_text[:max_chars] + f"\n\n[WARNING: URL content truncated. Total length: {len(full_text)} characters.]"
+      warning_msg = f"\n\n[WARNING: URL content truncated. Total length: {len(full_text)} characters.]"
+      if sandbox_path:
+        try:
+          import hashlib
+          url_hash = hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]
+          parsed_url = urllib.parse.urlparse(url)
+          domain_part = re.sub(r'[^a-zA-Z0-9_]', '_', parsed_url.netloc)
+          path_part = re.sub(r'[^a-zA-Z0-9_]', '_', parsed_url.path)[:20].strip('_')
+          if path_part:
+            filename = f"{domain_part}_{path_part}_{url_hash}.txt"
+          else:
+            filename = f"{domain_part}_{url_hash}.txt"
+          cache_dir = os.path.join(sandbox_path, ".url_cache")
+          os.makedirs(cache_dir, exist_ok=True)
+          cache_file_path = os.path.join(cache_dir, filename)
+          with open(cache_file_path, 'w', encoding='utf-8') as f:
+            f.write(full_text)
+          relative_cache_path = os.path.join(".url_cache", filename)
+          warning_msg = (
+            f"\n\n[WARNING: URL content truncated. Total length: {len(full_text)} characters. "
+            f"Full content cached in sandbox at: {relative_cache_path}. "
+            f"You can search within this content using search_grep or read parts of it using read_file.]"
+          )
+        except Exception as cache_err:
+          logger = logging.getLogger("chatty")
+          if logger:
+            logger.warning(f"Failed to cache URL content: {cache_err}")
+      return full_text[:max_chars] + warning_msg
     return full_text
   except Exception as e:
     return f"Error fetching URL: {str(e)}"
