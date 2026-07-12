@@ -344,6 +344,18 @@ class SubprocessRunner:
       status = proc.poll()
       if status is not None:
         task["status"] = status
+
+    if status is not None:
+      try:
+        if task.get("stdout_file"):
+          task["stdout_file"].close()
+          task["stdout_file"] = None
+        if task.get("stderr_file"):
+          task["stderr_file"].close()
+          task["stderr_file"] = None
+      except Exception:
+        pass
+
     try:
       with open(task["stdout_path"], 'r', errors='replace') as f:
         stdout_content = f.read()
@@ -381,13 +393,6 @@ class SubprocessRunner:
       return status_msg + ("\n".join(output) if output else "(No output generated yet)")
     else:
       logger.info(f"Task '{task_id}' FINISHED with exit code {status}.")
-      try:
-        if task.get("stdout_file"):
-          task["stdout_file"].close()
-        if task.get("stderr_file"):
-          task["stderr_file"].close()
-      except Exception:
-        pass
       self._prune_background_commands()
       return (
         f"Status: Task '{task_id}' FINISHED with exit code {status}.\n"
@@ -413,6 +418,17 @@ class SubprocessRunner:
       status = proc.poll()
       if status is not None:
         task["status"] = status
+
+    if status is not None:
+      try:
+        if task.get("stdout_file"):
+          task["stdout_file"].close()
+          task["stdout_file"] = None
+        if task.get("stderr_file"):
+          task["stderr_file"].close()
+          task["stderr_file"] = None
+      except Exception:
+        pass
 
     try:
       with open(task["stdout_path"], 'r', errors='replace') as f:
@@ -443,13 +459,6 @@ class SubprocessRunner:
         status_msg += f" ({resource_usage})"
     else:
       status_msg = f"Status: Task '{task_id}' FINISHED with exit code {status}"
-      try:
-        if task.get("stdout_file"):
-          task["stdout_file"].close()
-        if task.get("stderr_file"):
-          task["stderr_file"].close()
-      except Exception:
-        pass
       self.session._prune_background_commands()
 
     peek_output = "\n".join(output) if output else "(No output generated yet)"
