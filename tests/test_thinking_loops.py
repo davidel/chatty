@@ -216,6 +216,213 @@ class TestThinkingLoops(unittest.TestCase):
     self.assertIn("This is a test. We should keep thinking and thinking. Now we stop.", nudge_msg["content"])
     self.assertNotIn("This should not be reached", nudge_msg["content"])
 
+  @patch("chatty.session.openai.OpenAI")
+  @patch("builtins.input")
+  def test_interactive_thinking_stop(self, mock_input, mock_openai):
+    self.session.headless = False
+    mock_input.return_value = "s"
+
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+
+    # Attempt 1: Stream that exceeds thinking budget
+    delta1 = SimpleNamespace(
+      content=None,
+      tool_calls=None,
+      reasoning="Thinking " * 20,  # 180 chars, exceeds budget of 100
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice1 = SimpleNamespace(
+      delta=delta1,
+      finish_reason=None
+    )
+    chunk1 = SimpleNamespace(
+      choices=[choice1],
+      id="chunk-1",
+      model="test-model",
+      system_fingerprint=None
+    )
+    
+    # Attempt 2: Successful stream with final content
+    delta2 = SimpleNamespace(
+      content="Final response.",
+      tool_calls=None,
+      reasoning=None,
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice2 = SimpleNamespace(
+      delta=delta2,
+      finish_reason="stop"
+    )
+    chunk2 = SimpleNamespace(
+      choices=[choice2],
+      id="chunk-2",
+      model="test-model",
+      system_fingerprint=None
+    )
+
+    mock_stream1 = MagicMock()
+    mock_stream1.__iter__.return_value = [chunk1]
+    mock_stream1.close = MagicMock()
+
+    mock_stream2 = MagicMock()
+    mock_stream2.__iter__.return_value = [chunk2]
+
+    def mock_create(*args, **kwargs):
+      if mock_client.chat.completions.create.call_count == 1:
+        return mock_stream1
+      return mock_stream2
+
+    mock_client.chat.completions.create.side_effect = mock_create
+
+    # Run the cycle
+    self.session.run_llm_cycle()
+
+    # Assertions
+    mock_stream1.close.assert_called_once()
+    self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+    self.assertEqual(self.session.messages[-1]["content"], "Final response.")
+
+  @patch("chatty.session.openai.OpenAI")
+  @patch("builtins.input")
+  def test_interactive_thinking_let_go(self, mock_input, mock_openai):
+    self.session.headless = False
+    mock_input.return_value = "l"
+
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+
+    # Single stream with reasoning that exceeds budget, followed by final content in same stream
+    delta1 = SimpleNamespace(
+      content=None,
+      tool_calls=None,
+      reasoning="Thinking " * 20,  # 180 chars, exceeds budget of 100
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice1 = SimpleNamespace(
+      delta=delta1,
+      finish_reason=None
+    )
+    chunk1 = SimpleNamespace(
+      choices=[choice1],
+      id="chunk-1",
+      model="test-model",
+      system_fingerprint=None
+    )
+    
+    delta2 = SimpleNamespace(
+      content="Success without retry.",
+      tool_calls=None,
+      reasoning=None,
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice2 = SimpleNamespace(
+      delta=delta2,
+      finish_reason="stop"
+    )
+    chunk2 = SimpleNamespace(
+      choices=[choice2],
+      id="chunk-2",
+      model="test-model",
+      system_fingerprint=None
+    )
+
+    mock_stream = MagicMock()
+    mock_stream.__iter__.return_value = [chunk1, chunk2]
+    mock_stream.close = MagicMock()
+
+    mock_client.chat.completions.create.return_value = mock_stream
+
+    # Run the cycle
+    self.session.run_llm_cycle()
+
+    # Assertions
+    # 1. The stream was not closed early
+    mock_stream.close.assert_not_called()
+    # 2. Only one API call was made
+    self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+    # 3. Final message is correct
+    self.assertEqual(self.session.messages[-1]["content"], "Success without retry.")
+
+  @patch("chatty.session.openai.OpenAI")
+  @patch("builtins.input")
+  def test_interactive_thinking_whitelist(self, mock_input, mock_openai):
+    self.session.headless = False
+    mock_input.return_value = "w"
+
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+
+    delta1 = SimpleNamespace(
+      content=None,
+      tool_calls=None,
+      reasoning="Thinking " * 20,
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice1 = SimpleNamespace(
+      delta=delta1,
+      finish_reason=None
+    )
+    chunk1 = SimpleNamespace(
+      choices=[choice1],
+      id="chunk-1",
+      model="test-model",
+      system_fingerprint=None
+    )
+    
+    delta2 = SimpleNamespace(
+      content="Done.",
+      tool_calls=None,
+      reasoning="Thinking " * 40,
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice2 = SimpleNamespace(
+      delta=delta2,
+      finish_reason="stop"
+    )
+    chunk2 = SimpleNamespace(
+      choices=[choice2],
+      id="chunk-2",
+      model="test-model",
+      system_fingerprint=None
+    )
+
+    mock_stream = MagicMock()
+    mock_stream.__iter__.return_value = [chunk1, chunk2]
+    mock_stream.close = MagicMock()
+
+    mock_client.chat.completions.create.return_value = mock_stream
+
+    # Run the cycle
+    self.session.run_llm_cycle()
+
+    # Assertions
+    # 1. input() was only called once
+    mock_input.assert_called_once()
+    # 2. Only one API call was made
+    self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+
 
 if __name__ == "__main__":
   unittest.main()

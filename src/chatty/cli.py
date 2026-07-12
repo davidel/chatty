@@ -149,6 +149,18 @@ def main():
     default=False,
     help="Run the chatbot in headless mode (no console printing or terminal interactive loop)."
   )
+  parser.add_argument(
+    "--max-thinking-chars",
+    type=int,
+    default=12000,
+    help="Maximum internal thinking characters before prompting the user (default: 12000)."
+  )
+  parser.add_argument(
+    "--max-thinking-leeway-chars",
+    type=int,
+    default=2000,
+    help="Leeway in characters beyond the maximum before hard-aborting or prompting (default: 2000)."
+  )
   
   args = parser.parse_args()
   
@@ -224,7 +236,9 @@ def main():
     static_skills=args.static_skills,
     prompt_caching=args.prompt_caching,
     headless=args.headless,
-    whitelist=args.whitelist
+    whitelist=args.whitelist,
+    max_thinking_chars=args.max_thinking_chars,
+    max_thinking_leeway_chars=args.max_thinking_leeway_chars
   )
   
   if not args.headless:

@@ -479,6 +479,7 @@ def run_llm_cycle(self):
   max_tool_loops = self.max_loops
   loop_count = 0
   logger.info(f"Starting LLM cycle. Max sequential tool loops: {max_tool_loops}")
+  whitelist_thinking_this_turn = False
   
   while loop_count < max_tool_loops:
     self.current_loop = loop_count + 1
@@ -530,7 +531,7 @@ def run_llm_cycle(self):
         panel = Panel("Connecting to LLM...", title="Assistant", border_style="green")
         with optional_live(Group(panel, self.get_rich_status_bar()), 
                            console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
-          
+          self._active_live = live
           # Log request details in DEBUG mode
           self._log_llm_request(active_messages, self.get_tools())
           
@@ -577,6 +578,7 @@ def run_llm_cycle(self):
             "reasoning_details": None,
             "thought_signature": None
           }
+          current_max_thinking = getattr(self.config, "max_thinking_chars", 12000)
           for chunk in stream:
             # Capture usage if present
             if hasattr(chunk, "usage") and chunk.usage:
@@ -642,8 +644,8 @@ def run_llm_cycle(self):
             max_thinking_chars = getattr(self.config, "max_thinking_chars", 12000)
             leeway = getattr(self.config, "max_thinking_leeway_chars", 2000)
             
-            exceeded_budget = len(reasoning_accumulated) > max_thinking_chars
-            exceeded_hard_limit = len(reasoning_accumulated) > (max_thinking_chars + leeway)
+            exceeded_budget = len(reasoning_accumulated) > current_max_thinking
+            exceeded_hard_limit = len(reasoning_accumulated) > (current_max_thinking + leeway)
             
             should_abort = False
             if exceeded_hard_limit:
@@ -652,12 +654,43 @@ def run_llm_cycle(self):
               if is_safe_to_interrupt(reasoning_accumulated):
                 should_abort = True
 
+            if should_abort:
+              if whitelist_thinking_this_turn:
+                should_abort = False
+              elif not self.headless:
+                with self._pause_live():
+                  self._print("\n[bold yellow]⚠️  LLM exceeded internal thinking budget.[/bold yellow]")
+                  self._print(f"Accumulated thinking: {len(reasoning_accumulated)} characters (limit: {current_max_thinking} chars).")
+                  self._print("What would you like to do?")
+                  self._print(
+                    "  [bold red]\\[s][/bold red]top (abort thinking stream) / "
+                    "  [bold green]\\[l][/bold green]et this go (increase budget by another 12000 chars) / "
+                    "  [bold cyan]\\[w][/bold cyan]hitelist for the current turn: ",
+                    end=""
+                  )
+                  try:
+                    response = input().strip().lower()
+                  except (KeyboardInterrupt, EOFError):
+                    response = "s"
+                  
+                  if response in ("l", "let"):
+                    current_max_thinking = len(reasoning_accumulated) + max_thinking_chars
+                    should_abort = False
+                    logger.info(f"User allowed thinking to continue. New budget: {current_max_thinking} chars.")
+                  elif response in ("w", "whitelist"):
+                    whitelist_thinking_this_turn = True
+                    should_abort = False
+                    logger.info("User whitelisted thinking for the current turn.")
+                  else:
+                    should_abort = True
+                    logger.info("User decided to stop thinking. Aborting stream.")
+
             if (should_abort 
                 and not content_accumulated 
                 and not delta.content 
                 and not tool_calls_accumulated 
                 and not delta.tool_calls):
-              logger.warning(f"Aborting stream: LLM exceeded maximum internal thinking budget of {max_thinking_chars} chars (accumulated: {len(reasoning_accumulated)}).")
+              logger.warning(f"Aborting stream: LLM exceeded maximum internal thinking budget of {current_max_thinking} chars (accumulated: {len(reasoning_accumulated)}).")
               if hasattr(stream, "close"):
                 try:
                   stream.close()
@@ -757,6 +790,8 @@ def run_llm_cycle(self):
         else:
           self._print(f"[bold red]Error calling API:[/bold red] {formatted_err}")
           break
+      finally:
+        self._active_live = None
           
       # If we didn't receive structured tool calls, try to extract them from text content
       if not tool_calls_accumulated and content_accumulated:
