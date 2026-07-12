@@ -675,6 +675,8 @@ def run_llm_cycle(self):
                   
                   if response in ("l", "let"):
                     current_max_thinking = len(reasoning_accumulated) + max_thinking_chars
+                    if hasattr(self, "config") and self.config is not None:
+                      self.config.max_thinking_chars = current_max_thinking
                     should_abort = False
                     logger.info(f"User allowed thinking to continue. New budget: {current_max_thinking} chars.")
                   elif response in ("w", "whitelist"):

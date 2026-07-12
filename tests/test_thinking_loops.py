@@ -357,6 +357,8 @@ class TestThinkingLoops(unittest.TestCase):
     self.assertEqual(mock_client.chat.completions.create.call_count, 1)
     # 3. Final message is correct
     self.assertEqual(self.session.messages[-1]["content"], "Success without retry.")
+    # 4. Config max_thinking_chars was updated
+    self.assertEqual(self.session.config.max_thinking_chars, 280)
 
   @patch("chatty.session.openai.OpenAI")
   @patch("builtins.input")
