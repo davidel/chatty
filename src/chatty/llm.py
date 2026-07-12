@@ -617,16 +617,19 @@ def run_llm_cycle(self):
                 has_new_reasoning = True
                 
                 # Determine if we should append or replace to prevent duplicate metadata / emoji bloat
-                should_append = False
                 if field in ("reasoning", "reasoning_content"):
                   if isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
-                    is_duplicate = (val == last_extra_fields[field])
-                    is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
-                    if not (is_duplicate and is_metadata_like):
-                      should_append = True
-                
-                if should_append:
-                  extra_fields_accumulated[field] += val
+                    if val.startswith(extra_fields_accumulated[field]):
+                      # val is the full accumulated reasoning string so far
+                      extra_fields_accumulated[field] = val
+                    else:
+                      # val is a delta chunk. Check duplicate detection to avoid metadata/emoji bloat
+                      is_duplicate = (val == last_extra_fields[field])
+                      is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
+                      if not (is_duplicate and is_metadata_like):
+                        extra_fields_accumulated[field] += val
+                  else:
+                    extra_fields_accumulated[field] = val
                 else:
                   extra_fields_accumulated[field] = val
                   

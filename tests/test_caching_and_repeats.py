@@ -105,16 +105,17 @@ class TestCachingAndRepeats(unittest.TestCase):
       for field in extra_fields:
         val = getattr(delta, field, None)
         if val is not None:
-          should_append = False
           if field in ("reasoning", "reasoning_content"):
             if isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
-              is_duplicate = (val == last_extra_fields[field])
-              is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
-              if not (is_duplicate and is_metadata_like):
-                should_append = True
-
-          if should_append:
-            extra_fields_accumulated[field] += val
+              if val.startswith(extra_fields_accumulated[field]):
+                extra_fields_accumulated[field] = val
+              else:
+                is_duplicate = (val == last_extra_fields[field])
+                is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
+                if not (is_duplicate and is_metadata_like):
+                  extra_fields_accumulated[field] += val
+            else:
+              extra_fields_accumulated[field] = val
           else:
             extra_fields_accumulated[field] = val
 
@@ -125,3 +126,45 @@ class TestCachingAndRepeats(unittest.TestCase):
     self.assertEqual(extra_fields_accumulated["reasoning"], "🧠")
     # thought_signature should NOT have been appended to 'sig1sig1sig1sig1'
     self.assertEqual(extra_fields_accumulated["thought_signature"], "sig1")
+
+  def test_delta_reasoning_accumulation(self):
+    extra_fields_accumulated = {"reasoning": None}
+    last_extra_fields = {"reasoning": None}
+    
+    # Delta-style streaming: each chunk has new content
+    chunks = ["I", " think", " we", " need", " to", " patch"]
+    for val in chunks:
+      if isinstance(val, str) and isinstance(extra_fields_accumulated["reasoning"], str):
+        if val.startswith(extra_fields_accumulated["reasoning"]):
+          extra_fields_accumulated["reasoning"] = val
+        else:
+          is_duplicate = (val == last_extra_fields["reasoning"])
+          is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
+          if not (is_duplicate and is_metadata_like):
+            extra_fields_accumulated["reasoning"] += val
+      else:
+        extra_fields_accumulated["reasoning"] = val
+      last_extra_fields["reasoning"] = val
+      
+    self.assertEqual(extra_fields_accumulated["reasoning"], "I think we need to patch")
+
+  def test_full_reasoning_accumulation(self):
+    extra_fields_accumulated = {"reasoning": None}
+    last_extra_fields = {"reasoning": None}
+    
+    # Full-style streaming: each chunk has the full accumulated string so far
+    chunks = ["I", "I think", "I think we", "I think we need", "I think we need to", "I think we need to patch"]
+    for val in chunks:
+      if isinstance(val, str) and isinstance(extra_fields_accumulated["reasoning"], str):
+        if val.startswith(extra_fields_accumulated["reasoning"]):
+          extra_fields_accumulated["reasoning"] = val
+        else:
+          is_duplicate = (val == last_extra_fields["reasoning"])
+          is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
+          if not (is_duplicate and is_metadata_like):
+            extra_fields_accumulated["reasoning"] += val
+      else:
+        extra_fields_accumulated["reasoning"] = val
+      last_extra_fields["reasoning"] = val
+      
+    self.assertEqual(extra_fields_accumulated["reasoning"], "I think we need to patch")
