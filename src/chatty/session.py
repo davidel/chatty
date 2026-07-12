@@ -156,6 +156,7 @@ class SessionConfig:
   models: List[str] = field(default_factory=list)
   max_thinking_chars: int = 12000
   max_thinking_leeway_chars: int = 2000
+  api_delay: float = 2.5
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter
@@ -191,6 +192,7 @@ class ChatbotSession:
     models: Optional[List[str]] = None,
     max_thinking_chars: int = 12000,
     max_thinking_leeway_chars: int = 2000,
+    api_delay: float = 2.5,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -226,7 +228,8 @@ class ChatbotSession:
         whitelist=whitelist or [],
         models=models or ([model] if model else []),
         max_thinking_chars=max_thinking_chars,
-        max_thinking_leeway_chars=max_thinking_leeway_chars
+        max_thinking_leeway_chars=max_thinking_leeway_chars,
+        api_delay=api_delay
       )
 
     # Ensure static_skills defaults correctly if not provided
@@ -837,6 +840,7 @@ class ChatbotSession:
             if self._is_retryable_exception(e):
               raise
             logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
+            self._throttle_request()
             kwargs = {
               "model": actual_model,
               "messages": active_messages,
@@ -902,7 +906,12 @@ class ChatbotSession:
         logger.exception("Error calling LLM API for context summary")
         formatted_err = self._format_api_error(e)
         if attempt < max_retries and self._is_retryable_exception(e):
-          backoff_time = 2 ** attempt
+          err_msg = str(e).lower()
+          is_rate_limit = any(ind in err_msg for ind in [
+            "rate limit", "rate-limit", "rate_limited", "rate-limited",
+            "too many requests", "high-frequency", "risk_control", "risk control"
+          ])
+          backoff_time = 5 * (2 ** attempt) if is_rate_limit else 2 ** attempt
           self._print(f"[bold yellow]⚠️  Error calling API for summary: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
           time.sleep(backoff_time)
           content_accumulated = ""

@@ -427,6 +427,73 @@ def cmd_whitelist(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_config(session: Any, arg: str) -> bool:
+  from rich.table import Table
+  allowed_keys = {
+    "api_delay": float,
+    "max_loops": int,
+    "context_size": int,
+    "max_thinking_chars": int,
+    "max_thinking_leeway_chars": int,
+    "history_keep_messages": int,
+    "prompt_caching": bool,
+    "max_read_chars": int,
+    "max_grep_results": int,
+    "max_command_chars": int,
+    "max_url_chars": int,
+    "max_dir_items": int,
+  }
+  
+  arg = arg.strip()
+  if not arg:
+    table = Table(title="Configuration Settings", show_header=True, header_style="bold magenta")
+    table.add_column("Parameter", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_column("Type", style="dim white")
+    for key, val_type in sorted(allowed_keys.items()):
+      val = getattr(session, key, None)
+      table.add_row(key, str(val), val_type.__name__)
+    console.print(table)
+    return True
+    
+  if "=" in arg:
+    parts = arg.split("=", 1)
+    key = parts[0].strip().lower()
+    val_str = parts[1].strip()
+    
+    if key not in allowed_keys:
+      console.print(f"[bold red]Error: '{key}' is not a configurable parameter.[/bold red]")
+      console.print(f"Allowed parameters: {', '.join(sorted(allowed_keys.keys()))}")
+      return True
+      
+    val_type = allowed_keys[key]
+    try:
+      if val_type is bool:
+        if val_str.lower() in ("true", "yes", "1", "on"):
+          parsed_val = True
+        elif val_str.lower() in ("false", "no", "0", "off"):
+          parsed_val = False
+        else:
+          raise ValueError("Must be a boolean value (true/false, yes/no, 1/0, on/off)")
+      else:
+        parsed_val = val_type(val_str)
+        
+      setattr(session, key, parsed_val)
+      console.print(f"[bold green]Configuration updated:[/bold green] {key} = [cyan]{parsed_val}[/cyan]")
+    except ValueError as e:
+      console.print(f"[bold red]Error parsing value for '{key}': {str(e)}[/bold red]")
+  else:
+    key = arg.strip().lower()
+    if key not in allowed_keys:
+      console.print(f"[bold red]Error: '{key}' is not a configurable parameter.[/bold red]")
+      console.print(f"Allowed parameters: {', '.join(sorted(allowed_keys.keys()))}")
+      return True
+    val = getattr(session, key, None)
+    console.print(f"{key} = [bold green]{val}[/bold green] (type: {allowed_keys[key].__name__})")
+    
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -456,5 +523,6 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/pop": cmd_pop,
   "/whitelist": cmd_whitelist,
   "/permissions": cmd_whitelist,
+  "/config": cmd_config,
 }
 

@@ -68,10 +68,10 @@ def init_client(self):
 
 
 def _throttle_request(self):
-  """Ensures at least 1.5 seconds have elapsed since the last API request or response."""
+  """Ensures at least api_delay seconds have elapsed since the last API request or response."""
   now = time.time()
   elapsed = now - self.last_api_call_time
-  min_delay = 1.5
+  min_delay = getattr(self, "api_delay", 2.5)
   if elapsed < min_delay:
     sleep_needed = min_delay - elapsed
     logger.info(f"Pacing API requests: sleeping for {sleep_needed:.2f}s...")
@@ -214,7 +214,12 @@ def consult_oracle(self, query: str) -> str:
       self.last_api_call_time = time.time()
       logger.exception("Error during oracle consultation")
       if attempt < max_retries and self._is_retryable_exception(e):
-        backoff_time = 2 ** attempt
+        err_msg = str(e).lower()
+        is_rate_limit = any(ind in err_msg for ind in [
+          "rate limit", "rate-limit", "rate_limited", "rate-limited",
+          "too many requests", "high-frequency", "risk_control", "risk control"
+        ])
+        backoff_time = 5 * (2 ** attempt) if is_rate_limit else 2 ** attempt
         formatted_err = self._format_api_error(e)
         self._print(f"[bold yellow]⚠️  Error calling Oracle API: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
         time.sleep(backoff_time)
@@ -555,6 +560,7 @@ def run_llm_cycle(self):
             if self._is_retryable_exception(e):
               raise
             logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
+            self._throttle_request()
             kwargs = {
               "model": actual_model,
               "messages": active_messages,
@@ -788,7 +794,12 @@ def run_llm_cycle(self):
         logger.exception("Error calling LLM API")
         formatted_err = self._format_api_error(e)
         if attempt < max_retries and self._is_retryable_exception(e):
-          backoff_time = 2 ** attempt
+          err_msg = str(e).lower()
+          is_rate_limit = any(ind in err_msg for ind in [
+            "rate limit", "rate-limit", "rate_limited", "rate-limited",
+            "too many requests", "high-frequency", "risk_control", "risk control"
+          ])
+          backoff_time = 5 * (2 ** attempt) if is_rate_limit else 2 ** attempt
           self._print(f"[bold yellow]⚠️  Error calling API: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
           time.sleep(backoff_time)
           continue
@@ -881,7 +892,9 @@ def run_llm_cycle(self):
       break
         
     # Otherwise, execute requested tools sequentially
-    for tc in tool_calls_accumulated:
+    for idx, tc in enumerate(tool_calls_accumulated):
+      if idx > 0:
+        time.sleep(0.5)
       t_id = tc["id"]
       t_name = tc["function"]["name"]
       t_args_raw = tc["function"]["arguments"]
