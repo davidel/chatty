@@ -986,7 +986,7 @@ def run_llm_cycle(self):
           else:
             panels = [{
               "title": "🔧 Executing Tool",
-              "content": f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
+              "content": Text.from_markup(f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]"),
               "border_style": "yellow"
             }]
             with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
