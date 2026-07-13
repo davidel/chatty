@@ -99,12 +99,6 @@ class LiveScreenLayout:
         rendered_panels.append(rendered_panel)
         total_panels_height += h
 
-    H_target = H - 1
-    padding_height = H_target - total_panels_height - status_bar_height
-
-    if padding_height > 0:
-      yield Segment("\n" * padding_height)
-
     for rp in rendered_panels:
       yield from console.render(rp, options)
 
