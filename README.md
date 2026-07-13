@@ -147,10 +147,7 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`list_dir`**: Explores directories inside the sandbox. Truncates output above `--max-dir-items` to prevent token flooding.
 - **`read_file`**: Reads text files. Accepts optional `start_line` and `end_line` parameters (1-indexed), supports displaying line numbers, and honors `--max-read-chars`.
 - **`write_file`**: Writes full text contents to a file. Triggers automated syntax checking.
-- **`patch_file`**: Replaces a unique specific block of code. Safest tool for small, contiguous code changes.
-- **`multi_patch`**: Replaces multiple non-contiguous exact blocks of code atomically.
-- **`edit_lines`**: Modifies a specific line range (1-indexed, inclusive) with new text. Immune to text-matching failures.
-- **`multi_edit_lines`**: Modifies multiple non-contiguous line ranges atomically using line numbers.
+- **`patch_file`**: Replaces one or more unique blocks of code inside a file using Aider-style SEARCH/REPLACE blocks. Highly robust to whitespace and indentation differences.
 - **`format_file`**: Styles source files using formatters: `black`/`ruff` for Python, `clang-format` for C/C++, `prettier` for frontend, or custom JSON/YAML encoders. Displays diff results.
 - **`move_file`**: Renames or moves files and directories safely inside the sandbox boundaries.
 - **`copy_file`**: Recursively copies file system structures.

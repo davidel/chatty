@@ -15,7 +15,7 @@ from chatty.tools import (
   tool_make_directory,
   tool_get_file_info,
   tool_search_grep,
-  tool_multi_patch
+  tool_patch_file
 )
 
 class TestSandboxOps(unittest.TestCase):
@@ -282,18 +282,30 @@ class TestSandboxOps(unittest.TestCase):
     self.assertIn("subdir/file2.txt: pattern FF00 here", res)
     self.assertNotIn("binary.bin", res)
 
-  def test_multi_patch(self):
-    test_file = "test_multi.py"
+  def test_tool_patch_file(self):
+    test_file = "test_patch.py"
     file_path = os.path.join(self.sandbox_dir, test_file)
     with open(file_path, "w") as f:
       f.write("def func_a():\n  x = 1\n  return x\n\ndef func_b():\n  y = 2\n  return y\n")
 
-    # Happy path: non-overlapping, unique patches
-    patches = [
-      {"search": "  x = 1\n  return x", "replace": "  x = 10\n  return x + 1"},
-      {"search": "  y = 2\n  return y", "replace": "  y = 20\n  return y + 2"}
-    ]
-    res = tool_multi_patch(self.sandbox_dir, test_file, patches)
+    # Happy path: multiple Aider-style patches in one string
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "  x = 1\n"
+      "  return x\n"
+      "=======\n"
+      "  x = 10\n"
+      "  return x + 1\n"
+      ">>>>>>> REPLACE\n"
+      "<<<<<<< SEARCH\n"
+      "  y = 2\n"
+      "  return y\n"
+      "=======\n"
+      "  y = 20\n"
+      "  return y + 2\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
     self.assertIn("Successfully updated file", res)
     with open(file_path, "r") as f:
       content = f.read()
@@ -302,31 +314,54 @@ class TestSandboxOps(unittest.TestCase):
     self.assertIn("y = 20", content)
     self.assertIn("return y + 2", content)
 
+    # Indentation-shifting (fuzzy) matching
+    with open(file_path, "w") as f:
+      f.write("    def hello():\n        print(\"hi\")\n")
+    
+    # Search block has 2 spaces, file has 4/8 spaces
+    fuzzy_patch = (
+      "<<<<<<< SEARCH\n"
+      "  def hello():\n"
+      "      print(\"hi\")\n"
+      "=======\n"
+      "  def hello():\n"
+      "      print(\"hello world\")\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, fuzzy_patch)
+    self.assertIn("Successfully updated file", res)
+    with open(file_path, "r") as f:
+      content_fuzzy = f.read()
+    # It should have shifted the indent of the print statement to 8 spaces
+    self.assertEqual(content_fuzzy, "    def hello():\n        print(\"hello world\")\n")
+
     # Error path: non-existent file
-    res = tool_multi_patch(self.sandbox_dir, "nonexistent.py", patches)
+    res = tool_patch_file(self.sandbox_dir, "nonexistent.py", patch)
     self.assertIn("Error: File 'nonexistent.py' does not exist", res)
 
     # Error path: search block not found
-    bad_patches = [{"search": "not found here", "replace": "something"}]
-    res = tool_multi_patch(self.sandbox_dir, test_file, bad_patches)
-    self.assertIn("Error: The search block in patch 1 was not found", res)
+    bad_patch = (
+      "<<<<<<< SEARCH\n"
+      "not found here\n"
+      "=======\n"
+      "something\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, bad_patch)
+    self.assertIn("SEARCH block not found in file", res)
 
     # Error path: duplicate search blocks (non-unique)
     with open(file_path, "w") as f:
       f.write("duplicate\nduplicate\n")
-    dup_patches = [{"search": "duplicate", "replace": "replaced"}]
-    res = tool_multi_patch(self.sandbox_dir, test_file, dup_patches)
-    self.assertIn("Error: Found 2 occurrences of the search block in patch 1", res)
-
-    # Error path: overlapping patches
-    with open(file_path, "w") as f:
-      f.write("line 1\nline 2\nline 3\n")
-    overlap_patches = [
-      {"search": "line 1\nline 2", "replace": "replaced 1"},
-      {"search": "line 2\nline 3", "replace": "replaced 2"}
-    ]
-    res = tool_multi_patch(self.sandbox_dir, test_file, overlap_patches)
-    self.assertIn("Error: Overlapping patches detected", res)
+    dup_patch = (
+      "<<<<<<< SEARCH\n"
+      "duplicate\n"
+      "=======\n"
+      "replaced\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, dup_patch)
+    self.assertIn("SEARCH block is not unique", res)
 
   def test_make_file_preview_small(self):
     from chatty.tools import make_file_preview
@@ -357,47 +392,6 @@ class TestSandboxOps(unittest.TestCase):
     self.assertIn("54: line54", res)
     self.assertIn("... (lines 55-149 truncated) ...", res)
 
-  def test_tool_edit_lines_with_preview(self):
-    from chatty.tools import tool_edit_lines
-    test_file = "edit_preview.txt"
-    file_path = os.path.join(self.sandbox_dir, test_file)
-    with open(file_path, "w") as f:
-      f.write("a\nb\nc\nd\ne\n")
-      
-    res = tool_edit_lines(self.sandbox_dir, test_file, 2, 4, "x\ny")
-    self.assertIn("Successfully updated file", res)
-    self.assertIn("now has 4 lines", res)
-    self.assertIn("2: x\n3: y", res)
-
-  def test_tool_patch_file_with_preview(self):
-    from chatty.tools import tool_patch_file
-    test_file = "patch_preview.txt"
-    file_path = os.path.join(self.sandbox_dir, test_file)
-    with open(file_path, "w") as f:
-      f.write("a\nb\nc\nd\ne\n")
-      
-    res = tool_patch_file(self.sandbox_dir, test_file, "b\nc\nd", "x\ny")
-    self.assertIn("Successfully updated file", res)
-    self.assertIn("now has 4 lines", res)
-    self.assertIn("2: x\n3: y", res)
-
-  def test_tool_multi_edit_lines(self):
-    from chatty.tools import tool_multi_edit_lines
-    test_file = "multi_edit.txt"
-    file_path = os.path.join(self.sandbox_dir, test_file)
-    with open(file_path, "w") as f:
-      f.write("line1\nline2\nline3\nline4\nline5\n")
-      
-    edits = [
-      {"start_line": 2, "end_line": 2, "replacement": "new2"},
-      {"start_line": 4, "end_line": 4, "replacement": "new4_a\nnew4_b"}
-    ]
-    res = tool_multi_edit_lines(self.sandbox_dir, test_file, edits)
-    self.assertIn("Successfully updated file", res)
-    with open(file_path, "r") as f:
-      content = f.read()
-    self.assertEqual(content, "line1\nnew2\nline3\nnew4_a\nnew4_b\nline5\n")
-
   def test_extract_tool_calls_from_text(self):
     from chatty.session import ChatbotSession
     # Create mock session
@@ -414,16 +408,10 @@ class TestSandboxOps(unittest.TestCase):
       "Here is the tool call:\n"
       "```json\n"
       "{\n"
-      "  \"name\": \"multi_edit_lines\",\n"
+      "  \"name\": \"patch_file\",\n"
       "  \"arguments\": {\n"
       "    \"path\": \"src/vector_regfile.sv\",\n"
-      "    \"edits\": [\n"
-      "      {\n"
-      "        \"start_line\": 20,\n"
-      "        \"end_line\": 25,\n"
-      "        \"replacement\": \"assign a = {b, c};\"\n"
-      "      }\n"
-      "    ]\n"
+      "    \"patch\": \"<<<<<<< SEARCH\\nrd_data = {a, b};\\n=======\\nassign a = {b, c};\\n>>>>>>> REPLACE\"\n"
       "  }\n"
       "}\n"
       "```"
@@ -431,7 +419,7 @@ class TestSandboxOps(unittest.TestCase):
     
     parsed = session.extract_tool_calls_from_text(sample_text)
     self.assertEqual(len(parsed), 1)
-    self.assertEqual(parsed[0]["function"]["name"], "multi_edit_lines")
+    self.assertEqual(parsed[0]["function"]["name"], "patch_file")
     self.assertIn("src/vector_regfile.sv", parsed[0]["function"]["arguments"])
 
   def test_hex_dump(self):

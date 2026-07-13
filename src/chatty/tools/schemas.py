@@ -128,7 +128,7 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "patch_file",
-      "description": "Replace a unique, specific block of text/code inside a file in the sandbox. Preserves the rest of the file. Use this for editing existing files when you can match a unique block of text. For editing where matching is difficult, use 'edit_lines'.",
+      "description": "Replace one or more unique blocks of text/code inside a file using Aider-style SEARCH/REPLACE blocks. Highly robust to whitespace and indentation differences.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -136,119 +136,12 @@ TOOLS_SCHEMA = [
             "type": "string",
             "description": "The file path relative to the sandbox root."
           },
-          "search": {
+          "patch": {
             "type": "string",
-            "description": "The exact block of code/text to be replaced. Must match a unique occurrence in the file including whitespace and indentation."
-          },
-          "replace": {
-            "type": "string",
-            "description": "The new code/text to replace the search block with."
+            "description": "One or more edit blocks in the format:\n<<<<<<< SEARCH\ncode to replace\n=======\nnew code\n>>>>>>> REPLACE"
           }
         },
-        "required": ["path", "search", "replace"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "multi_patch",
-      "description": "Apply multiple non-contiguous exact text replacements to a file. The operation is atomic: if any patch fails to match uniquely, the entire operation is aborted.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "The file path relative to the sandbox root."
-          },
-          "patches": {
-            "type": "array",
-            "description": "The list of patches to apply. Patches are matched against the original file content.",
-            "items": {
-              "type": "object",
-              "properties": {
-                "search": {
-                  "type": "string",
-                  "description": "The exact block of code/text to replace. Must be unique in the original file."
-                },
-                "replace": {
-                  "type": "string",
-                  "description": "The code/text to replace the search block with."
-                }
-              },
-              "required": ["search", "replace"]
-            }
-          }
-        },
-        "required": ["path", "patches"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "edit_lines",
-      "description": "Replace a range of lines in a file (1-indexed, inclusive) with new content. This tool is highly recommended for editing existing files because it uses line numbers (which you can get from 'search_grep' or 'read_file') and is completely immune to text-matching failures.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "The file path relative to the sandbox root."
-          },
-          "start_line": {
-            "type": "integer",
-            "description": "The starting line number to replace (1-indexed, inclusive)."
-          },
-          "end_line": {
-            "type": "integer",
-            "description": "The ending line number to replace (1-indexed, inclusive)."
-          },
-          "replacement": {
-            "type": "string",
-            "description": "The new text/code content to insert in place of the specified lines."
-          }
-        },
-        "required": ["path", "start_line", "end_line", "replacement"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "multi_edit_lines",
-      "description": "Apply multiple non-contiguous line range edits to a file. The operation is atomic: if any edit fails (e.g. invalid line range or overlapping range), the entire operation is aborted. All line numbers (start_line and end_line) are 1-indexed, inclusive, and refer to the ORIGINAL content of the file before any edits are applied.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "The file path relative to the sandbox root."
-          },
-          "edits": {
-            "type": "array",
-            "description": "The list of line range edits to apply. Edits refer to the original file content and must not overlap.",
-            "items": {
-              "type": "object",
-              "properties": {
-                "start_line": {
-                  "type": "integer",
-                  "description": "The starting line number of the range to replace in the original file (1-indexed, inclusive)."
-                },
-                "end_line": {
-                  "type": "integer",
-                  "description": "The ending line number of the range to replace in the original file (1-indexed, inclusive)."
-                },
-                "replacement": {
-                  "type": "string",
-                  "description": "The new text/code content to insert in place of the specified line range."
-                }
-              },
-              "required": ["start_line", "end_line", "replacement"]
-            }
-          }
-        },
-        "required": ["path", "edits"]
+        "required": ["path", "patch"]
       }
     }
   },
@@ -342,7 +235,7 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "write_file",
-      "description": "Write text content to a file inside the sandboxed file system. Restricts modifications to only inside the sandbox folder. WARNING: For editing existing files, you should use 'edit_lines' or 'patch_file' instead of overwriting the entire file.",
+      "description": "Write text content to a file inside the sandboxed file system. Restricts modifications to only inside the sandbox folder. WARNING: For editing existing files, you should use 'patch_file' instead of overwriting the entire file.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -377,7 +270,7 @@ TOOLS_SCHEMA = [
           },
           "line_numbers": {
             "type": "boolean",
-            "description": "Set to true to include line numbers in the search results (formatted as 'file_path:line_number: content'). Set this to true if you plan to edit the matches later (e.g. using edit_lines or patch_file). Defaults to false."
+            "description": "Set to true to include line numbers in the search results (formatted as 'file_path:line_number: content'). Set this to true if you plan to edit the matches later (e.g. using patch_file). Defaults to false."
           }
         },
         "required": ["pattern"]

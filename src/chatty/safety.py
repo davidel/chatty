@@ -293,7 +293,7 @@ def validate_command_safety(command: str, session: Optional[Any] = None) -> Opti
         elif clean_token == 'sed':
           return (
             "Error: Using 'sed' in run_command is prohibited. "
-            "Please use the dedicated 'multi_patch' tool (for multiple exact replacements), 'edit_lines' (for a single line number range), or 'multi_edit_lines' tool instead."
+            "Please use the dedicated 'patch_file' tool (supporting Aider-style SEARCH/REPLACE blocks) instead."
           )
         elif clean_token == 'sleep':
           return (

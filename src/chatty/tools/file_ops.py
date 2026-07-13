@@ -197,8 +197,177 @@ def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
     return f"Error writing file: {str(e)}"
 
 
-def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> str:
-  """Replace a specific unique block of text/code in a file with new content."""
+def parse_aider_patches(patch_text: str) -> List[Tuple[str, str]]:
+  """Parses a string containing one or more Aider-style search/replace blocks.
+
+  Format:
+  <<<<<<< SEARCH
+  old code
+  =======
+  new code
+  >>>>>>> REPLACE
+  """
+  lines = patch_text.splitlines()
+  patches = []
+  
+  in_search = False
+  in_replace = False
+  search_lines = []
+  replace_lines = []
+  
+  for idx, line in enumerate(lines):
+    if line.startswith("<<<<<<< SEARCH"):
+      if in_search or in_replace:
+        raise ValueError(f"Nested or malformed SEARCH block at line {idx+1}")
+      in_search = True
+      search_lines = []
+    elif line.startswith("======="):
+      if not in_search:
+        raise ValueError(f"Unexpected ======= marker without SEARCH block at line {idx+1}")
+      in_search = False
+      in_replace = True
+      replace_lines = []
+    elif line.startswith(">>>>>>> REPLACE"):
+      if not in_replace:
+        raise ValueError(f"Unexpected >>>>>>> REPLACE marker without SEARCH/REPLACE block at line {idx+1}")
+      in_replace = False
+      patches.append(("\n".join(search_lines), "\n".join(replace_lines)))
+    else:
+      if in_search:
+        search_lines.append(line)
+      elif in_replace:
+        replace_lines.append(line)
+        
+  if in_search or in_replace:
+    raise ValueError("Unclosed SEARCH or REPLACE block in patch text")
+    
+  return patches
+
+
+def get_indent_info(line: str) -> Tuple[str, int]:
+  """Determines the indentation character and count for a line."""
+  indent_chars = ""
+  for char in line:
+    if char in (' ', '\t'):
+      indent_chars += char
+    else:
+      break
+  if '\t' in indent_chars:
+    return '\t', indent_chars.count('\t')
+  else:
+    return ' ', len(indent_chars)
+
+
+def apply_shift(line: str, shift: int, indent_char: str) -> str:
+  """Shifts the indentation of a line by a specified amount."""
+  if not line.strip():
+    return ""
+  if shift == 0:
+    return line
+  if shift > 0:
+    return (indent_char * shift) + line
+  else:
+    to_remove = abs(shift)
+    while to_remove > 0 and line.startswith(indent_char):
+      line = line[1:]
+      to_remove -= 1
+    return line
+
+
+def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Optional[Tuple[int, int, int]]]:
+  """Finds the search block in the file content using exact and fuzzy matching.
+
+  Returns (status, (start_char, end_char, indent_shift)).
+  """
+  file_content_norm = file_content.replace("\r\n", "\n")
+  search_block_norm = search_block.replace("\r\n", "\n")
+  
+  file_lines = file_content_norm.split("\n")
+  search_lines = search_block_norm.split("\n")
+  
+  file_lines_rstripped = [line.rstrip() for line in file_lines]
+  search_lines_rstripped = [line.rstrip() for line in search_lines]
+  
+  line_start_chars = []
+  curr = 0
+  for line in file_lines:
+    line_start_chars.append(curr)
+    curr += len(line) + 1
+    
+  num_file_lines = len(file_lines)
+  num_search_lines = len(search_lines)
+  
+  if num_search_lines == 0 or (num_search_lines == 1 and search_lines[0] == ""):
+    return "empty_search", None
+
+  # --- Attempt 1: Exact Match (modulo trailing whitespace) ---
+  exact_matches = []
+  for i in range(num_file_lines - num_search_lines + 1):
+    match = True
+    for j in range(num_search_lines):
+      if file_lines_rstripped[i + j] != search_lines_rstripped[j]:
+        match = False
+        break
+    if match:
+      exact_matches.append(i)
+      
+  if len(exact_matches) == 1:
+    start_line = exact_matches[0]
+    end_line = start_line + num_search_lines - 1
+    start_char = line_start_chars[start_line]
+    if end_line == num_file_lines - 1:
+      end_char = len(file_content_norm)
+    else:
+      end_char = line_start_chars[end_line + 1]
+    return "found", (start_char, end_char, 0)
+  elif len(exact_matches) > 1:
+    return "not_unique", None
+
+  # --- Attempt 2: Fuzzy Match (ignoring leading/trailing whitespace) ---
+  file_lines_stripped = [line.strip() for line in file_lines_rstripped]
+  search_lines_stripped = [line.strip() for line in search_lines_rstripped]
+  
+  fuzzy_matches = []
+  for i in range(num_file_lines - num_search_lines + 1):
+    match = True
+    for j in range(num_search_lines):
+      if search_lines_stripped[j] == "":
+        if file_lines_stripped[i + j] != "":
+          match = False
+          break
+      else:
+        if file_lines_stripped[i + j] != search_lines_stripped[j]:
+          match = False
+          break
+    if match:
+      fuzzy_matches.append(i)
+      
+  if len(fuzzy_matches) == 1:
+    start_line = fuzzy_matches[0]
+    end_line = start_line + num_search_lines - 1
+    
+    first_file_line = file_lines[start_line]
+    first_search_line = search_lines[0]
+    
+    char_file, count_file = get_indent_info(first_file_line)
+    _, count_search = get_indent_info(first_search_line)
+    shift = count_file - count_search
+    
+    start_char = line_start_chars[start_line]
+    if end_line == num_file_lines - 1:
+      end_char = len(file_content_norm)
+    else:
+      end_char = line_start_chars[end_line + 1]
+      
+    return "found", (start_char, end_char, shift)
+  elif len(fuzzy_matches) > 1:
+    return "not_unique", None
+    
+  return "not_found", None
+
+
+def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
+  """Replace one or more unique blocks of text in a file using Aider-style SEARCH/REPLACE blocks."""
   try:
     safe_p = get_safe_path(sandbox_dir, path, write=True)
     if not os.path.exists(safe_p):
@@ -206,327 +375,77 @@ def tool_patch_file(sandbox_dir: str, path: str, search: str, replace: str) -> s
     if not os.path.isfile(safe_p):
       return f"Error: Path '{path}' is not a file."
       
+    try:
+      patches = parse_aider_patches(patch)
+    except Exception as e:
+      return (
+        f"Error parsing Aider-style patches: {str(e)}\n"
+        "Make sure you use the exact format:\n"
+        "<<<<<<< SEARCH\n"
+        "...\n"
+        "=======\n"
+        "...\n"
+        ">>>>>>> REPLACE"
+      )
+      
+    if not patches:
+      return "Error: No SEARCH/REPLACE blocks found in the patch parameter."
+      
     with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
       content = f.read()
       
-    # Normalize carriage returns for more robust matching (handles \r\n vs \n differences)
-    normalized_content = content.replace("\r\n", "\n")
-    normalized_search = search.replace("\r\n", "\n")
-    normalized_replace = replace.replace("\r\n", "\n")
+    original_content = content
+    highlight_ranges = []
     
-    if normalized_search not in normalized_content:
-      return (
-        f"Error: The search block was not found in '{path}'. "
-        "Make sure you specify the search text exactly including leading whitespace and indentation. "
-        "Note: Line endings (CRLF vs LF) are automatically normalized and ignored."
-      )
+    for idx, (search_block, replace_block) in enumerate(patches):
+      status, match_info = find_block_in_file(content, search_block)
       
-    occurrences = normalized_content.count(normalized_search)
-    if occurrences > 1:
-      return (
-        f"Error: Found {occurrences} occurrences of the search block in '{path}'. "
-        "Please provide more context lines to make the search block unique."
-      )
+      if status == "empty_search":
+        return f"Error in patch block {idx+1}: SEARCH block is empty."
+      elif status == "not_unique":
+        return f"Error in patch block {idx+1}: SEARCH block is not unique. Please provide more context lines."
+      elif status == "not_found":
+        return f"Error in patch block {idx+1}: SEARCH block not found in file. Make sure it matches the file content."
+        
+      start_char, end_char, shift = match_info
       
-    # Perform replacement on the normalized content
-    updated_normalized = normalized_content.replace(normalized_search, normalized_replace, 1)
-    
-    # Restore the original file's dominant line ending style
-    if "\r\n" in content:
-      new_content = updated_normalized.replace("\n", "\r\n")
-    else:
-      new_content = updated_normalized
+      replace_lines = replace_block.replace("\r\n", "\n").split("\n")
+      if shift != 0:
+        first_file_line = content.replace("\r\n", "\n").split("\n")[content.replace("\r\n", "\n")[:start_char].count('\n')]
+        char_file, _ = get_indent_info(first_file_line)
+        shifted_replace_lines = [apply_shift(line, shift, char_file) for line in replace_lines]
+        replace_block_shifted = "\n".join(shifted_replace_lines)
+      else:
+        replace_block_shifted = "\n".join(replace_lines)
+        
+      # Preserve trailing newline of the matched block
+      if end_char > start_char and content[end_char - 1] in ('\n', '\r'):
+        replace_block_shifted += "\n"
+        
+      has_crlf = "\r\n" in content
+      if has_crlf:
+        replace_block_final = replace_block_shifted.replace("\n", "\r\n")
+      else:
+        replace_block_final = replace_block_shifted
+        
+      content = content[:start_char] + replace_block_final + content[end_char:]
+      
+      replaced_lines_count = len(replace_lines)
+      start_line_num = content[:start_char].count('\n') + 1
+      end_line_num = start_line_num + max(0, replaced_lines_count - 1)
+      highlight_ranges.append((start_line_num, end_line_num))
       
     with open(safe_p, 'w', encoding='utf-8') as f:
-      f.write(new_content)
+      f.write(content)
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
-    print_diff(rel_path, content, new_content)
+    print_diff(rel_path, original_content, content)
     
-    start_char = normalized_content.find(normalized_search)
-    start_line = normalized_content[:start_char].count('\n') + 1
-    new_lines_count = len(normalized_replace.split('\n'))
-    end_line = start_line + new_lines_count - 1
+    preview = make_file_preview(safe_p, highlight_ranges)
+    return f"Successfully updated file '{rel_path}' by applying {len(patches)} patch block(s).\n\n{preview}"
     
-    preview = make_file_preview(safe_p, [(start_line, end_line)])
-    return f"Successfully updated file '{rel_path}' using a target replacement patch.\n\n{preview}"
   except Exception as e:
     return f"Error patching file: {str(e)}"
-
-
-def tool_multi_patch(sandbox_dir: str, path: str, patches: List[Dict[str, str]]) -> str:
-  """Apply multiple non-contiguous exact text replacements to a file inside the sandbox."""
-  try:
-    safe_p = get_safe_path(sandbox_dir, path, write=True)
-    if not os.path.exists(safe_p):
-      return f"Error: File '{path}' does not exist. Use write_file to create new files."
-    if not os.path.isfile(safe_p):
-      return f"Error: Path '{path}' is not a file."
-
-    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-      content = f.read()
-
-    normalized_content = content.replace("\r\n", "\n")
-    patch_ranges = []
-
-    for idx, patch in enumerate(patches):
-      if not isinstance(patch, dict):
-        return f"Error: Patch at index {idx} must be an object/dictionary."
-      search = patch.get("search")
-      replace = patch.get("replace")
-      if search is None or replace is None:
-        return f"Error: Patch at index {idx} is missing 'search' or 'replace' key."
-
-      normalized_search = search.replace("\r\n", "\n")
-      normalized_replace = replace.replace("\r\n", "\n")
-
-      if normalized_search not in normalized_content:
-        return (
-          f"Error: The search block in patch {idx + 1} was not found in '{path}'. "
-          "Make sure you specify the search text exactly including leading whitespace and indentation. "
-          "Note: Line endings (CRLF vs LF) are automatically normalized and ignored."
-        )
-
-      occurrences = normalized_content.count(normalized_search)
-      if occurrences > 1:
-        return (
-          f"Error: Found {occurrences} occurrences of the search block in patch {idx + 1} inside '{path}'. "
-          "Please provide more context lines to make the search block unique."
-        )
-
-      start_char = normalized_content.find(normalized_search)
-      end_char = start_char + len(normalized_search)
-
-      patch_ranges.append({
-        "index": idx,
-        "start": start_char,
-        "end": end_char,
-        "search": normalized_search,
-        "replace": normalized_replace
-      })
-
-    # Check for overlaps
-    sorted_ranges = sorted(patch_ranges, key=lambda x: x["start"])
-    for i in range(len(sorted_ranges) - 1):
-      if sorted_ranges[i]["end"] > sorted_ranges[i + 1]["start"]:
-        return (
-          f"Error: Overlapping patches detected. "
-          f"Patch {sorted_ranges[i]['index'] + 1} overlaps with Patch {sorted_ranges[i+1]['index'] + 1}."
-        )
-
-    # Apply replacements from end to start to avoid shifting indices
-    updated_normalized = normalized_content
-    sorted_ranges_desc = sorted(patch_ranges, key=lambda x: x["start"], reverse=True)
-
-    for r in sorted_ranges_desc:
-      start = r["start"]
-      end = r["end"]
-      rep = r["replace"]
-      updated_normalized = updated_normalized[:start] + rep + updated_normalized[end:]
-
-    # Restore original dominant line ending style
-    if "\r\n" in content:
-      new_content = updated_normalized.replace("\n", "\r\n")
-    else:
-      new_content = updated_normalized
-
-    with open(safe_p, 'w', encoding='utf-8') as f:
-      f.write(new_content)
-
-    rel_path = os.path.relpath(safe_p, sandbox_dir)
-    print_diff(rel_path, content, new_content)
-    
-    sorted_ranges = sorted(patch_ranges, key=lambda x: x["start"])
-    shift = 0
-    new_highlight_ranges = []
-    for r in sorted_ranges:
-      new_start_char = r["start"] + shift
-      new_start_line = updated_normalized[:new_start_char].count('\n') + 1
-      new_lines_count = len(r["replace"].split('\n'))
-      new_end_line = new_start_line + new_lines_count - 1
-      new_highlight_ranges.append((new_start_line, new_end_line))
-      shift += len(r["replace"]) - len(r["search"])
-      
-    preview = make_file_preview(safe_p, new_highlight_ranges)
-    return f"Successfully updated file '{rel_path}' by applying {len(patches)} patches.\n\n{preview}"
-  except Exception as e:
-    return f"Error multi-patching file: {str(e)}"
-
-
-def tool_edit_lines(sandbox_dir: str, path: str, start_line: int, end_line: int, replacement: str) -> str:
-  """Replace a range of lines in a file (1-indexed, inclusive) with new content."""
-  try:
-    safe_p = get_safe_path(sandbox_dir, path, write=True)
-    if not os.path.exists(safe_p):
-      return f"Error: File '{path}' does not exist. Use write_file to create new files."
-    if not os.path.isfile(safe_p):
-      return f"Error: Path '{path}' is not a file."
-      
-    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-      lines = f.readlines()
-      
-    original_content = "".join(lines)
-    total_lines = len(lines)
-    if start_line < 1 or start_line > total_lines:
-      return f"Error: start_line {start_line} is out of range. The file '{path}' has {total_lines} lines."
-    if end_line < start_line or end_line > total_lines:
-      return f"Error: end_line {end_line} is invalid (must be between start_line {start_line} and total file lines {total_lines})."
-      
-    has_crlf = any("\r\n" in line for line in lines)
-    
-    if replacement == "":
-      replacement_lines_formatted = []
-    else:
-      replacement_normalized = replacement.replace("\r\n", "\n")
-      replacement_lines = replacement_normalized.split("\n")
-      suffix = "\r\n" if has_crlf else "\n"
-      if replacement_normalized.endswith("\n") and len(replacement_lines) > 1 and replacement_lines[-1] == "":
-        replacement_lines = replacement_lines[:-1]
-      replacement_lines_formatted = [line + suffix for line in replacement_lines]
-      
-    slice_start = start_line - 1
-    slice_end = end_line
-    lines[slice_start:slice_end] = replacement_lines_formatted
-    
-    with open(safe_p, 'w', encoding='utf-8') as f:
-      f.writelines(lines)
-      
-    rel_path = os.path.relpath(safe_p, sandbox_dir)
-    print_diff(rel_path, original_content, "".join(lines))
-    replaced_count = end_line - start_line + 1
-    inserted_count = len(replacement_lines_formatted)
-    
-    new_end_line = start_line + max(0, inserted_count - 1) if inserted_count > 0 else start_line
-    preview = make_file_preview(safe_p, [(start_line, new_end_line)])
-    return (
-      f"Successfully updated file '{rel_path}': replaced lines {start_line}-{end_line} "
-      f"({replaced_count} lines) with {inserted_count} new lines.\n\n{preview}"
-    )
-  except Exception as e:
-    return f"Error editing lines: {str(e)}"
-
-
-def tool_multi_edit_lines(sandbox_dir: str, path: str, edits: List[Dict[str, Any]]) -> str:
-  """Apply multiple line range edits to a file inside the sandbox.
-
-  All start_line and end_line coordinates are 1-indexed, inclusive, and refer to
-  the original file content before any edits are applied. The edits must not
-  overlap.
-  """
-  try:
-    safe_p = get_safe_path(sandbox_dir, path, write=True)
-    if not os.path.exists(safe_p):
-      return f"Error: File '{path}' does not exist. Use write_file to create new files."
-    if not os.path.isfile(safe_p):
-      return f"Error: Path '{path}' is not a file."
-
-    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-      lines = f.readlines()
-
-    original_content = "".join(lines)
-    total_lines = len(lines)
-
-    # Validate and parse edits
-    parsed_edits = []
-    for idx, edit in enumerate(edits):
-      if not isinstance(edit, dict):
-        return f"Error: Edit at index {idx} must be an object/dictionary."
-      start_line = edit.get("start_line")
-      end_line = edit.get("end_line")
-      replacement = edit.get("replacement")
-      if start_line is None or end_line is None or replacement is None:
-        return f"Error: Edit at index {idx} is missing 'start_line', 'end_line', or 'replacement'."
-      try:
-        start_line = int(start_line)
-        end_line = int(end_line)
-      except (ValueError, TypeError):
-        return f"Error: Edit at index {idx} start_line and end_line must be valid integers."
-
-      if start_line < 1 or start_line > total_lines:
-        return f"Error: Edit {idx + 1} start_line {start_line} is out of range. The file '{path}' has {total_lines} lines."
-      if end_line < start_line or end_line > total_lines:
-        return f"Error: Edit {idx + 1} end_line {end_line} is invalid (must be between start_line {start_line} and total file lines {total_lines})."
-
-      parsed_edits.append({
-        "index": idx,
-        "start": start_line,
-        "end": end_line,
-        "replacement": replacement
-      })
-
-    # Check for overlaps
-    sorted_edits = sorted(parsed_edits, key=lambda x: x["start"])
-    for i in range(len(sorted_edits) - 1):
-      if sorted_edits[i]["end"] >= sorted_edits[i + 1]["start"]:
-        return (
-          f"Error: Overlapping edits detected. "
-          f"Edit {sorted_edits[i]['index'] + 1} (lines {sorted_edits[i]['start']}-{sorted_edits[i]['end']}) "
-          f"overlaps with Edit {sorted_edits[i+1]['index'] + 1} (lines {sorted_edits[i+1]['start']}-{sorted_edits[i+1]['end']})."
-        )
-
-    has_crlf = any("\r\n" in line for line in lines)
-    suffix = "\r\n" if has_crlf else "\n"
-
-    # Modify the lines list from bottom to top (reverse sorted_edits)
-    sorted_desc = sorted(parsed_edits, key=lambda x: x["start"], reverse=True)
-    updated_lines = list(lines)
-
-    for edit in sorted_desc:
-      start = edit["start"]
-      end = edit["end"]
-      rep = edit["replacement"]
-
-      if rep == "":
-        rep_lines_formatted = []
-      else:
-        rep_normalized = rep.replace("\r\n", "\n")
-        rep_lines = rep_normalized.split("\n")
-        if rep_normalized.endswith("\n") and len(rep_lines) > 1 and rep_lines[-1] == "":
-          rep_lines = rep_lines[:-1]
-        rep_lines_formatted = [line + suffix for line in rep_lines]
-
-      slice_start = start - 1
-      slice_end = end
-      updated_lines[slice_start:slice_end] = rep_lines_formatted
-
-    new_content = "".join(updated_lines)
-    with open(safe_p, 'w', encoding='utf-8') as f:
-      f.writelines(updated_lines)
-
-    # Calculate highlight ranges in the updated file
-    sorted_asc = sorted(parsed_edits, key=lambda x: x["start"])
-    line_shift = 0
-    new_highlight_ranges = []
-    for edit in sorted_asc:
-      start = edit["start"]
-      end = edit["end"]
-      rep = edit["replacement"]
-
-      if rep == "":
-        rep_lines_count = 0
-      else:
-        rep_normalized = rep.replace("\r\n", "\n")
-        rep_lines = rep_normalized.split("\n")
-        if rep_normalized.endswith("\n") and len(rep_lines) > 1 and rep_lines[-1] == "":
-          rep_lines = rep_lines[:-1]
-        rep_lines_count = len(rep_lines)
-
-      new_start = start + line_shift
-      new_end = new_start + rep_lines_count - 1
-      if rep_lines_count > 0:
-        new_highlight_ranges.append((new_start, new_end))
-      else:
-        new_highlight_ranges.append((new_start, new_start))
-
-      line_shift += rep_lines_count - (end - start + 1)
-
-    rel_path = os.path.relpath(safe_p, sandbox_dir)
-    print_diff(rel_path, original_content, new_content)
-    preview = make_file_preview(safe_p, new_highlight_ranges)
-
-    return f"Successfully updated file '{rel_path}' by applying {len(edits)} line range edits.\n\n{preview}"
-  except Exception as e:
-    return f"Error multi-editing lines: {str(e)}"
 
 
 def get_available_formatters() -> List[str]:

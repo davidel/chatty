@@ -12,9 +12,6 @@ from chatty.tools.file_ops import (
   tool_hex_dump,
   tool_write_file,
   tool_patch_file,
-  tool_multi_patch,
-  tool_edit_lines,
-  tool_multi_edit_lines,
   tool_format_file,
   tool_get_file_info
 )
@@ -111,40 +108,32 @@ def handle_write_file(arguments: Dict[str, Any], session: Any) -> str:
 
 def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:
   path = arguments.get("path")
-  search = arguments.get("search")
-  replace = arguments.get("replace")
-  if not path or search is None or replace is None:
-    return "Error: Missing parameters 'path', 'search', or 'replace'."
-  return tool_patch_file(session.sandbox, path, search, replace)
+  patch = arguments.get("patch")
+  if not path or patch is None:
+    return "Error: Missing parameters 'path' or 'patch'."
+  return tool_patch_file(session.sandbox, path, patch)
 
 
 def handle_multi_patch(arguments: Dict[str, Any], session: Any) -> str:
-  path = arguments.get("path")
-  patches = arguments.get("patches")
-  if not path or not isinstance(patches, list):
-    return "Error: Missing parameter 'path' or 'patches' must be a list of patch objects."
-  return tool_multi_patch(session.sandbox, path, patches)
+  return (
+    "Error: The 'multi_patch' tool has been deprecated. "
+    "Please use the unified 'patch_file' tool with a single string parameter 'patch' "
+    "containing one or more Aider-style SEARCH/REPLACE blocks."
+  )
 
 
 def handle_edit_lines(arguments: Dict[str, Any], session: Any) -> str:
-  path = arguments.get("path")
-  try:
-    start_line = int(arguments.get("start_line"))
-    end_line = int(arguments.get("end_line"))
-  except (ValueError, TypeError):
-    return "Error: start_line and end_line must be valid integers."
-  replacement = arguments.get("replacement")
-  if not path or replacement is None:
-    return "Error: Missing parameters 'path' or 'replacement'."
-  return tool_edit_lines(session.sandbox, path, start_line, end_line, replacement)
+  return (
+    "Error: The 'edit_lines' tool has been deprecated. "
+    "Please use the unified 'patch_file' tool with Aider-style SEARCH/REPLACE blocks instead."
+  )
 
 
 def handle_multi_edit_lines(arguments: Dict[str, Any], session: Any) -> str:
-  path = arguments.get("path")
-  edits = arguments.get("edits")
-  if not path or not isinstance(edits, list):
-    return "Error: Missing parameter 'path' or 'edits' must be a list of edit objects."
-  return tool_multi_edit_lines(session.sandbox, path, edits)
+  return (
+    "Error: The 'multi_edit_lines' tool has been deprecated. "
+    "Please use the unified 'patch_file' tool with Aider-style SEARCH/REPLACE blocks instead."
+  )
 
 
 def handle_format_file(arguments: Dict[str, Any], session: Any) -> str:
