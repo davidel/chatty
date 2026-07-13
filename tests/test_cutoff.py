@@ -41,24 +41,23 @@ class TestCutoffs(unittest.TestCase):
         self.assertEqual(truncate_output(text, max_chars=20), text)
 
     def test_truncate_thinking_by_line(self):
-        # 1. No truncation if short
-        text = "Hello\nworld"
-        self.assertEqual(truncate_thinking_by_line(text, 100), text)
+      # 1. No truncation if short
+      text = "Hello\nworld"
+      self.assertEqual(truncate_thinking_by_line(text, 100), text)
 
-        # 2. Truncation aligns to newline
-        # max_chars=10, text of length 20. Last 10 chars is "ne 2\nline 3".
-        # Should align to newline, resulting in "line 3" preceded by notice.
-        text = "line 1\nline 2\nline 3"
-        truncated = truncate_thinking_by_line(text, 10)
-        self.assertIn("truncated", truncated.lower())
-        self.assertTrue(truncated.endswith("line 3"))
-        self.assertNotIn("line 2", truncated)
+      # 2. Truncation aligns to newline
+      text = "line 1\nline 2\nline 3"
+      truncated = truncate_thinking_by_line(text, 2)
+      self.assertIn("truncated", truncated.lower())
+      self.assertTrue(truncated.endswith("line 3"))
+      self.assertNotIn("line 2", truncated)
 
-        # 3. Truncation without newline fallback
-        text = "abcdefghij"
-        truncated = truncate_thinking_by_line(text, 5)
-        self.assertIn("truncated", truncated.lower())
-        self.assertTrue(truncated.endswith("fghij"))
+      # 3. Truncation with multi-line text
+      text = "line 1\nline 2\nline 3\nline 4"
+      truncated = truncate_thinking_by_line(text, 3)
+      self.assertIn("truncated", truncated.lower())
+      self.assertTrue(truncated.endswith("line 4"))
+      self.assertNotIn("line 2", truncated)
 
     def test_tool_list_dir_limit(self):
         # Create 3 files

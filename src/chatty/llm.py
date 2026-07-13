@@ -774,8 +774,10 @@ def run_llm_cycle(self):
               first_chunk = False
               renderables = []
               if reasoning_accumulated.strip():
-                disp_reasoning = truncate_thinking_by_line(reasoning_accumulated)
-                renderables.append(Panel(LazyMarkdown(disp_reasoning), title="Thinking", border_style="yellow"))
+                max_lines = max(3, console.height - 6)
+                disp_reasoning = truncate_thinking_by_line(reasoning_accumulated, max_lines=max_lines)
+                p_height = (max_lines + 3) if not content_accumulated else None
+                renderables.append(Panel(LazyMarkdown(disp_reasoning), title="Thinking", border_style="yellow", height=p_height))
               if content_accumulated:
                 renderables.append(Panel(LazyMarkdown(content_accumulated), title="Assistant", border_style="green"))
               

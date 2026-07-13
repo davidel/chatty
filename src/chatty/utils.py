@@ -210,30 +210,20 @@ def truncate_output(text: str, max_chars: int = 16000) -> str:
   )
 
 
-def truncate_thinking_by_line(text: str, max_chars: int = 3000) -> str:
-  """Truncates the beginning of thinking text to allow the most recent to be shown, aligning to a line boundary."""
-  if len(text) <= max_chars:
+def truncate_thinking_by_line(text: str, max_lines: Optional[int] = None) -> str:
+  """Truncates the thinking text by lines to fit within the terminal window size."""
+  if max_lines is None:
+    # 2 border lines, 1 warning line, 1 status bar line + 2 extra safety lines
+    max_lines = max(3, console.height - 6)
+
+  lines = text.split("\n")
+  if len(lines) <= max_lines:
     return text
 
-  warning = "... [thinking output truncated for terminal performance] ...\n"
-  lines = text.split("\n")
-  
-  kept_lines = []
-  current_len = 0
-  for line in reversed(lines):
-    added_len = len(line) + (1 if kept_lines else 0)
-    if current_len + added_len <= max_chars:
-      kept_lines.append(line)
-      current_len += added_len
-    else:
-      break
-
-  if not kept_lines:
-    last_line = lines[-1]
-    return warning + last_line[-max_chars:]
-
-  kept_lines.reverse()
-  return warning + "\n".join(kept_lines)
+  warning = "... [thinking output truncated for terminal performance] ..."
+  # Keep the last max_lines - 1 lines
+  kept_lines = lines[-(max_lines - 1):]
+  return warning + "\n" + "\n".join(kept_lines)
 
 
 def get_ollama_models(url: str) -> List[str]:
