@@ -3,11 +3,13 @@ import time
 import json
 import logging
 import re
+import sys
+import select
 from typing import List, Dict, Any, Tuple, Optional
 
 import openai
 from chatty.tools import execute_tool, get_available_formatters, TOOLS_SCHEMA
-from chatty.utils import count_tokens, truncate_output, sanitize_tool_output, repair_json
+from chatty.utils import count_tokens, truncate_output, sanitize_tool_output, repair_json, truncate_thinking_by_line
 from chatty.ui import optional_live, LazyMarkdown
 from chatty.safety import active_session_var
 
@@ -698,9 +700,23 @@ def run_llm_cycle(self):
                     end=""
                   )
                   try:
-                    response = input().strip().lower()
+                    if sys.stdin.isatty():
+                      ready, _, _ = select.select([sys.stdin], [], [], 30.0)
+                      if ready:
+                        response = sys.stdin.readline().strip().lower()
+                      else:
+                        self._print("\n[bold red]⚠️  Timeout: No response received within 30 seconds. Aborting thinking stream to save tokens.[/bold red]")
+                        response = "s"
+                    else:
+                      response = input().strip().lower()
                   except (KeyboardInterrupt, EOFError):
                     response = "s"
+                  except Exception as e:
+                    logger.warning(f"Error during timed input select: {e}. Falling back to standard input.")
+                    try:
+                      response = input().strip().lower()
+                    except (KeyboardInterrupt, EOFError):
+                      response = "s"
                   
                   if response in ("l", "let"):
                     current_max_thinking = len(reasoning_accumulated) + max_thinking_chars
@@ -758,9 +774,7 @@ def run_llm_cycle(self):
               first_chunk = False
               renderables = []
               if reasoning_accumulated.strip():
-                disp_reasoning = reasoning_accumulated
-                if len(disp_reasoning) > 3000:
-                  disp_reasoning = "... [thinking output truncated for terminal performance] ...\n" + disp_reasoning[-3000:]
+                disp_reasoning = truncate_thinking_by_line(reasoning_accumulated)
                 renderables.append(Panel(LazyMarkdown(disp_reasoning), title="Thinking", border_style="yellow"))
               if content_accumulated:
                 renderables.append(Panel(LazyMarkdown(content_accumulated), title="Assistant", border_style="green"))
@@ -800,9 +814,7 @@ def run_llm_cycle(self):
         # Reconstruct and print the final panels permanently to console
         final_panels = []
         if reasoning_accumulated.strip():
-          disp_reasoning = reasoning_accumulated
-          if len(disp_reasoning) > 3000:
-            disp_reasoning = "... [thinking output truncated for terminal performance] ...\n" + disp_reasoning[-3000:]
+          disp_reasoning = truncate_thinking_by_line(reasoning_accumulated)
           final_panels.append(Panel(Markdown(disp_reasoning), title="Thinking", border_style="yellow"))
         if content_accumulated:
           final_panels.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))

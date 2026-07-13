@@ -526,6 +526,153 @@ class TestThinkingLoops(unittest.TestCase):
     self.assertEqual(mock_client.chat.completions.create.call_count, 2)
     self.assertEqual(self.session.messages[-1]["content"], "Success.")
 
+  @patch("chatty.session.openai.OpenAI")
+  @patch("chatty.llm.sys.stdin.isatty")
+  @patch("chatty.llm.select.select")
+  def test_interactive_thinking_timeout(self, mock_select, mock_isatty, mock_openai):
+    self.session.headless = False
+    mock_isatty.return_value = True
+    # simulate timeout (empty list of ready descriptors)
+    mock_select.return_value = ([], [], [])
+
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+
+    # Stream that exceeds thinking budget
+    delta1 = SimpleNamespace(
+      content=None,
+      tool_calls=None,
+      reasoning="Thinking " * 20,  # 180 chars, exceeds budget of 100
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice1 = SimpleNamespace(
+      delta=delta1,
+      finish_reason=None
+    )
+    chunk1 = SimpleNamespace(
+      choices=[choice1],
+      id="chunk-1",
+      model="test-model",
+      system_fingerprint=None
+    )
+    
+    # Successful stream with final content on next attempt
+    delta2 = SimpleNamespace(
+      content="Final response after timeout abort.",
+      tool_calls=None,
+      reasoning=None,
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice2 = SimpleNamespace(
+      delta=delta2,
+      finish_reason="stop"
+    )
+    chunk2 = SimpleNamespace(
+      choices=[choice2],
+      id="chunk-2",
+      model="test-model",
+      system_fingerprint=None
+    )
+
+    mock_stream1 = MagicMock()
+    mock_stream1.__iter__.return_value = [chunk1]
+    mock_stream1.close = MagicMock()
+
+    mock_stream2 = MagicMock()
+    mock_stream2.__iter__.return_value = [chunk2]
+
+    def mock_create(*args, **kwargs):
+      if mock_client.chat.completions.create.call_count == 1:
+        return mock_stream1
+      return mock_stream2
+
+    mock_client.chat.completions.create.side_effect = mock_create
+
+    # Run the cycle
+    self.session.run_llm_cycle()
+
+    # The timeout should default to "s" (stop), which aborts the stream and retries with self-correction
+    mock_stream1.close.assert_called_once()
+    self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+    self.assertEqual(self.session.messages[-1]["content"], "Final response after timeout abort.")
+
+  @patch("chatty.session.openai.OpenAI")
+  @patch("chatty.llm.sys.stdin.isatty")
+  @patch("chatty.llm.select.select")
+  @patch("chatty.llm.sys.stdin.readline")
+  def test_interactive_thinking_select_success(self, mock_readline, mock_select, mock_isatty, mock_openai):
+    self.session.headless = False
+    mock_isatty.return_value = True
+    # simulate stdin ready
+    mock_select.return_value = ([sys.stdin], [], [])
+    # simulate user entering "w"
+    mock_readline.return_value = "w\n"
+
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+
+    # Attempt 1: Stream that exceeds thinking budget, but then yields content because we whitelisted
+    delta1 = SimpleNamespace(
+      content=None,
+      tool_calls=None,
+      reasoning="Thinking " * 20,  # 180 chars, exceeds budget of 100
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    delta2 = SimpleNamespace(
+      content="Success.",
+      tool_calls=None,
+      reasoning=None,
+      reasoning_content=None,
+      reasoning_details=None,
+      thought_signature=None,
+      model_extra=None
+    )
+    choice1 = SimpleNamespace(
+      delta=delta1,
+      finish_reason=None
+    )
+    choice2 = SimpleNamespace(
+      delta=delta2,
+      finish_reason="stop"
+    )
+    chunk1 = SimpleNamespace(
+      choices=[choice1],
+      id="chunk-1",
+      model="test-model",
+      system_fingerprint=None
+    )
+    chunk2 = SimpleNamespace(
+      choices=[choice2],
+      id="chunk-2",
+      model="test-model",
+      system_fingerprint=None
+    )
+
+    mock_stream = MagicMock()
+    mock_stream.__iter__.return_value = [chunk1, chunk2]
+    mock_stream.close = MagicMock()
+
+    mock_client.chat.completions.create.return_value = mock_stream
+
+    # Run the cycle
+    self.session.run_llm_cycle()
+
+    # The stream should not be closed/aborted, and it should run to completion in 1 attempt
+    mock_stream.close.assert_not_called()
+    self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+    self.assertEqual(self.session.messages[-1]["content"], "Success.")
+
 
 if __name__ == "__main__":
   unittest.main()

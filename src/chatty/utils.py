@@ -210,6 +210,17 @@ def truncate_output(text: str, max_chars: int = 16000) -> str:
   )
 
 
+def truncate_thinking_by_line(text: str, max_chars: int = 3000) -> str:
+  """Truncates the beginning of thinking text to allow the most recent to be shown, aligning to a line boundary."""
+  if len(text) <= max_chars:
+    return text
+  sliced = text[-max_chars:]
+  newline_idx = sliced.find("\n")
+  if newline_idx != -1:
+    return "... [thinking output truncated for terminal performance] ...\n" + sliced[newline_idx + 1:]
+  return "... [thinking output truncated for terminal performance] ...\n" + sliced
+
+
 def get_ollama_models(url: str) -> List[str]:
   """Queries local Ollama tags API endpoint to retrieve downloaded models list."""
   parsed = urllib.parse.urlparse(url)
