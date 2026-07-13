@@ -17,13 +17,13 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.columns import Columns
+from rich.segment import Segment
 
 from chatty.tools import TOOLS_SCHEMA
 from chatty.utils import count_tokens
 
 logger = logging.getLogger("chatty")
 console = Console()
-
 
 class LazyMarkdown:
   """A helper that wraps a Markdown string and only parses it when rendered.
@@ -45,6 +45,93 @@ class LazyMarkdown:
 
   def __rich_measure__(self, console: Console, options: Any) -> Any:
     return self._get_markdown().__rich_measure__(console, options)
+
+
+class SegmentsRenderable:
+  def __init__(self, lines):
+    self.lines = lines
+
+  def __rich_console__(self, console, options):
+    for line in self.lines:
+      yield from line
+
+
+class LiveScreenLayout:
+  def __init__(self, panels, status_bar):
+    self.panels = panels
+    self.status_bar = status_bar
+
+  def __rich_console__(self, console, options):
+    W = console.width
+    H = console.height
+
+    status_bar_height = 1 if self.status_bar is not None else 0
+    max_panels_height = max(1, H - status_bar_height - 1)
+
+    # We use an inner width of W - 4 to account for panel borders and padding
+    temp_console = Console(width=max(4, W - 4))
+
+    panel_lines = []
+    full_heights = []
+    for p in self.panels:
+      content = p["content"]
+      if isinstance(content, str):
+        content = LazyMarkdown(content)
+      lines = temp_console.render_lines(content, new_lines=True)
+      panel_lines.append(lines)
+      full_heights.append(len(lines) + 2) # content + borders
+
+    heights = self.allocate_heights(full_heights, max_panels_height)
+
+    rendered_panels = []
+    total_panels_height = 0
+    for i, p in enumerate(self.panels):
+      h = heights[i]
+      if h >= 3:
+        inner_height = h - 2
+        scrolled = panel_lines[i][-inner_height:]
+        rendered_panel = Panel(
+          SegmentsRenderable(scrolled),
+          title=p["title"],
+          border_style=p["border_style"],
+          height=h
+        )
+        rendered_panels.append(rendered_panel)
+        total_panels_height += h
+
+    H_target = H - 1
+    padding_height = H_target - total_panels_height - status_bar_height
+
+    if padding_height > 0:
+      yield Segment("\n" * padding_height)
+
+    for rp in rendered_panels:
+      yield from console.render(rp, options)
+
+    if self.status_bar is not None:
+      yield from console.render(self.status_bar, options)
+
+  def allocate_heights(self, full_heights, max_height):
+    n = len(full_heights)
+    if n == 0:
+      return []
+    heights = [0] * n
+    # Growing panel (last one) gets priority
+    heights[-1] = min(full_heights[-1], max_height)
+    if heights[-1] < 3 and full_heights[-1] >= 3:
+      heights[-1] = min(3, max_height)
+
+    remaining = max_height - heights[-1]
+    for i in range(n - 2, -1, -1):
+      if remaining >= 3:
+        allocated = min(full_heights[i], remaining)
+        if allocated < 3:
+          allocated = 0
+        heights[i] = allocated
+        remaining -= allocated
+      else:
+        heights[i] = 0
+    return heights
 
 
 

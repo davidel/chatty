@@ -159,7 +159,7 @@ class SessionConfig:
   api_delay: float = 2.5
 
 
-from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter
+from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
 
 
 class ChatbotSession:
@@ -819,8 +819,9 @@ class ChatbotSession:
     max_retries = 3
     for attempt in range(1, max_retries + 1):
       try:
-        with optional_live(Panel("Connecting to LLM for summary...", title="Context Compression", border_style="yellow"),
-                          console=console, enabled=not self.headless, refresh_per_second=12) as live:
+        panels = [{"title": "Context Compression", "content": "Connecting to LLM for summary...", "border_style": "yellow"}]
+        with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()),
+                           console=console, enabled=not self.headless, refresh_per_second=12) as live:
           
           # Resolve model and provider
           actual_model, extra_body = self._resolve_model_and_provider(self.model)
@@ -883,10 +884,14 @@ class ChatbotSession:
             
             if delta.content:
               if first_content_chunk:
-                live.update(Panel("", title="Context Summary", border_style="yellow"))
+                panels[0] = {"title": "Context Summary", "content": "", "border_style": "yellow"}
                 first_content_chunk = False
               content_accumulated += delta.content
-              live.update(Panel(Markdown(content_accumulated), title="Context Summary", border_style="yellow"))
+              panels[0]["content"] = content_accumulated
+              live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
+          
+          # Remove status bar before exiting Live context
+          live.update(LiveScreenLayout(panels, None))
               
         logger.info("Summary generation succeeded")
         self._log_llm_response_summary(

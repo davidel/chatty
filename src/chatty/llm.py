@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Tuple, Optional
 import openai
 from chatty.tools import execute_tool, get_available_formatters, TOOLS_SCHEMA
 from chatty.utils import count_tokens, truncate_output, sanitize_tool_output, repair_json, truncate_thinking_by_line
-from chatty.ui import optional_live, LazyMarkdown
+from chatty.ui import optional_live, LazyMarkdown, LiveScreenLayout
 from chatty.safety import active_session_var
 
 from rich.console import Console, Group
@@ -182,11 +182,11 @@ def consult_oracle(self, query: str) -> str:
   ]
   logger.info(f"Consulting oracle (model={oracle_model}) with query: {query}")
   content_accumulated = ""
-  panel = Panel("Connecting to Oracle LLM...", title="🔮 Oracle", border_style="purple")
+  panels = [{"title": "🔮 Oracle", "content": "Connecting to Oracle LLM...", "border_style": "purple"}]
   max_retries = 3
   for attempt in range(1, max_retries + 1):
     try:
-      with optional_live(Group(panel), console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
+      with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
         actual_model, extra_body = self._resolve_model_and_provider(oracle_model)
         self._throttle_request()
         kwargs = {
@@ -204,8 +204,8 @@ def consult_oracle(self, query: str) -> str:
           delta = choice.delta
           if delta.content:
             content_accumulated += delta.content
-            panel = Panel(LazyMarkdown(content_accumulated), title="🔮 Oracle", border_style="purple")
-            live.update(Group(panel))
+            panels[0]["content"] = content_accumulated
+            live.update(LiveScreenLayout(panels, None))
       self.last_api_call_time = time.time()
       if content_accumulated:
         self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
@@ -555,8 +555,8 @@ def run_llm_cycle(self):
       logger.info(f"Loop {loop_count + 1}/{max_tool_loops} (Attempt {attempt}/{max_retries}): Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
       try:
         # Live rendering console helper
-        panel = Panel("Connecting to LLM...", title="Assistant", border_style="green")
-        with optional_live(Group(panel, self.get_rich_status_bar()), 
+        panels = [{"title": "Assistant", "content": "Connecting to LLM...", "border_style": "green"}]
+        with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), 
                            console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
           self._active_live = live
           # Log request details in DEBUG mode
@@ -772,18 +772,22 @@ def run_llm_cycle(self):
             
             if delta.content or has_new_reasoning:
               first_chunk = False
-              renderables = []
+              panels = []
               if reasoning_accumulated.strip():
-                max_lines = max(3, console.height - 6)
-                disp_reasoning = truncate_thinking_by_line(reasoning_accumulated, max_lines=max_lines)
-                p_height = (max_lines + 3) if not content_accumulated else None
-                renderables.append(Panel(LazyMarkdown(disp_reasoning), title="Thinking", border_style="yellow", height=p_height))
+                panels.append({
+                  "title": "Thinking",
+                  "content": reasoning_accumulated,
+                  "border_style": "yellow"
+                })
               if content_accumulated:
-                renderables.append(Panel(LazyMarkdown(content_accumulated), title="Assistant", border_style="green"))
+                panels.append({
+                  "title": "Assistant",
+                  "content": content_accumulated,
+                  "border_style": "green"
+                })
               
-              if renderables:
-                panel = Group(*renderables)
-                live.update(Group(panel, self.get_rich_status_bar()))
+              if panels:
+                live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
                 
             # Process streaming tool calls
             if delta.tool_calls:
@@ -807,11 +811,14 @@ def run_llm_cycle(self):
                     item["function"]["arguments"] += tc.function.arguments
                       
                 # Render loading indicator
-                panel = Panel(f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))", 
-                               title="System", border_style="yellow")
-                live.update(Group(panel, self.get_rich_status_bar()))
+                panels = [{
+                  "title": "System",
+                  "content": f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))",
+                  "border_style": "yellow"
+                }]
+                live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
           # Remove status bar before exiting Live context
-          live.update(panel)
+          live.update(LiveScreenLayout(panels, None))
         
         # Reconstruct and print the final panels permanently to console
         final_panels = []
@@ -977,12 +984,12 @@ def run_llm_cycle(self):
             logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
             t_result = execute_tool(t_name, args_parsed, self)
           else:
-            exec_panel = Panel(
-              f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
-              title="🔧 Executing Tool",
-              border_style="yellow"
-            )
-            with optional_live(Group(exec_panel, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
+            panels = [{
+              "title": "🔧 Executing Tool",
+              "content": f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]",
+              "border_style": "yellow"
+            }]
+            with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
               self._active_live = live
               try:
                 logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
@@ -990,7 +997,7 @@ def run_llm_cycle(self):
               finally:
                 self._active_live = None
               # Remove status bar before exiting Live context
-              live.update(exec_panel)
+              live.update(LiveScreenLayout(panels, None))
         finally:
           active_session_var.reset(token)
           self.temp_allowed_ro_paths.clear()
