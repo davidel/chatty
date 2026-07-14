@@ -11,6 +11,7 @@ from chatty.safety import (
   count_lines
 )
 from chatty.utils import print_diff, record_command_binaries
+from chatty.backup import backup_file
 
 
 def make_file_preview(safe_p: str, highlight_ranges: List[Tuple[int, int]], context_lines: int = 5) -> str:
@@ -177,6 +178,7 @@ def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
     safe_p = get_safe_path(sandbox_dir, path, write=True)
       
     rel_path = os.path.relpath(safe_p, sandbox_dir)
+    backup_file(sandbox_dir, rel_path)
     old_content = ""
     if os.path.exists(safe_p):
       try:
@@ -375,6 +377,9 @@ def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
     if not os.path.isfile(safe_p):
       return f"Error: Path '{path}' is not a file."
       
+    rel_path = os.path.relpath(safe_p, sandbox_dir)
+    backup_file(sandbox_dir, rel_path)
+      
     try:
       patches = parse_aider_patches(patch)
     except Exception as e:
@@ -467,6 +472,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       return f"Error: Path '{path}' is not a file."
 
     rel_path = os.path.relpath(safe_p, sandbox_dir)
+    backup_file(sandbox_dir, rel_path)
     
     with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
       old_content = f.read()
@@ -640,6 +646,11 @@ def tool_move_file(sandbox_dir: str, src: str, dest: str) -> str:
     if not os.path.exists(safe_src):
       return f"Error: Source path '{src}' does not exist."
       
+    if os.path.exists(safe_dest) and os.path.isfile(safe_dest):
+      backup_file(sandbox_dir, os.path.relpath(safe_dest, sandbox_dir))
+    if os.path.isfile(safe_src):
+      backup_file(sandbox_dir, os.path.relpath(safe_src, sandbox_dir))
+      
     dest_parent = os.path.dirname(safe_dest)
     if not os.path.exists(dest_parent):
       os.makedirs(dest_parent, exist_ok=True)
@@ -661,6 +672,9 @@ def tool_copy_file(sandbox_dir: str, src: str, dest: str) -> str:
     
     if not os.path.exists(safe_src):
       return f"Error: Source path '{src}' does not exist."
+      
+    if os.path.exists(safe_dest) and os.path.isfile(safe_dest):
+      backup_file(sandbox_dir, os.path.relpath(safe_dest, sandbox_dir))
       
     dest_parent = os.path.dirname(safe_dest)
     if not os.path.exists(dest_parent):
@@ -690,6 +704,7 @@ def tool_delete_file(sandbox_dir: str, path: str) -> str:
       return f"Error: Path '{path}' is a directory. Use 'delete_directory' instead."
       
     rel_path = os.path.relpath(safe_path, sandbox_dir)
+    backup_file(sandbox_dir, rel_path)
     os.remove(safe_path)
     return f"Successfully deleted file '{rel_path}'."
   except Exception as e:
@@ -718,6 +733,11 @@ def tool_delete_directory(sandbox_dir: str, path: str, recursive: bool = False) 
         pass
         
     if recursive:
+      for root, _, files in os.walk(safe_path):
+        for file in files:
+          abs_f = os.path.join(root, file)
+          rel_f = os.path.relpath(abs_f, sandbox_dir)
+          backup_file(sandbox_dir, rel_f)
       shutil.rmtree(safe_path)
     else:
       os.rmdir(safe_path)

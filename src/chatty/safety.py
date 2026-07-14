@@ -44,6 +44,7 @@ def load_ignore_patterns(sandbox_dir: str) -> List[str]:
   """Loads default ignore patterns and appends patterns from .gitignore if present."""
   patterns = [
     ".git",
+    ".chatty",
     "__pycache__",
     "node_modules",
     ".venv",

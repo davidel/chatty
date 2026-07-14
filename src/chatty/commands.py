@@ -494,6 +494,78 @@ def cmd_config(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_backups(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  from chatty.backup import get_backups_dir, list_backups
+  
+  backups_dir = get_backups_dir(session.sandbox)
+  if not os.path.exists(backups_dir):
+    console.print("[bold yellow]No backups directory found. No backups have been created yet.[/bold yellow]")
+    return True
+    
+  if not arg:
+    console.print("[bold cyan]Files with available backups:[/bold cyan]")
+    found_any = False
+    for root, dirs, files in os.walk(backups_dir):
+      bak_files = [f for f in files if f.endswith(".bak")]
+      if bak_files:
+        rel_file_path = os.path.relpath(root, backups_dir)
+        console.print(f"  - [green]{rel_file_path}[/green] ({len(bak_files)} backup(s) available)")
+        found_any = True
+    if not found_any:
+      console.print("  No backups found.")
+    console.print("\nUse [cyan]/backups <file_path>[/cyan] to view details of a specific file's backups.")
+    return True
+    
+  backups = list_backups(session.sandbox, arg)
+  if not backups:
+    console.print(f"[bold yellow]No backups found for file '{arg}'.[/bold yellow]")
+    return True
+    
+  console.print(f"[bold cyan]Backups for file '{arg}' (newest first):[/bold cyan]")
+  for idx, (ts, time_str) in enumerate(backups, 1):
+    console.print(f"  {idx}. [yellow]{time_str}[/yellow] (timestamp: {ts})")
+  console.print(f"\nUse [cyan]/restore {arg} [index_or_timestamp][/cyan] to restore a specific backup.")
+  return True
+
+
+def cmd_restore(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    console.print("[bold red]Error: Usage: /restore <file_path> [index_or_timestamp][/bold red]")
+    return True
+    
+  parts = arg.split(maxsplit=1)
+  file_path = parts[0]
+  target = parts[1].strip() if len(parts) > 1 else None
+  
+  from chatty.backup import list_backups, restore_backup
+  
+  backups = list_backups(session.sandbox, file_path)
+  if not backups:
+    console.print(f"[bold red]Error: No backups found for '{file_path}'.[/bold red]")
+    return True
+    
+  timestamp = None
+  if target:
+    try:
+      idx = int(target)
+      if 1 <= idx <= len(backups):
+        timestamp = backups[idx - 1][0]
+      else:
+        timestamp = idx
+    except ValueError:
+      console.print(f"[bold red]Error: Invalid index or timestamp '{target}'.[/bold red]")
+      return True
+      
+  res = restore_backup(session.sandbox, file_path, timestamp)
+  if res.startswith("Error"):
+    console.print(f"[bold red]{res}[/bold red]")
+  else:
+    console.print(f"[bold green]{res}[/bold green]")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -524,5 +596,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/whitelist": cmd_whitelist,
   "/permissions": cmd_whitelist,
   "/config": cmd_config,
+  "/backups": cmd_backups,
+  "/restore": cmd_restore,
 }
 
