@@ -15,7 +15,9 @@ from chatty.tools.file_ops import (
   tool_delete_file,
   tool_delete_directory,
   tool_make_directory,
-  tool_hex_dump
+  tool_hex_dump,
+  tool_list_file_backups,
+  tool_read_file_backup
 )
 from chatty.tools.search_ops import (
   tool_locate_files,

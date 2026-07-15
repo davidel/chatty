@@ -538,6 +538,56 @@ TOOLS_SCHEMA = [
         "required": ["query"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_file_backups",
+      "description": "List all available timestamped backups for a given file path. Backups are created automatically on every file write/patch/delete operation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The file path relative to the sandbox root."
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_file_backup",
+      "description": "Read the contents of a specific timestamped file backup. This tool is read-only and does not modify any files.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The file path relative to the sandbox root."
+          },
+          "timestamp": {
+            "type": "integer",
+            "description": "The integer timestamp of the backup to read (retrieve this via list_file_backups)."
+          },
+          "start_line": {
+            "type": "integer",
+            "description": "Optional starting line number to read (1-indexed, inclusive)."
+          },
+          "end_line": {
+            "type": "integer",
+            "description": "Optional ending line number to read (1-indexed, inclusive)."
+          },
+          "line_numbers": {
+            "type": "boolean",
+            "description": "Set to true to include 1-indexed line numbers at the beginning of each line (formatted as 'line_num: line_content'). Defaults to false."
+          }
+        },
+        "required": ["path", "timestamp"]
+      }
+    }
   }
 ]
 

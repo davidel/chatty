@@ -11,7 +11,9 @@ from chatty.tools import (
   tool_write_file,
   tool_patch_file,
   tool_delete_file,
-  tool_delete_directory
+  tool_delete_directory,
+  tool_list_file_backups,
+  tool_read_file_backup
 )
 from chatty.backup import list_backups, restore_backup
 
@@ -84,6 +86,31 @@ v3
     with open(gitignore_path, "r", encoding="utf-8") as f:
       content = f.read()
     self.assertIn(".chatty/", content)
+
+  def test_tool_list_and_read_backups(self):
+    # 1. Write initial file (v1)
+    tool_write_file(self.sandbox_dir, "backup_test.txt", "v1")
+    
+    # 2. Write v2 (should backup v1)
+    tool_write_file(self.sandbox_dir, "backup_test.txt", "v2")
+    
+    # 3. List backups
+    list_res = tool_list_file_backups(self.sandbox_dir, "backup_test.txt")
+    self.assertIn("Backups for file 'backup_test.txt'", list_res)
+    self.assertIn("Timestamp:", list_res)
+    
+    # Get the timestamp from the backups list
+    backups = list_backups(self.sandbox_dir, "backup_test.txt")
+    self.assertEqual(len(backups), 1)
+    ts = backups[0][0]
+    
+    # 4. Read the backup content
+    read_res = tool_read_file_backup(self.sandbox_dir, "backup_test.txt", ts)
+    self.assertEqual(read_res, "v1")
+    
+    # 5. Read with line numbers
+    read_res_ln = tool_read_file_backup(self.sandbox_dir, "backup_test.txt", ts, line_numbers=True)
+    self.assertEqual(read_res_ln.strip(), "1: v1")
 
 
 if __name__ == "__main__":

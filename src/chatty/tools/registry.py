@@ -13,7 +13,9 @@ from chatty.tools.file_ops import (
   tool_write_file,
   tool_patch_file,
   tool_format_file,
-  tool_get_file_info
+  tool_get_file_info,
+  tool_list_file_backups,
+  tool_read_file_backup
 )
 from chatty.tools.search_ops import tool_search_grep, tool_locate_files
 from chatty.tools.web_ops import tool_fetch_url, tool_search_web
@@ -247,6 +249,39 @@ def handle_get_file_info(arguments: Dict[str, Any], session: Any) -> str:
   return tool_get_file_info(session.sandbox, path)
 
 
+def handle_list_file_backups(arguments: Dict[str, Any], session: Any) -> str:
+  path = arguments.get("path")
+  if not path:
+    return "Error: Missing parameter 'path'."
+  return tool_list_file_backups(session.sandbox, path)
+
+
+def handle_read_file_backup(arguments: Dict[str, Any], session: Any) -> str:
+  path = arguments.get("path")
+  if not path:
+    return "Error: Missing parameter 'path'."
+  try:
+    timestamp = int(arguments.get("timestamp"))
+  except (ValueError, TypeError):
+    return "Error: timestamp must be a valid integer."
+  try:
+    start_line = int(arguments.get("start_line")) if arguments.get("start_line") is not None else None
+    end_line = int(arguments.get("end_line")) if arguments.get("end_line") is not None else None
+  except (ValueError, TypeError):
+    return "Error: start_line and end_line must be valid integers."
+  line_numbers = bool(arguments.get("line_numbers")) if arguments.get("line_numbers") is not None else False
+  return tool_read_file_backup(
+    session.sandbox,
+    path,
+    timestamp,
+    start_line=start_line,
+    end_line=end_line,
+    max_chars=session.max_read_chars,
+    line_numbers=line_numbers
+  )
+
+
+
 def handle_fetch_url(arguments: Dict[str, Any], session: Any) -> str:
   url = arguments.get("url")
   if not url:
@@ -322,6 +357,8 @@ TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any], Any], str]] = {
   "peek_task_output": handle_peek_task_output,
   "locate_files": handle_locate_files,
   "get_file_info": handle_get_file_info,
+  "list_file_backups": handle_list_file_backups,
+  "read_file_backup": handle_read_file_backup,
   "fetch_url": handle_fetch_url,
   "sleep": handle_sleep,
   "ask_question": handle_ask_question,

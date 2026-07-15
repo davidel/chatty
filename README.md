@@ -86,6 +86,8 @@ python3 -m chatty [options]
 | `--log-file` | *None* | string | `chatty.log` | File path where execution statements are logged. Set to `""` to disable. |
 | `--log-level` | *None* | string | `info` | Logging verbosity (`debug`, `info`, `warning`, `error`). |
 | `--headless` | *None* | flag | `False` | Run the chatbot in headless mode (no console printing or terminal interactive loop). |
+| `--max-thinking-chars` | *None* | integer | `12000` | Maximum internal thinking characters before prompting the user. |
+| `--max-thinking-leeway-chars` | *None* | integer | `2000` | Leeway in characters beyond the maximum before hard-aborting or prompting. |
 
 ---
 
@@ -132,6 +134,8 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/history` | None | Renders message records, estimated token counts, roles, and tool calls. |
 | `/undo` | `[count]` | Reverts the last conversation turn(s), removing assistant responses, tool outputs, and the user prompt. |
 | `/pop` | `<index>` | Truncates the conversation history by deleting all messages from the specified 1-based index onwards. |
+| `/backups` | `<file_path>` | Lists all available timestamped backups for a given file. |
+| `/restore` | `<file_path> [index_or_timestamp]` | Restores a file to a specific backup version (defaults to the latest). |
 | `/tools` | None | Lists available sandboxed tools and their schema definitions. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
 | `/compress` | `[N]` | Directs the model to summarize current conversational state using a structured format, resets older history, and keeps N (default 4) recent messages intact. |
@@ -156,6 +160,9 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`make_directory`**: Recursively builds directory trees.
 - **`get_file_info`**: Retrieves file system metadata (modification dates, sizes, type, and line counts for text documents).
 - **`hex_dump`**: Performs a hex dump or parses slices of binary files into integers of various widths (8/16/32/64-bit), endianness, and signedness.
+- **`list_file_backups`**: Lists all available timestamped backups for a file path.
+- **`read_file_backup`**: Reads the contents of a specific timestamped file backup (with optional range read and line numbering).
+
 
 ### Code Search & Diagnostics
 - **`search_grep`**: Performs recursive regular expression string matching on files. Can report line numbers (`line_numbers: true`) to aid editing.

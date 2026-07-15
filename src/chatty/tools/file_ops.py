@@ -881,3 +881,78 @@ def tool_hex_dump(
   except Exception as e:
     return f"Error performing hex dump: {str(e)}"
 
+
+def tool_list_file_backups(sandbox_dir: str, path: str) -> str:
+  """Lists all backups for the given path."""
+  try:
+    safe_p = get_safe_path(sandbox_dir, path)
+    rel_path = os.path.relpath(safe_p, sandbox_dir)
+    
+    from chatty.backup import list_backups
+    backups = list_backups(sandbox_dir, rel_path)
+    if not backups:
+      return f"No backups found for file '{rel_path}'."
+      
+    lines = [f"Backups for file '{rel_path}' (newest first):"]
+    for idx, (ts, time_str) in enumerate(backups, 1):
+      lines.append(f"  {idx}. Timestamp: {ts} | Time: {time_str}")
+    return "\n".join(lines)
+  except Exception as e:
+    return f"Error listing backups: {str(e)}"
+
+
+def tool_read_file_backup(
+    sandbox_dir: str,
+    path: str,
+    timestamp: int,
+    start_line: int = None,
+    end_line: int = None,
+    max_chars: int = 40000,
+    line_numbers: bool = False
+) -> str:
+  """Reads the contents of a specific backup file for path and timestamp."""
+  try:
+    safe_p = get_safe_path(sandbox_dir, path)
+    rel_path = os.path.relpath(safe_p, sandbox_dir)
+    
+    from chatty.backup import get_backups_dir
+    backup_file_path = os.path.join(get_backups_dir(sandbox_dir), rel_path, f"{timestamp}.bak")
+    
+    if not os.path.exists(backup_file_path):
+      return f"Error: Backup with timestamp '{timestamp}' for '{rel_path}' does not exist."
+      
+    if not os.path.isfile(backup_file_path):
+      return f"Error: Backup path is not a file."
+      
+    with open(backup_file_path, 'r', encoding='utf-8', errors='replace') as f:
+      if start_line is None and end_line is None and not line_numbers:
+        content = f.read()
+        if len(content) > max_chars:
+          return content[:max_chars] + f"\n\n[WARNING: Backup file is too large ({len(content)} characters) and has been truncated. Use 'start_line' and 'end_line' parameters to read specific sections.]"
+        return content
+        
+      lines = f.readlines()
+      total_lines = len(lines)
+      
+      s = 1 if start_line is None else start_line
+      e = total_lines if end_line is None else end_line
+      
+      if s < 1 or s > total_lines:
+        return f"Error: start_line {start_line} is out of range. The backup file has {total_lines} lines."
+      if e < s or e > total_lines:
+        return f"Error: end_line {end_line} is invalid (must be between start_line {s} and total backup file lines {total_lines})."
+        
+      selected_lines = lines[s-1:e]
+      if line_numbers:
+        content = "".join(f"{s + idx}: {line}" for idx, line in enumerate(selected_lines))
+      else:
+        content = "".join(selected_lines)
+        
+      if len(content) > max_chars:
+        content = content[:max_chars] + f"\n\n[WARNING: Backup file section is too large and has been truncated.]"
+      return content
+      
+  except Exception as e:
+    return f"Error reading backup file: {str(e)}"
+
+
