@@ -47,6 +47,30 @@ class TestToolsModularity(unittest.TestCase):
     sleep_res = tool_sleep(0.01)
     self.assertIn("Successfully slept for 0.01 seconds", sleep_res)
 
+  def test_patch_file_with_search_replace(self):
+    class MockSession:
+      def __init__(self, sandbox):
+        self.sandbox = sandbox
+    session = MockSession(self.sandbox_dir)
+    
+    test_file = "test_sr.txt"
+    with open(os.path.join(self.sandbox_dir, test_file), "w") as f:
+      f.write("Line 1\nLine 2\nLine 3\n")
+      
+    res = execute_tool(
+      "patch_file",
+      {
+        "path": test_file,
+        "search": "Line 2",
+        "replace": "Line 2 modified"
+      },
+      session
+    )
+    self.assertIn("Successfully updated file", res)
+    with open(os.path.join(self.sandbox_dir, test_file), "r") as f:
+      content = f.read()
+    self.assertEqual(content, "Line 1\nLine 2 modified\nLine 3\n")
+
 
 if __name__ == "__main__":
   unittest.main()

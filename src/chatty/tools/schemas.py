@@ -128,7 +128,7 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "patch_file",
-      "description": "Replace one or more unique blocks of text/code inside a file using Aider-style SEARCH/REPLACE blocks. Highly robust to whitespace and indentation differences.",
+      "description": "Apply search-and-replace edits to a file. You can either use the single 'patch' parameter (for one or more Aider-style SEARCH/REPLACE blocks) or use the direct 'search' and 'replace' parameters for a single edit. This tool is robust to minor whitespace/indentation differences.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -138,10 +138,18 @@ TOOLS_SCHEMA = [
           },
           "patch": {
             "type": "string",
-            "description": "One or more edit blocks in the format:\n<<<<<<< SEARCH\ncode to replace\n=======\nnew code\n>>>>>>> REPLACE"
+            "description": "One or more SEARCH/REPLACE blocks. Each block must use the exact format:\n<<<<<<< SEARCH\n[exact lines of code to replace]\n=======\n[new code replacement]\n>>>>>>> REPLACE\n\nCRITICAL RULES:\n1. The SEARCH block must match a unique consecutive sequence of lines in the target file (including spacing, comments, and empty lines) exactly.\n2. The SEARCH block must contain enough context lines to uniquely identify the location. If not unique, the patch will fail.\n3. Do not include line numbers or file paths inside the block boundaries.\n4. Chaining multiple SEARCH/REPLACE blocks sequentially in this single parameter is supported for editing multiple locations in the file."
+          },
+          "search": {
+            "type": "string",
+            "description": "The exact sequence of consecutive lines in the file to search for (including spacing/comments). Use this along with 'replace' as an alternative to 'patch' for a single edit."
+          },
+          "replace": {
+            "type": "string",
+            "description": "The new code/text to replace the search block with. Use this along with 'search'."
           }
         },
-        "required": ["path", "patch"]
+        "required": ["path"]
       }
     }
   },
