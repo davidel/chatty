@@ -32,9 +32,13 @@ def ensure_gitignore_ignores_chatty(sandbox_dir: str) -> None:
 
 def backup_file(sandbox_dir: str, rel_path: str) -> None:
   """Creates a timestamped backup of the file under .chatty/backups/path/to/file/timestamp.bak."""
-  from chatty.safety import get_safe_path
+  from chatty.safety import get_safe_path, load_ignore_patterns, is_path_ignored
   
   try:
+    ignore_patterns = load_ignore_patterns(sandbox_dir)
+    if is_path_ignored(rel_path, ignore_patterns):
+      return
+      
     abs_path = get_safe_path(sandbox_dir, rel_path)
     if not os.path.exists(abs_path) or not os.path.isfile(abs_path):
       return

@@ -75,14 +75,26 @@ def load_ignore_patterns(sandbox_dir: str) -> List[str]:
 def is_path_ignored(rel_path: str, patterns: List[str]) -> bool:
   """Checks if a relative path matches any of the ignore patterns."""
   import fnmatch
-  segments = rel_path.split(os.sep)
+  rel_path_norm = rel_path.replace(os.sep, '/')
+  segments = rel_path_norm.split('/')
+  prefixes = []
+  current = []
+  for segment in segments:
+    current.append(segment)
+    prefixes.append('/'.join(current))
   for pattern in patterns:
+    pattern_norm = pattern.replace(os.sep, '/')
     for segment in segments:
-      if fnmatch.fnmatch(segment, pattern):
+      if fnmatch.fnmatch(segment, pattern_norm):
         return True
-    if fnmatch.fnmatch(rel_path, pattern):
-      return True
+    for prefix in prefixes:
+      if fnmatch.fnmatch(prefix, pattern_norm):
+        return True
+      if prefix.startswith(pattern_norm + '/'):
+        return True
   return False
+
+
 
 
 def is_text_file(file_path: str) -> bool:

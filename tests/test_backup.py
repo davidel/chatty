@@ -87,6 +87,29 @@ v3
       content = f.read()
     self.assertIn(".chatty/", content)
 
+  def test_backup_respects_gitignore(self):
+    gitignore_path = os.path.join(self.sandbox_dir, ".gitignore")
+    with open(gitignore_path, "w", encoding="utf-8") as f:
+      f.write("ignored_file.txt\nignored_dir/\nllvm/build/\n")
+    tool_write_file(self.sandbox_dir, "ignored_file.txt", "v1")
+    tool_write_file(self.sandbox_dir, "ignored_file.txt", "v2")
+    backups = list_backups(self.sandbox_dir, "ignored_file.txt")
+    self.assertEqual(len(backups), 0)
+    os.makedirs(os.path.join(self.sandbox_dir, "ignored_dir"), exist_ok=True)
+    tool_write_file(self.sandbox_dir, "ignored_dir/file.txt", "v1")
+    tool_write_file(self.sandbox_dir, "ignored_dir/file.txt", "v2")
+    backups_dir = list_backups(self.sandbox_dir, "ignored_dir/file.txt")
+    self.assertEqual(len(backups_dir), 0)
+    os.makedirs(os.path.join(self.sandbox_dir, "llvm", "build"), exist_ok=True)
+    tool_write_file(self.sandbox_dir, "llvm/build/some_file.o", "v1")
+    tool_write_file(self.sandbox_dir, "llvm/build/some_file.o", "v2")
+    backups_llvm = list_backups(self.sandbox_dir, "llvm/build/some_file.o")
+    self.assertEqual(len(backups_llvm), 0)
+    tool_write_file(self.sandbox_dir, "normal_file.txt", "v1")
+    tool_write_file(self.sandbox_dir, "normal_file.txt", "v2")
+    backups_normal = list_backups(self.sandbox_dir, "normal_file.txt")
+    self.assertEqual(len(backups_normal), 1)
+
   def test_tool_list_and_read_backups(self):
     # 1. Write initial file (v1)
     tool_write_file(self.sandbox_dir, "backup_test.txt", "v1")
