@@ -53,6 +53,19 @@ class TestSandboxOps(unittest.TestCase):
     res = tool_make_directory(self.sandbox_dir, "../outside_dir")
     self.assertIn("Access Denied", res)
 
+  def test_make_directory_multi(self):
+    # Test multiple creation
+    res = tool_make_directory(self.sandbox_dir, ["dir_a", "dir_b/dir_c"])
+    self.assertIn("Successfully created directory 'dir_a'", res)
+    self.assertIn("Successfully created directory 'dir_b/dir_c'", res)
+    self.assertTrue(os.path.isdir(os.path.join(self.sandbox_dir, "dir_a")))
+    self.assertTrue(os.path.isdir(os.path.join(self.sandbox_dir, "dir_b/dir_c")))
+
+    # Test multi creation with mixed success/fail
+    res = tool_make_directory(self.sandbox_dir, ["dir_a", "../outside_dir2"])
+    self.assertIn("Directory 'dir_a' already exists.", res)
+    self.assertIn("Access Denied", res)
+
   def test_copy_file(self):
     # Create source file
     src_file = os.path.join(self.sandbox_dir, "src.txt")
@@ -153,6 +166,27 @@ class TestSandboxOps(unittest.TestCase):
     res = tool_delete_file(self.sandbox_dir, "../outside.txt")
     self.assertIn("Access Denied", res)
 
+  def test_delete_file_multi(self):
+    # Create multiple files
+    f1 = os.path.join(self.sandbox_dir, "f1.txt")
+    f2 = os.path.join(self.sandbox_dir, "f2.txt")
+    with open(f1, "w") as f:
+      f.write("1")
+    with open(f2, "w") as f:
+      f.write("2")
+
+    # Delete multiple files
+    res = tool_delete_file(self.sandbox_dir, ["f1.txt", "f2.txt"])
+    self.assertIn("Successfully deleted file 'f1.txt'", res)
+    self.assertIn("Successfully deleted file 'f2.txt'", res)
+    self.assertFalse(os.path.exists(f1))
+    self.assertFalse(os.path.exists(f2))
+
+    # Test error propagation in list
+    res = tool_delete_file(self.sandbox_dir, ["f1.txt", "../outside.txt"])
+    self.assertIn("Error: Path 'f1.txt' does not exist.", res)
+    self.assertIn("Access Denied", res)
+
   def test_delete_directory(self):
     # Create empty directory to delete
     dir_path = os.path.join(self.sandbox_dir, "empty_dir")
@@ -191,6 +225,25 @@ class TestSandboxOps(unittest.TestCase):
 
     # Test sandbox traversal
     res = tool_delete_directory(self.sandbox_dir, "../outside_dir")
+    self.assertIn("Access Denied", res)
+
+  def test_delete_directory_multi(self):
+    # Create empty directories
+    dir_x = os.path.join(self.sandbox_dir, "dir_x")
+    dir_y = os.path.join(self.sandbox_dir, "dir_y")
+    os.makedirs(dir_x)
+    os.makedirs(dir_y)
+
+    # Delete directories
+    res = tool_delete_directory(self.sandbox_dir, ["dir_x", "dir_y"])
+    self.assertIn("Successfully deleted directory 'dir_x'", res)
+    self.assertIn("Successfully deleted directory 'dir_y'", res)
+    self.assertFalse(os.path.exists(dir_x))
+    self.assertFalse(os.path.exists(dir_y))
+
+    # Test error propagation in list
+    res = tool_delete_directory(self.sandbox_dir, ["dir_x", "../outside_dir"])
+    self.assertIn("Error: Path 'dir_x' does not exist.", res)
     self.assertIn("Access Denied", res)
 
   def test_get_file_info(self):

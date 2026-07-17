@@ -48,13 +48,25 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "delete_file",
-      "description": "Delete a file inside the sandboxed file system. Fails if the path is a directory.",
+      "description": "Delete a file or multiple files inside the sandboxed file system. Fails if a path is a directory.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
-            "type": "string",
-            "description": "The path to the file to delete relative to the sandbox root."
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "The path to the file to delete relative to the sandbox root."
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "A list of paths to files to delete relative to the sandbox root."
+              }
+            ],
+            "description": "The path (string) or list of paths (array of strings) relative to the sandbox root."
           }
         },
         "required": ["path"]
@@ -65,17 +77,29 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "delete_directory",
-      "description": "Delete a directory inside the sandboxed file system.",
+      "description": "Delete a directory or multiple directories inside the sandboxed file system.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
-            "type": "string",
-            "description": "The path to the directory to delete relative to the sandbox root."
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "The path to the directory to delete relative to the sandbox root."
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "A list of paths to directories to delete relative to the sandbox root."
+              }
+            ],
+            "description": "The path (string) or list of paths (array of strings) relative to the sandbox root."
           },
           "recursive": {
             "type": "boolean",
-            "description": "If true, deletes the directory and all of its contents recursively. If false, fails if the directory is not empty. Defaults to false."
+            "description": "If true, deletes the directory (or directories) and all of its contents recursively. If false, fails if any directory is not empty. Defaults to false."
           }
         },
         "required": ["path"]
@@ -86,13 +110,25 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "make_directory",
-      "description": "Create a new directory (and any parent directories recursively) inside the sandboxed file system.",
+      "description": "Create a new directory or multiple directories (and any parent directories recursively) inside the sandboxed file system.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
-            "type": "string",
-            "description": "The directory path to create relative to the sandbox root."
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "The directory path to create relative to the sandbox root."
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "A list of directory paths to create relative to the sandbox root."
+              }
+            ],
+            "description": "The path (string) or list of paths (array of strings) relative to the sandbox root."
           }
         },
         "required": ["path"]

@@ -3,7 +3,7 @@ import time
 import shutil
 import json
 import subprocess
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Union
 
 from chatty.safety import (
   get_safe_path,
@@ -691,9 +691,19 @@ def tool_copy_file(sandbox_dir: str, src: str, dest: str) -> str:
   except Exception as e:
     return f"Error copying file/directory: {str(e)}"
 
+def tool_delete_file(sandbox_dir: str, path: Union[str, List[str]]) -> str:
+  """Delete a file or multiple files inside the sandbox. Fails if a path is a directory."""
+  if isinstance(path, list):
+    if not path:
+      return "Error: No paths provided."
+    results = []
+    for p in path:
+      if not isinstance(p, str):
+        results.append(f"Error: Invalid path type: {type(p).__name__}")
+        continue
+      results.append(tool_delete_file(sandbox_dir, p))
+    return "\n".join(results)
 
-def tool_delete_file(sandbox_dir: str, path: str) -> str:
-  """Delete a file inside the sandbox. Fails if the path is a directory."""
   try:
     safe_path = get_safe_path(sandbox_dir, path, write=True)
     
@@ -711,8 +721,19 @@ def tool_delete_file(sandbox_dir: str, path: str) -> str:
     return f"Error deleting file: {str(e)}"
 
 
-def tool_delete_directory(sandbox_dir: str, path: str, recursive: bool = False) -> str:
-  """Delete a directory inside the sandbox."""
+def tool_delete_directory(sandbox_dir: str, path: Union[str, List[str]], recursive: bool = False) -> str:
+  """Delete a directory or multiple directories inside the sandbox."""
+  if isinstance(path, list):
+    if not path:
+      return "Error: No paths provided."
+    results = []
+    for p in path:
+      if not isinstance(p, str):
+        results.append(f"Error: Invalid path type: {type(p).__name__}")
+        continue
+      results.append(tool_delete_directory(sandbox_dir, p, recursive=recursive))
+    return "\n".join(results)
+
   try:
     safe_path = get_safe_path(sandbox_dir, path, write=True)
     
@@ -746,8 +767,19 @@ def tool_delete_directory(sandbox_dir: str, path: str, recursive: bool = False) 
     return f"Error deleting directory: {str(e)}"
 
 
-def tool_make_directory(sandbox_dir: str, path: str) -> str:
-  """Create a new directory (and any parent directories) inside the sandbox."""
+def tool_make_directory(sandbox_dir: str, path: Union[str, List[str]]) -> str:
+  """Create a new directory or multiple directories (and any parent directories) inside the sandbox."""
+  if isinstance(path, list):
+    if not path:
+      return "Error: No paths provided."
+    results = []
+    for p in path:
+      if not isinstance(p, str):
+        results.append(f"Error: Invalid path type: {type(p).__name__}")
+        continue
+      results.append(tool_make_directory(sandbox_dir, p))
+    return "\n".join(results)
+
   try:
     safe_path = get_safe_path(sandbox_dir, path, write=True)
     
