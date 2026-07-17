@@ -29,7 +29,7 @@ def tool_locate_files(sandbox_dir: str, pattern: str, path: str = ".") -> str:
         try:
           safe_dir = get_safe_path(sandbox_dir, dir_path)
           rel_dir = os.path.relpath(safe_dir, sandbox_dir)
-          if is_path_ignored(rel_dir, ignore_patterns):
+          if is_path_ignored(rel_dir, ignore_patterns, is_dir=True):
             dirs.remove(d)
         except PermissionError:
           dirs.remove(d)
@@ -83,7 +83,7 @@ def tool_search_grep(sandbox_dir: str, pattern: str, path: str = ".", max_result
           try:
             safe_dir = get_safe_path(sandbox_dir, dir_path)
             rel_dir = os.path.relpath(safe_dir, sandbox_dir)
-            if is_path_ignored(rel_dir, ignore_patterns):
+            if is_path_ignored(rel_dir, ignore_patterns, is_dir=True):
               dirs.remove(d)
           except PermissionError:
             dirs.remove(d)

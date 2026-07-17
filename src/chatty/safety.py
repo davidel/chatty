@@ -40,6 +40,113 @@ def get_safe_path(sandbox_dir: str, target_path: str, write: bool = False) -> st
 
 
 
+import functools
+from typing import Tuple
+
+
+def gitignore_to_regex(pattern: str) -> Optional[Tuple[bool, bool, str]]:
+  """
+  Converts a gitignore pattern to (negate, only_dir, regex_str).
+  Returns None if the pattern is a comment or empty.
+  """
+  pattern = pattern.strip()
+  if not pattern or pattern.startswith('#'):
+    return None
+
+  negate = False
+  if pattern.startswith('!'):
+    negate = True
+    pattern = pattern[1:]
+
+  if not pattern:
+    return None
+
+  only_dir = False
+  if pattern.endswith('/'):
+    only_dir = True
+    pattern = pattern[:-1]
+
+  if not pattern:
+    return None
+
+  anchored = False
+  if pattern.startswith('/'):
+    anchored = True
+    pattern = pattern[1:]
+  elif '/' in pattern:
+    anchored = True
+
+  regex_parts = []
+  i = 0
+  n = len(pattern)
+
+  if pattern.startswith('**/'):
+    anchored = False
+    pattern = pattern[3:]
+    n = len(pattern)
+
+  while i < n:
+    char = pattern[i]
+    if char == '*':
+      if i + 1 < n and pattern[i+1] == '*':
+        if i + 2 < n and pattern[i+2] == '/':
+          regex_parts.append(r'(?:[^/]*/)*')
+          i += 3
+        else:
+          regex_parts.append(r'.*')
+          i += 2
+      else:
+        regex_parts.append(r'[^/]*')
+        i += 1
+    elif char == '?':
+      regex_parts.append(r'[^/]')
+      i += 1
+    elif char == '[':
+      j = i + 1
+      if j < n and pattern[j] == '!':
+        j += 1
+      while j < n and pattern[j] != ']':
+        j += 1
+      if j >= n:
+        regex_parts.append(re.escape('['))
+        i += 1
+      else:
+        expr = pattern[i+1:j]
+        if expr.startswith('!'):
+          expr = '^' + expr[1:]
+        regex_parts.append('[' + expr + ']')
+        i = j + 1
+    elif char == '/':
+      regex_parts.append(r'/')
+      i += 1
+    else:
+      regex_parts.append(re.escape(char))
+      i += 1
+
+  regex_str = ''.join(regex_parts)
+
+  if anchored:
+    base_regex = '^' + regex_str
+  else:
+    base_regex = '^(?:.*/)?' + regex_str
+
+  final_regex = base_regex + '(?:/.*)?$'
+
+  return negate, only_dir, final_regex
+
+
+@functools.lru_cache(maxsize=1024)
+def _compile_gitignore_pattern(pattern: str) -> Optional[Tuple[bool, bool, Any]]:
+  res = gitignore_to_regex(pattern)
+  if res is None:
+    return None
+  negate, only_dir, regex_str = res
+  try:
+    return negate, only_dir, re.compile(regex_str)
+  except Exception:
+    return None
+
+
 def load_ignore_patterns(sandbox_dir: str) -> List[str]:
   """Loads default ignore patterns and appends patterns from .gitignore if present."""
   patterns = [
@@ -64,34 +171,41 @@ def load_ignore_patterns(sandbox_dir: str) -> List[str]:
         for line in f:
           line = line.strip()
           if line and not line.startswith('#'):
-            if line.endswith('/'):
-              line = line[:-1]
             patterns.append(line)
     except Exception:
       pass
   return list(set(patterns))
 
 
-def is_path_ignored(rel_path: str, patterns: List[str]) -> bool:
+def is_path_ignored(rel_path: str, patterns: List[str], is_dir: bool = False) -> bool:
   """Checks if a relative path matches any of the ignore patterns."""
-  import fnmatch
-  rel_path_norm = rel_path.replace(os.sep, '/')
-  segments = rel_path_norm.split('/')
+  rel_path_norm = rel_path.replace(os.sep, '/').strip('/')
+  if not rel_path_norm or rel_path_norm == '.':
+    return False
+
+  parts = rel_path_norm.split('/')
   prefixes = []
-  current = []
-  for segment in segments:
-    current.append(segment)
-    prefixes.append('/'.join(current))
+  for i in range(len(parts)):
+    prefix = '/'.join(parts[:i+1])
+    is_prefix_dir = True if i < len(parts) - 1 else is_dir
+    prefixes.append((prefix, is_prefix_dir))
+
+  compiled_rules = []
   for pattern in patterns:
-    pattern_norm = pattern.replace(os.sep, '/')
-    for segment in segments:
-      if fnmatch.fnmatch(segment, pattern_norm):
-        return True
-    for prefix in prefixes:
-      if fnmatch.fnmatch(prefix, pattern_norm):
-        return True
-      if prefix.startswith(pattern_norm + '/'):
-        return True
+    rule = _compile_gitignore_pattern(pattern)
+    if rule is not None:
+      compiled_rules.append(rule)
+
+  for prefix, is_prefix_dir in prefixes:
+    prefix_ignored = False
+    for negate, only_dir, regex in compiled_rules:
+      if only_dir and not is_prefix_dir:
+        continue
+      if regex.match(prefix):
+        prefix_ignored = not negate
+    if prefix_ignored:
+      return True
+
   return False
 
 
