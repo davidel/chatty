@@ -281,6 +281,42 @@ class ChatbotSession:
         self.system_prompt = self.config.system_prompt_override
     else:
       self.system_prompt = default_prompt
+
+    # Load and append contents from .chatty/system_prompt/ directories if they exist
+    dirs_to_check = []
+    try:
+      cur_dir = os.getcwd()
+      cur_sys_prompt_dir = os.path.join(cur_dir, ".chatty", "system_prompt")
+      if os.path.isdir(cur_sys_prompt_dir):
+        dirs_to_check.append(os.path.abspath(cur_sys_prompt_dir))
+    except Exception:
+      pass
+
+    try:
+      sandbox_sys_prompt_dir = os.path.join(self.config.sandbox, ".chatty", "system_prompt")
+      if os.path.isdir(sandbox_sys_prompt_dir):
+        abs_sandbox_sys_prompt_dir = os.path.abspath(sandbox_sys_prompt_dir)
+        if abs_sandbox_sys_prompt_dir not in dirs_to_check:
+          dirs_to_check.append(abs_sandbox_sys_prompt_dir)
+    except Exception:
+      pass
+
+    for prompt_dir in dirs_to_check:
+      try:
+        filenames = sorted(os.listdir(prompt_dir))
+        for filename in filenames:
+          file_path = os.path.join(prompt_dir, filename)
+          if os.path.isfile(file_path):
+            try:
+              with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                if content.strip():
+                  self.system_prompt += "\n\n" + content.strip()
+            except Exception as fe:
+              logger.error(f"Error reading system prompt file {file_path}: {fe}")
+      except Exception as e:
+        logger.error(f"Error listing system prompt directory {prompt_dir}: {e}")
+
     self.multiline_mode = False
     self.client = None
     self.last_api_call_time = 0.0
