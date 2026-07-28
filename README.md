@@ -115,7 +115,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | Command | Expected Arguments | Description |
 | :--- | :--- | :--- |
 | `/help` | None | Displays a formatted usage table of all slash commands. |
-| `/status` | None | Shows active session variables (provider, model, oracle, sandbox, tokens, loops, multiline, etc.). |
+| `/status` | None | Shows active session variables (provider, model, oracle, sandbox, tokens, loops, etc.). |
 | `/tool_stats` | None | Renders execution statistics (call counts, failures, and breakdowns for tools and binaries). |
 | `/provider` | `[ollama\|openrouter]` | View current provider or switch backend on the fly. Re-authenticates APIs dynamically. |
 | `/model` | `[ID\|name]` | View active model name or switch to another model by name or 1-based index/ID. |
@@ -130,7 +130,6 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/load` | `<path> [append\|replace]` | Read system instructions from a local YAML or text file, appending or replacing. |
 | `/save` / `/save_session` | `<path>` | Save the whole status of the current conversation/session to a JSON file. |
 | `/load_session` | `<path>` | Load a saved conversation/session status from a JSON file. |
-| `/multiline` | None | Toggle multiline mode. When enabled, use `Alt+Enter` or `Esc+Enter` to submit. |
 | `/history` | None | Renders message records, estimated token counts, roles, and tool calls. |
 | `/undo` | `[count]` | Reverts the last conversation turn(s), removing assistant responses, tool outputs, and the user prompt. |
 | `/pop` | `<index>` | Truncates the conversation history by deleting all messages from the specified 1-based index onwards. |

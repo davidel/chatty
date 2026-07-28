@@ -317,7 +317,7 @@ class ChatbotSession:
       except Exception as e:
         logger.error(f"Error listing system prompt directory {prompt_dir}: {e}")
 
-    self.multiline_mode = False
+    self.multiline_mode = True
     self.client = None
     self.last_api_call_time = 0.0
     

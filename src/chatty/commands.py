@@ -231,13 +231,6 @@ def cmd_api_key(session: Any, arg: str) -> bool:
   return True
 
 
-def cmd_multiline(session: Any, arg: str) -> bool:
-  session.multiline_mode = not session.multiline_mode
-  status = "enabled" if session.multiline_mode else "disabled"
-  console.print(f"Multiline mode [bold cyan]{status}[/bold cyan].")
-  if session.multiline_mode:
-    console.print("[dim]Use Alt+Enter or Esc+Enter to submit message.[/dim]")
-  return True
 
 
 def cmd_system(session: Any, arg: str) -> bool:
@@ -583,7 +576,6 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/context": cmd_context,
   "/loops": cmd_loops,
   "/api_key": cmd_api_key,
-  "/multiline": cmd_multiline,
   "/system": cmd_system,
   "/load": cmd_load,
   "/save": cmd_save,

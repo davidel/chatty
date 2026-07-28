@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from chatty.session import ChatbotSession
-from chatty.commands import COMMANDS, cmd_multiline, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress
+from chatty.commands import COMMANDS, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress
 from chatty.utils import repair_json
 
 
@@ -36,13 +36,6 @@ class TestCommandsRegistry(unittest.TestCase):
     self.assertIn("/undo", COMMANDS)
     self.assertIn("/pop", COMMANDS)
 
-  def test_cmd_multiline(self):
-    self.assertFalse(self.session.multiline_mode)
-    res = cmd_multiline(self.session, "")
-    self.assertTrue(res)
-    self.assertTrue(self.session.multiline_mode)
-    cmd_multiline(self.session, "")
-    self.assertFalse(self.session.multiline_mode)
 
   def test_cmd_provider_and_model(self):
     self.assertEqual(self.session.provider, "ollama")

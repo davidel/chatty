@@ -224,7 +224,6 @@ def show_help(session: Any):
   table.add_row("/load <path> [append|replace]", "Load system prompt guidelines from a file")
   table.add_row("/save_session <path>", "Save the entire session status to a JSON file")
   table.add_row("/load_session <path>", "Load a saved session status from a JSON file")
-  table.add_row("/multiline", "Toggle multiline prompt input (Alt+Enter to send)")
   table.add_row("/history", "View message records and sizing details")
   table.add_row("/undo [count]", "Undo the last conversation turn(s)")
   table.add_row("/pop <index>", "Truncate history from index (1-based) onwards")
@@ -250,7 +249,6 @@ def show_status(session: Any):
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
   table.add_row("Total Messages", str(len(session.messages)))
-  table.add_row("Multiline Input", "Enabled" if session.multiline_mode else "Disabled")
   session._print(table)
 
 
@@ -393,18 +391,16 @@ def start_interactive_loop(session: Any):
 
   while True:
     # Format interactive prompt dynamically
-    multiline_indicator = " [ML]" if session.multiline_mode else ""
     prompt_html = (
       f"<ansicyan><b>AI-Sandbox</b></ansicyan> "
-      f"(<ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow>)"
-      f"{multiline_indicator} &gt; "
+      f"(<ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow>) &gt; "
     )
 
     try:
       # Read user input
       user_input = prompt_session.prompt(
         HTML(prompt_html),
-        multiline=session.multiline_mode,
+        multiline=True,
         bottom_toolbar=get_bottom_toolbar
       )
 
