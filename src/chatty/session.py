@@ -318,6 +318,7 @@ class ChatbotSession:
         logger.error(f"Error listing system prompt directory {prompt_dir}: {e}")
 
     self.multiline_mode = True
+    self.explicit_skills = []
     self.client = None
     self.last_api_call_time = 0.0
     
@@ -476,17 +477,29 @@ class ChatbotSession:
   def get_active_system_prompt(self) -> str:
     """Returns system prompt integrated with dynamically activated skills."""
     if self.static_skills:
-      if not self.skills:
+      if not self.explicit_skills:
         return self.system_prompt
       active_skills = []
-      for skill_name, skill in sorted(self.skills.items()):
-        meta = skill["metadata"]
-        active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+      for skill_name in sorted(self.explicit_skills):
+        skill = self.skills.get(skill_name)
+        if skill:
+          meta = skill["metadata"]
+          active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+      if not active_skills:
+        return self.system_prompt
       skills_text = "\n\n".join(active_skills)
       return f"{self.system_prompt}\n\n## Available Skills\n{skills_text}"
 
     active_skills = []
     active_names = []
+
+    for skill_name in sorted(self.explicit_skills):
+      skill = self.skills.get(skill_name)
+      if skill:
+        meta = skill["metadata"]
+        active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+        active_names.append(meta.get("name"))
+
     last_user_msg = ""
     for msg in reversed(self.messages):
       if msg.get("role") == "user":
@@ -496,6 +509,8 @@ class ChatbotSession:
     prompt_lower = last_user_msg.lower()
     
     for skill_name, skill in self.skills.items():
+      if skill_name in self.explicit_skills:
+        continue
       meta = skill["metadata"]
       name = meta.get("name", "").lower()
       desc = meta.get("description", "").lower()
@@ -997,6 +1012,7 @@ class ChatbotSession:
       "sandbox": self.sandbox,
       "max_loops": self.max_loops,
       "system_prompt": self.system_prompt,
+      "explicit_skills": self.explicit_skills,
       "messages": self.messages,
       "tool_calls_count": self.tool_calls_count,
       "external_binaries_count": self.external_binaries_count,
@@ -1034,6 +1050,8 @@ class ChatbotSession:
       self.max_loops = session_data["max_loops"]
     if "system_prompt" in session_data:
       self.system_prompt = session_data["system_prompt"]
+    if "explicit_skills" in session_data:
+      self.explicit_skills = session_data["explicit_skills"]
     if "messages" in session_data:
       self.messages = session_data["messages"]
     if "tool_calls_count" in session_data:

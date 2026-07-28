@@ -229,6 +229,7 @@ def show_help(session: Any):
   table.add_row("/pop <index>", "Truncate history from index (1-based) onwards")
   table.add_row("/tools", "List available sandbox tools and schemas")
   table.add_row("/whitelist [add <path> [ro|rw] | remove <path> | clear]", "Manage whitelisted out-of-sandbox paths")
+  table.add_row("/skill [NAME...|clear]", "Load skill(s) on-demand or clear explicitly loaded skills")
   table.add_row("/config [key=value]", "List, view, or change configuration parameters live")
   table.add_row("/clear / /reset", "Clear conversation memory")
   table.add_row("/compress [N]", "Summarize history, clear context, reload summary, keeping N (default 4) recent messages")

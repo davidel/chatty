@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from chatty.session import ChatbotSession
-from chatty.commands import COMMANDS, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress
+from chatty.commands import COMMANDS, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress, cmd_skill
 from chatty.utils import repair_json
 
 
@@ -36,6 +36,34 @@ class TestCommandsRegistry(unittest.TestCase):
     self.assertIn("/undo", COMMANDS)
     self.assertIn("/pop", COMMANDS)
 
+  def test_cmd_skill(self):
+    self.session.skills = {
+      "greetings": {
+        "metadata": {"name": "greetings", "description": "test"},
+        "body": "greetings body"
+      },
+      "database": {
+        "metadata": {"name": "database", "description": "test db"},
+        "body": "db body"
+      }
+    }
+    self.session.explicit_skills = []
+
+    res = cmd_skill(self.session, "")
+    self.assertTrue(res)
+
+    res = cmd_skill(self.session, "greetings")
+    self.assertTrue(res)
+    self.assertIn("greetings", self.session.explicit_skills)
+
+    res = cmd_skill(self.session, "database non_existent")
+    self.assertTrue(res)
+    self.assertIn("database", self.session.explicit_skills)
+    self.assertNotIn("non_existent", self.session.explicit_skills)
+
+    res = cmd_skill(self.session, "clear")
+    self.assertTrue(res)
+    self.assertEqual(len(self.session.explicit_skills), 0)
 
   def test_cmd_provider_and_model(self):
     self.assertEqual(self.session.provider, "ollama")

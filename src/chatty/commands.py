@@ -295,6 +295,32 @@ def cmd_tools(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_skill(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    available = sorted(session.skills.keys())
+    active = sorted(session.explicit_skills)
+    console.print("[bold cyan]Skills Status:[/bold cyan]")
+    console.print(f"  Available skills: {', '.join(available) if available else 'None'}")
+    console.print(f"  Explicitly loaded: {', '.join(active) if active else 'None'}")
+    return True
+
+  names = arg.split()
+  if len(names) == 1 and names[0].lower() == "clear":
+    session.explicit_skills.clear()
+    console.print("[bold green]All explicitly loaded skills cleared.[/bold green]")
+    return True
+
+  for name in names:
+    if name in session.skills:
+      if name not in session.explicit_skills:
+        session.explicit_skills.append(name)
+      console.print(f"Skill [bold cyan]{name}[/bold cyan] loaded on-demand.")
+    else:
+      console.print(f"[bold red]Error: Skill '{name}' not found.[/bold red]")
+  return True
+
+
 def cmd_history(session: Any, arg: str) -> bool:
   console.print("[bold cyan]Conversation History (estimated tokens):[/bold cyan]")
   for idx, msg in enumerate(session.messages):
@@ -582,6 +608,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/save_session": cmd_save,
   "/load_session": cmd_load_session,
   "/tools": cmd_tools,
+  "/skill": cmd_skill,
   "/history": cmd_history,
   "/undo": cmd_undo,
   "/pop": cmd_pop,

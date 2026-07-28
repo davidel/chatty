@@ -43,6 +43,7 @@ class TestSessionPersist(unittest.TestCase):
     session.external_binaries_breakdown = {"gcc": 5}
     session.api_key = "some_secret_key"
     session.url = "http://my-url:11434"
+    session.explicit_skills = ["greetings", "custom_skill"]
     
     # Save the session to a temporary file
     save_path = os.path.join(self.save_dir, "test_session.json")
@@ -63,6 +64,7 @@ class TestSessionPersist(unittest.TestCase):
     self.assertEqual(data["tool_calls_count"]["read_file"], 3)
     self.assertEqual(data["api_key"], "some_secret_key")
     self.assertEqual(data["url"], "http://my-url:11434")
+    self.assertEqual(data["explicit_skills"], ["greetings", "custom_skill"])
     
     # Re-instantiate session to a clean slate
     session2 = ChatbotSession(
@@ -92,3 +94,4 @@ class TestSessionPersist(unittest.TestCase):
     self.assertEqual(session2.external_binaries_breakdown["gcc"], 5)
     self.assertEqual(session2.api_key, "some_secret_key")
     self.assertEqual(session2.url, "http://my-url:11434")
+    self.assertEqual(session2.explicit_skills, ["greetings", "custom_skill"])
