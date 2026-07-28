@@ -67,7 +67,8 @@ python3 -m chatty [options]
 | `--oracle-model` | *None* | string | *Auto-resolved* | Model identifier to use as the oracle. Default determines based on provider. |
 | `--context-size` | `-c` | integer | `8192` | Target context window length constraint in tokens. |
 | `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. |
-| `--skills-path` | `-k` | string | *None* | Custom directory paths to scan for Skills (can be specified multiple times). |
+| `--skills-path` | `-k` | string | *None* | Custom directory paths to scan for static/dynamic Skills (can be specified multiple times). |
+| `--ondemand-skills-path` | `-o` | string | *None* | Custom directory paths to scan for on-demand Skills (can be specified multiple times). |
 | `--whitelist` | `-w` | string | *None* | Add an out-of-sandbox path to the initial whitelist. Can end with `:ro` or `:rw` to set mode (defaults to `ro`). Can be specified multiple times. |
 | `--static-skills` | *None* | flag | *Auto* | Load all skills statically into system instructions (defaults to `True` for OpenRouter, `False` for Ollama). |
 | `--prompt-caching` | *None* | flag | `False` | Explicitly enable prompt caching for compatible models (adds `cache_control` tagging). |
@@ -123,6 +124,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/oracle` | `[name]` | View active oracle model name or switch to another oracle model by name. |
 | `/sandbox` | `[path]` | View sandbox path or change it. Instantly loads any skills found in the new sandbox. |
 | `/whitelist` / `/permissions` | `[add <path> [ro\|rw] \| remove <path> \| clear]` | View or manage whitelisted out-of-sandbox paths. |
+| `/skill` | `[NAME...\|clear]` | Load on-demand skill(s) or clear explicitly loaded ones. |
 | `/context` | `[tokens]` | View or update target context memory window limit in tokens. |
 | `/loops` | `[iterations]` | View or modify the limit of sequential agent loops allowed per turn. |
 | `/api_key` | `[key]` | Configure your OpenRouter cloud client token dynamically. |
@@ -265,15 +267,25 @@ Always format queries in uppercase... (Rest of system guidelines)
 ```
 
 ### Loading Skills
-Skills are compiled from multiple locations:
-1. Default system path: `src/chatty/skills/`
-2. Environment Variable: `CHATBOT_SKILLS_PATH` (colon/path-separated values)
-3. Dynamic arguments: `--skills-path` / `-k` CLI options.
-4. Local sandbox path: `<sandbox>/skills/`
+Chatty differentiates between **Static/Dynamic** skills and **On-demand** skills by loading them from different directories:
+
+| Type | Default System Path | Environment Variable | CLI Argument | Sandbox Path |
+| :--- | :--- | :--- | :--- | :--- |
+| **Static / Dynamic** | `src/chatty/skills/` | `CHATBOT_SKILLS_PATH` | `--skills-path` / `-k` | `<sandbox>/skills/` |
+| **On-demand** | `src/chatty/ondemand_skills/` | `CHATBOT_ONDEMAND_SKILLS_PATH` | `--ondemand-skills-path` / `-o` | `<sandbox>/ondemand_skills/` |
 
 ### Activation Modes
-- **Static Mode (`--static-skills`)**: Combines all loaded skills directly into the base system prompt. This ensures all rules are known at all times and optimizes prompt caching for APIs like OpenRouter.
-- **Dynamic Mode (Default for Ollama)**: Scans the user prompt for the skill's `name` or any of its `tags`. If a match is found (case-insensitive), the skill's instructions are appended to the system instructions specifically for that conversational turn.
+- **Static Mode (`--static-skills` / default for OpenRouter)**: 
+  * All loaded **Static / Dynamic** skills are automatically and permanently appended to the system prompt (enabling efficient prompt caching).
+  * Loaded **On-demand** skills are **only** appended if you explicitly request them using the `/skill NAME` command.
+- **Dynamic Mode (default for Ollama)**:
+  * Automatically scans your prompt against all loaded skills (static/dynamic and on-demand) and dynamically injects them if keywords or tags match.
+  * Explicitly loaded on-demand skills (via `/skill NAME`) are always injected.
+
+### The `/skill` command
+* `/skill`: Lists all available on-demand skills and those currently explicitly loaded.
+* `/skill name1 name2`: Explicitly loads one or more on-demand skills.
+* `/skill clear`: Clears all explicitly loaded on-demand skills. Loaded skills are saved for the session, ensuring they persist and are correctly re-injected if `/clear` is run.
 
 ---
 
