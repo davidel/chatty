@@ -37,7 +37,7 @@ class TestCommandsRegistry(unittest.TestCase):
     self.assertIn("/pop", COMMANDS)
 
   def test_cmd_skill(self):
-    self.session.skills = {
+    self.session.ondemand_skills = {
       "greetings": {
         "metadata": {"name": "greetings", "description": "test"},
         "body": "greetings body"

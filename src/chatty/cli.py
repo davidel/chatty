@@ -49,6 +49,12 @@ def main():
     help="Custom directories to search for skills. Can be specified multiple times."
   )
   parser.add_argument(
+    "--ondemand-skills-path", "-o",
+    action="append",
+    default=[],
+    help="Custom directories to search for on-demand skills. Can be specified multiple times."
+  )
+  parser.add_argument(
     "--whitelist", "-w",
     action="append",
     default=[],
@@ -226,6 +232,7 @@ def main():
     system_prompt_override=custom_system_prompt,
     prompt_mode=args.prompt_mode,
     skills_paths=args.skills_path,
+    ondemand_skills_paths=args.ondemand_skills_path,
     max_read_chars=args.max_read_chars,
     max_grep_results=args.max_grep_results,
     max_command_chars=args.max_command_chars,

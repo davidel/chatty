@@ -142,6 +142,7 @@ class SessionConfig:
   system_prompt_override: Optional[str] = None
   prompt_mode: str = "replace"
   skills_paths: List[str] = field(default_factory=list)
+  ondemand_skills_paths: List[str] = field(default_factory=list)
   max_read_chars: int = 40000
   max_grep_results: int = 100
   max_command_chars: int = 16000
@@ -178,6 +179,7 @@ class ChatbotSession:
     system_prompt_override: Optional[str] = None,
     prompt_mode: str = "replace",
     skills_paths: Optional[List[str]] = None,
+    ondemand_skills_paths: Optional[List[str]] = None,
     max_read_chars: int = 40000,
     max_grep_results: int = 100,
     max_command_chars: int = 16000,
@@ -215,6 +217,7 @@ class ChatbotSession:
         system_prompt_override=system_prompt_override,
         prompt_mode=prompt_mode,
         skills_paths=skills_paths or [],
+        ondemand_skills_paths=ondemand_skills_paths or [],
         max_read_chars=max_read_chars,
         max_grep_results=max_grep_results,
         max_command_chars=max_command_chars,
@@ -422,36 +425,38 @@ class ChatbotSession:
   def load_skills(self):
     """Scans all configured skills directories and loads/merges valid skill definitions."""
     self.skills = {}
-    search_dirs = []
+    self.ondemand_skills = {}
     
+    # 1. Load static/dynamic skills
+    skills_search_dirs = []
     script_dir = os.path.dirname(os.path.abspath(__file__))
     default_skills_dir = os.path.join(script_dir, "skills")
     if os.path.exists(default_skills_dir) and os.path.isdir(default_skills_dir):
-      search_dirs.append(default_skills_dir)
+      skills_search_dirs.append(default_skills_dir)
       
     env_paths = os.environ.get("CHATBOT_SKILLS_PATH", "")
     if env_paths:
       for p in env_paths.split(os.pathsep):
         p = p.strip()
         if p and os.path.exists(p) and os.path.isdir(p):
-          search_dirs.append(p)
+          skills_search_dirs.append(p)
           
     for p in self.skills_paths:
       p = p.strip()
       if p and os.path.exists(p) and os.path.isdir(p):
-        search_dirs.append(p)
+        skills_search_dirs.append(p)
         
     sandbox_skills_dir = os.path.join(self.sandbox, "skills")
     if os.path.exists(sandbox_skills_dir) and os.path.isdir(sandbox_skills_dir):
-      search_dirs.append(sandbox_skills_dir)
+      skills_search_dirs.append(sandbox_skills_dir)
       
-    unique_dirs = []
-    for d in search_dirs:
+    unique_skills_dirs = []
+    for d in skills_search_dirs:
       abs_d = os.path.abspath(d)
-      if abs_d not in unique_dirs:
-        unique_dirs.append(abs_d)
+      if abs_d not in unique_skills_dirs:
+        unique_skills_dirs.append(abs_d)
         
-    for skills_dir in unique_dirs:
+    for skills_dir in unique_skills_dirs:
       try:
         for item in os.listdir(skills_dir):
           item_path = os.path.join(skills_dir, item)
@@ -474,14 +479,68 @@ class ChatbotSession:
         pass
     logger.info(f"Loaded {len(self.skills)} skills: {list(self.skills.keys())}")
 
+    # 2. Load on-demand skills
+    ondemand_search_dirs = []
+    default_ondemand_dir = os.path.join(script_dir, "ondemand_skills")
+    if os.path.exists(default_ondemand_dir) and os.path.isdir(default_ondemand_dir):
+      ondemand_search_dirs.append(default_ondemand_dir)
+      
+    env_ondemand_paths = os.environ.get("CHATBOT_ONDEMAND_SKILLS_PATH", "")
+    if env_ondemand_paths:
+      for p in env_ondemand_paths.split(os.pathsep):
+        p = p.strip()
+        if p and os.path.exists(p) and os.path.isdir(p):
+          ondemand_search_dirs.append(p)
+          
+    for p in self.ondemand_skills_paths:
+      p = p.strip()
+      if p and os.path.exists(p) and os.path.isdir(p):
+        ondemand_search_dirs.append(p)
+        
+    sandbox_ondemand_dir = os.path.join(self.sandbox, "ondemand_skills")
+    if os.path.exists(sandbox_ondemand_dir) and os.path.isdir(sandbox_ondemand_dir):
+      ondemand_search_dirs.append(sandbox_ondemand_dir)
+      
+    unique_ondemand_dirs = []
+    for d in ondemand_search_dirs:
+      abs_d = os.path.abspath(d)
+      if abs_d not in unique_ondemand_dirs:
+        unique_ondemand_dirs.append(abs_d)
+        
+    for skills_dir in unique_ondemand_dirs:
+      try:
+        for item in os.listdir(skills_dir):
+          item_path = os.path.join(skills_dir, item)
+          if os.path.isdir(item_path):
+            skill_md_path = os.path.join(item_path, "SKILL.md")
+            if os.path.exists(skill_md_path):
+              try:
+                with open(skill_md_path, 'r', encoding='utf-8', errors='ignore') as f:
+                  content = f.read()
+                meta, body = parse_frontmatter(content)
+                if "name" not in meta:
+                  meta["name"] = item
+                self.ondemand_skills[item] = {
+                  "metadata": meta,
+                  "body": body
+                }
+              except Exception:
+                pass
+      except Exception:
+        pass
+    logger.info(f"Loaded {len(self.ondemand_skills)} on-demand skills: {list(self.ondemand_skills.keys())}")
+
   def get_active_system_prompt(self) -> str:
     """Returns system prompt integrated with dynamically activated skills."""
     if self.static_skills:
-      if not self.explicit_skills:
-        return self.system_prompt
       active_skills = []
+      # Append all static skills
+      for skill_name, skill in sorted(self.skills.items()):
+        meta = skill["metadata"]
+        active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+      # Append explicitly loaded on-demand skills
       for skill_name in sorted(self.explicit_skills):
-        skill = self.skills.get(skill_name)
+        skill = self.ondemand_skills.get(skill_name)
         if skill:
           meta = skill["metadata"]
           active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
@@ -494,7 +553,7 @@ class ChatbotSession:
     active_names = []
 
     for skill_name in sorted(self.explicit_skills):
-      skill = self.skills.get(skill_name)
+      skill = self.ondemand_skills.get(skill_name)
       if skill:
         meta = skill["metadata"]
         active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
@@ -508,7 +567,27 @@ class ChatbotSession:
         
     prompt_lower = last_user_msg.lower()
     
+    # Check regular skills
     for skill_name, skill in self.skills.items():
+      meta = skill["metadata"]
+      name = meta.get("name", "").lower()
+      desc = meta.get("description", "").lower()
+      tags = meta.get("tags", [])
+      if not isinstance(tags, list):
+        tags = [tags]
+        
+      match = False
+      if name and name in prompt_lower:
+        match = True
+      elif any(str(tag).lower() in prompt_lower for tag in tags):
+        match = True
+        
+      if match:
+        active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+        active_names.append(meta.get("name"))
+
+    # Check on-demand skills (excluding any already explicitly loaded)
+    for skill_name, skill in self.ondemand_skills.items():
       if skill_name in self.explicit_skills:
         continue
       meta = skill["metadata"]

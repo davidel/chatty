@@ -298,26 +298,26 @@ def cmd_tools(session: Any, arg: str) -> bool:
 def cmd_skill(session: Any, arg: str) -> bool:
   arg = arg.strip()
   if not arg:
-    available = sorted(session.skills.keys())
+    available = sorted(session.ondemand_skills.keys())
     active = sorted(session.explicit_skills)
-    console.print("[bold cyan]Skills Status:[/bold cyan]")
-    console.print(f"  Available skills: {', '.join(available) if available else 'None'}")
+    console.print("[bold cyan]On-demand Skills Status:[/bold cyan]")
+    console.print(f"  Available on-demand skills: {', '.join(available) if available else 'None'}")
     console.print(f"  Explicitly loaded: {', '.join(active) if active else 'None'}")
     return True
 
   names = arg.split()
   if len(names) == 1 and names[0].lower() == "clear":
     session.explicit_skills.clear()
-    console.print("[bold green]All explicitly loaded skills cleared.[/bold green]")
+    console.print("[bold green]All explicitly loaded on-demand skills cleared.[/bold green]")
     return True
 
   for name in names:
-    if name in session.skills:
+    if name in session.ondemand_skills:
       if name not in session.explicit_skills:
         session.explicit_skills.append(name)
       console.print(f"Skill [bold cyan]{name}[/bold cyan] loaded on-demand.")
     else:
-      console.print(f"[bold red]Error: Skill '{name}' not found.[/bold red]")
+      console.print(f"[bold red]Error: On-demand skill '{name}' not found.[/bold red]")
   return True
 
 
