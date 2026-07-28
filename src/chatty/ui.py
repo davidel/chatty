@@ -393,6 +393,9 @@ def start_interactive_loop(session: Any):
       f" <b>Sandbox:</b> {session.sandbox} "
     )
 
+  def prompt_continuation(width, line_number, is_soft_wrap):
+    return ""
+
   session.show_status()
 
   while True:
@@ -407,6 +410,7 @@ def start_interactive_loop(session: Any):
       user_input = prompt_session.prompt(
         HTML(prompt_html),
         multiline=True,
+        prompt_continuation=prompt_continuation,
         bottom_toolbar=get_bottom_toolbar
       )
 
