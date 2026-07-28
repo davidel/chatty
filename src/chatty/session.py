@@ -981,8 +981,19 @@ class ChatbotSession:
               kwargs["extra_body"] = extra_body
             stream = self.client.chat.completions.create(**kwargs)
           
+          extra_fields_accumulated = {
+            "reasoning": "",
+            "reasoning_content": "",
+            "reasoning_details": None,
+            "thought_signature": None
+          }
+          last_extra_fields = {
+            "reasoning": None,
+            "reasoning_content": None,
+            "reasoning_details": None,
+            "thought_signature": None
+          }
           first_metadata_chunk = True
-          first_content_chunk = True
           usage_metadata = None
           chunk_id = None
           resp_model = None
@@ -1012,22 +1023,78 @@ class ChatbotSession:
             if hasattr(choice, "finish_reason") and choice.finish_reason:
               finish_reason = choice.finish_reason
             
+            # Extract any OpenRouter extra fields for reasoning/thought
+            extra_fields = ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]
+            has_new_reasoning = False
+            for field in extra_fields:
+              val = getattr(delta, field, None)
+              if val is None and hasattr(delta, "model_extra") and delta.model_extra:
+                val = delta.model_extra.get(field)
+              if val is None and isinstance(delta, dict):
+                val = delta.get(field)
+                
+              if val is not None:
+                has_new_reasoning = True
+                if field in ("reasoning", "reasoning_content"):
+                  if isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
+                    if val.startswith(extra_fields_accumulated[field]):
+                      extra_fields_accumulated[field] = val
+                    else:
+                      is_duplicate = (val == last_extra_fields[field])
+                      is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
+                      if not (is_duplicate and is_metadata_like):
+                        extra_fields_accumulated[field] += val
+                  else:
+                    extra_fields_accumulated[field] = val
+                else:
+                  extra_fields_accumulated[field] = val
+                  
+                last_extra_fields[field] = val
+
             if delta.content:
-              if first_content_chunk:
-                panels[0] = {"title": "Context Summary", "content": "", "border_style": "yellow"}
-                first_content_chunk = False
               content_accumulated += delta.content
-              panels[0]["content"] = content_accumulated
-              live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
+
+            reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
+                                     extra_fields_accumulated.get("reasoning") or "")
+
+            if delta.content or has_new_reasoning:
+              display_panels = []
+              if reasoning_accumulated.strip():
+                display_panels.append({
+                  "title": "Thinking",
+                  "content": reasoning_accumulated,
+                  "border_style": "yellow"
+                })
+              if content_accumulated:
+                display_panels.append({
+                  "title": "Context Summary",
+                  "content": content_accumulated,
+                  "border_style": "yellow"
+                })
+              if display_panels:
+                live.update(LiveScreenLayout(display_panels, self.get_rich_status_bar()))
           
           # Remove status bar before exiting Live context
-          live.update(LiveScreenLayout(panels, None))
+          display_panels = []
+          if reasoning_accumulated.strip():
+            display_panels.append({
+              "title": "Thinking",
+              "content": reasoning_accumulated,
+              "border_style": "yellow"
+            })
+          if content_accumulated:
+            display_panels.append({
+              "title": "Context Summary",
+              "content": content_accumulated,
+              "border_style": "yellow"
+            })
+          live.update(LiveScreenLayout(display_panels, None))
               
         logger.info("Summary generation succeeded")
         self._log_llm_response_summary(
           content_accumulated=content_accumulated,
           tool_calls_accumulated=[],
-          extra_fields_accumulated={},
+          extra_fields_accumulated=extra_fields_accumulated,
           finish_reason=finish_reason,
           usage=usage_metadata,
           response_model=resp_model,
