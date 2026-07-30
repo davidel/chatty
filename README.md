@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/davidel/chatty/main/assets/LOGO.png" alt="Chatty" width="600">
 </p>
 
-An advanced AI Chatbot CLI with a rich terminal interface, sandboxed file system tools, multi-provider LLM support (Ollama and OpenRouter), syntax verification, dynamic skills, and cost/token optimization.
+An advanced AI Chatbot CLI with a rich terminal interface, sandboxed file system tools, multi-provider LLM support (Ollama, OpenRouter, and custom providers via LiteLLM), syntax verification, dynamic skills, and cost/token optimization.
 
 Chatty provides a local terminal loop that allows an LLM agent to interact with your codebase and system tools in a safe, sandboxed directory. It utilizes `rich` and `prompt_toolkit` to deliver a premium user experience, complete with formatting, status indicators, and autocompletion.
 
@@ -12,7 +12,7 @@ Chatty provides a local terminal loop that allows an LLM agent to interact with 
 
 ## Features
 
-- **Multi-Provider Flexibility**: Switch seamlessly between local Ollama instances (offline models) and remote cloud-based OpenRouter endpoints.
+- **Multi-Provider Flexibility**: Switch seamlessly between local Ollama instances, cloud-based OpenRouter endpoints, or any custom API provider (such as Anthropic, Gemini, DeepSeek, Groq, etc.) via LiteLLM integration.
 - **Oracle Query Delegation**: Consult a more advanced oracle model dynamically during a session via the [ask_oracle](file:///tmp/chatty/src/chatty/tools/__init__.py#L668) tool or the `/oracle` slash command.
 - **Sandboxed Operations**: Restricts file modifications and commands strictly to a sandbox root (default `./sandbox`), enhanced by Linux Landlock kernel-level isolation when running on Linux.
 - **User-Space AST Validation**: Parses Python scripts executed via shell commands and blocks direct filesystem operations unless explicitly permitted or whitelisted by the user.
@@ -62,9 +62,9 @@ python3 -m chatty [options]
 
 | Parameter | Short | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--provider` | `-p` | string | `ollama` | Backend provider to use (`ollama` or `openrouter`). |
-| `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. Ollama: auto-detects first local model (falls back to `qwen2.5-coder:7b`). OpenRouter: defaults to `google/gemini-2.5-flash`. |
-| `--oracle-model` | *None* | string | *Auto-resolved* | Model identifier to use as the oracle. Default determines based on provider. |
+| `--provider` | `-p` | string | `ollama` | Backend provider to use (e.g., `ollama`, `openrouter`, `anthropic`, `gemini`, etc.). If omitted and `--url` is set, resolves automatically to the domain of the URL. |
+| `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. Ollama: auto-detects first local model (falls back to `qwen2.5-coder:7b`). OpenRouter: defaults to `google/gemini-2.5-flash`. Custom: required (no fallback). |
+| `--oracle-model` | *None* | string | *None* | Model identifier to use as the oracle. No default is assumed (the oracle tool is only active if an oracle model is explicitly configured). |
 | `--context-size` | `-c` | integer | `8192` | Target context window length constraint in tokens. |
 | `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. |
 | `--skills-path` | `-k` | string | *None* | Custom directory paths to scan for static/dynamic Skills (can be specified multiple times). |
@@ -75,8 +75,8 @@ python3 -m chatty [options]
 | `--max-loops` | `-l` | integer | `20` | Maximum sequential tool executions allowed in a single user turn. |
 | `--config-prompt` | `-f` | string | *None* | Path to a YAML or plain text file containing custom system prompt guidelines. |
 | `--prompt-mode` | `-d` | string | `replace` | How to apply custom system prompt configuration (`replace` default prompt, or `integrate`/append to it). |
-| `--api-key` | `-a` | string | *None* | OpenRouter API Key. Overrides `OPENROUTER_API_KEY` environment variable. |
-| `--url` | `-u` | string | *None* | Custom Base URL override for Ollama/OpenRouter APIs. |
+| `--api-key` | `-a` | string | *None* | Client API Key. Overrides `OPENROUTER_API_KEY`, `CUSTOM_API_KEY`, or `OPENAI_API_KEY` environment variables depending on the provider. |
+| `--url` | `-u` | string | *None* | Custom Base URL override (required for custom providers; automatically resolves the provider name to the domain of the URL if `--provider` is not specified). |
 | `--max-read-chars` | *None* | integer | `40000` | Maximum character limit when reading a text file to prevent context explosion. |
 | `--max-grep-results`| *None* | integer | `100` | Limit on matching results returned from the regular expression search tool. |
 | `--max-command-chars`|*None* | integer | `16000` | Maximum characters returned from stdout/stderr of executing commands. |
@@ -92,19 +92,33 @@ python3 -m chatty [options]
 
 ---
 
-## Custom OpenAI-Compatible Providers
+## Custom OpenAI-Compatible & Multi-Provider Support
 
-Since Chatty uses the standard OpenAI SDK client under the hood, you can connect to any third-party provider that offers an OpenAI-compatible endpoint. To do this, specify `--provider openrouter` and override both `--url` and `--api-key` along with your desired `--model`:
+Chatty uses **LiteLLM** under the hood, meaning you can connect to any third-party cloud provider (like Anthropic or Gemini) or any OpenAI-compatible custom endpoint. 
+
+### 1. OpenAI-Compatible Custom Endpoints
+To connect to custom endpoints (like DeepSeek, Groq, Together AI, or local vLLM servers), specify `--url` and `--model` (along with `--api-key` if required). The provider name will automatically be resolved to the domain name of your URL:
 
 ```bash
-# Run using DeepSeek V3
-chatty --provider openrouter --url https://api.deepseek.com --api-key YOUR_DEEPSEEK_KEY --model deepseek-chat
+# Run using DeepSeek V3 (automatically sets provider to 'api.deepseek.com')
+chatty --url https://api.deepseek.com/v1 --api-key YOUR_DEEPSEEK_KEY --model deepseek-chat
 
-# Run using Groq
-chatty --provider openrouter --url https://api.groq.com/openai/v1 --api-key YOUR_GROQ_KEY --model llama-3.3-70b-versatile
+# Run using Groq (automatically sets provider to 'api.groq.com')
+chatty --url https://api.groq.com/openai/v1 --api-key YOUR_GROQ_KEY --model llama-3.3-70b-versatile
 
-# Run using Together AI
-chatty --provider openrouter --url https://api.together.xyz/v1 --api-key YOUR_TOGETHER_KEY --model Qwen/Qwen2.5-Coder-32B-Instruct
+# Run using Together AI (automatically sets provider to 'api.together.xyz')
+chatty --url https://api.together.xyz/v1 --api-key YOUR_TOGETHER_KEY --model Qwen/Qwen2.5-Coder-32B-Instruct
+```
+
+### 2. Native Multi-Provider Support via LiteLLM
+You can also call other native providers supported by LiteLLM (such as Anthropic or Google Gemini) directly by specifying their provider name and model:
+
+```bash
+# Run using Anthropic Claude 3.5 Sonnet (expects ANTHROPIC_API_KEY env variable)
+chatty --provider anthropic --model claude-3-5-sonnet
+
+# Run using Google Gemini Pro (expects GEMINI_API_KEY env variable)
+chatty --provider gemini --model gemini-2.5-pro
 ```
 
 ---
@@ -118,7 +132,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/help` | None | Displays a formatted usage table of all slash commands. |
 | `/status` | None | Shows active session variables (provider, model, oracle, sandbox, tokens, loops, etc.). |
 | `/tool_stats` | None | Renders execution statistics (call counts, failures, and breakdowns for tools and binaries). |
-| `/provider` | `[ollama\|openrouter]` | View current provider or switch backend on the fly. Re-authenticates APIs dynamically. |
+| `/provider` | `[name]` | View current provider or switch backend on the fly. Accepts standard or custom provider names (e.g., `ollama`, `openrouter`, `anthropic`, `gemini`, `api.deepseek.com`). |
 | `/model` | `[ID\|name]` | View active model name or switch to another model by name or 1-based index/ID. |
 | `/models` | `[add <name>\|remove <ID\|name>]` | List currently loaded models, or add/remove them dynamically. |
 | `/oracle` | `[name]` | View active oracle model name or switch to another oracle model by name. |
@@ -127,7 +141,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/skill` | `[NAME...\|clear]` | Load on-demand skill(s) or clear explicitly loaded ones. |
 | `/context` | `[tokens]` | View or update target context memory window limit in tokens. |
 | `/loops` | `[iterations]` | View or modify the limit of sequential agent loops allowed per turn. |
-| `/api_key` | `[key]` | Configure your OpenRouter cloud client token dynamically. |
+| `/api_key` | `[key]` | Configure your client token dynamically. |
 | `/system` | `[text]` | Inspect or update the base system prompt instructions directly. |
 | `/load` | `<path> [append\|replace]` | Read system instructions from a local YAML or text file, appending or replacing. |
 | `/save` / `/save_session` | `<path>` | Save the whole status of the current conversation/session to a JSON file. |
