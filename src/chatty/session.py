@@ -974,7 +974,7 @@ class ChatbotSession:
             }
             if extra_body:
               kwargs["extra_body"] = extra_body
-            stream = self.client.chat.completions.create(**kwargs)
+            stream = self._create_completion(**kwargs)
           except Exception as e:
             if self._is_retryable_exception(e):
               raise
@@ -987,7 +987,7 @@ class ChatbotSession:
             }
             if extra_body:
               kwargs["extra_body"] = extra_body
-            stream = self.client.chat.completions.create(**kwargs)
+            stream = self._create_completion(**kwargs)
           
           extra_fields_accumulated = {
             "reasoning": "",

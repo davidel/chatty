@@ -98,6 +98,7 @@ def _create_completion(self, **kwargs) -> Any:
   import litellm
   litellm.set_verbose = False
   litellm.suppress_logging = True
+  litellm.suppress_debug_info = True
   logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
   actual_model = kwargs["model"]
