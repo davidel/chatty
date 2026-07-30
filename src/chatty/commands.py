@@ -53,14 +53,15 @@ def cmd_tool_stats(session: Any, arg: str) -> bool:
 
 
 def cmd_provider(session: Any, arg: str) -> bool:
+  arg = arg.strip()
   if not arg:
     console.print(f"Current provider: [bold cyan]{session.provider}[/bold cyan]")
-  elif arg in ("ollama", "openrouter"):
+  else:
     session.provider = arg
     session.init_client()
     console.print(f"Switched provider to: [bold green]{session.provider}[/bold green]")
-  else:
-    console.print("[bold red]Error: Provider must be 'ollama' or 'openrouter'.[/bold red]")
+    if arg not in ("ollama", "openrouter"):
+      console.print("[bold yellow]Remember:[/bold yellow] Use '/url <api_url>' and '/api_key <key>' to configure your custom endpoint.")
   return True
 
 
@@ -95,11 +96,11 @@ def cmd_model(session: Any, arg: str) -> bool:
 def cmd_oracle(session: Any, arg: str) -> bool:
   arg = arg.strip()
   if not arg:
-    oracle = getattr(session, "oracle_model", None)
+    oracle = session.get_oracle_model()
     if oracle:
       console.print(f"Current oracle model: [bold cyan]{oracle}[/bold cyan]")
     else:
-      console.print(f"Current oracle model is not set. Defaulting to: [bold yellow]{session.get_oracle_model()}[/bold yellow]")
+      console.print("Current oracle model is not configured (No oracle tool is active).")
     return True
 
   session.oracle_model = arg
@@ -147,6 +148,9 @@ def cmd_models(session: Any, arg: str) -> bool:
     if len(parts) < 2:
       console.print("[bold red]Error: Usage: /models remove <ID or model_name>[/bold red]")
       return True
+    if len(session.models) <= 1:
+      console.print("[bold red]Error: Cannot remove the last model. At least one model must remain.[/bold red]")
+      return True
     target = parts[1].strip()
     
     # Try to parse target as ID
@@ -171,15 +175,8 @@ def cmd_models(session: Any, arg: str) -> bool:
       console.print(f"[bold green]Removed model:[/bold green] {removed_model}")
       # If we removed the active model, switch to another one
       if session.model == removed_model:
-        if session.models:
-          session.model = session.models[0]
-          console.print(f"Active model switched to: [bold green]{session.model}[/bold green]")
-        else:
-          # Fallback if no models are left
-          fallback = "google/gemini-2.5-flash" if session.provider == "openrouter" else "qwen2.5-coder:7b"
-          session.models.append(fallback)
-          session.model = fallback
-          console.print(f"No models left. Fallback to default model: [bold green]{fallback}[/bold green]")
+        session.model = session.models[0]
+        console.print(f"Active model switched to: [bold green]{session.model}[/bold green]")
   else:
     console.print(f"[bold red]Unknown models command '{subcmd}'. Use '/models' to list, '/models add <name>', or '/models remove <id/name>'.[/bold red]")
   return True

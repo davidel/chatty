@@ -246,7 +246,7 @@ def show_status(session: Any):
   table.add_column("Value", style="green")
   table.add_row("Provider", session.provider)
   table.add_row("Model", session.model)
-  table.add_row("Oracle Model", session.oracle_model or f"Not set (Default: {session.get_oracle_model()})")
+  table.add_row("Oracle Model", session.get_oracle_model() or "Not configured")
   table.add_row("Sandbox Path", session.sandbox)
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")

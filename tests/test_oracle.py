@@ -34,30 +34,21 @@ class TestOracle(unittest.TestCase):
     self.assertEqual(self.session.oracle_model, "custom-oracle")
     self.assertEqual(self.session.get_oracle_model(), "custom-oracle")
 
-  def test_oracle_model_fallback_ollama(self):
+  def test_oracle_model_no_fallback(self):
     session2 = ChatbotSession(
       provider="ollama",
       model="test-model",
       models=["test-model", "alternative-model"],
       sandbox=self.sandbox_dir
     )
-    self.assertEqual(session2.get_oracle_model(), "alternative-model")
+    self.assertIsNone(session2.get_oracle_model())
     session3 = ChatbotSession(
-      provider="ollama",
-      model="test-model",
-      models=["test-model"],
-      sandbox=self.sandbox_dir
-    )
-    self.assertEqual(session3.get_oracle_model(), "test-model")
-
-  def test_oracle_model_fallback_openrouter(self):
-    session2 = ChatbotSession(
       provider="openrouter",
       model="test-model",
       models=["test-model"],
       sandbox=self.sandbox_dir
     )
-    self.assertEqual(session2.get_oracle_model(), "google/gemini-2.5-pro")
+    self.assertIsNone(session3.get_oracle_model())
 
   def test_oracle_command(self):
     # View oracle command
@@ -109,12 +100,23 @@ class TestOracle(unittest.TestCase):
     chunk = MagicMock()
     chunk.choices = [MagicMock(delta=MagicMock(content="Oracle suggestion"))]
     mock_client.chat.completions.create.return_value = [chunk]
-    # Find tool schema
-    tool_names = [t["function"]["name"] for t in TOOLS_SCHEMA]
+    # Verify it is in active session tools
+    active_tools = self.session.get_tools()
+    tool_names = [t["function"]["name"] for t in active_tools]
     self.assertIn("ask_oracle", tool_names)
     # Execute tool
     res = execute_tool("ask_oracle", {"query": "Explain quantum physics"}, self.session)
     self.assertEqual(res, "Oracle suggestion")
+
+  def test_ask_oracle_tool_omitted_when_not_configured(self):
+    session2 = ChatbotSession(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.sandbox_dir
+    )
+    active_tools = session2.get_tools()
+    tool_names = [t["function"]["name"] for t in active_tools]
+    self.assertNotIn("ask_oracle", tool_names)
 
   def test_model_and_provider_resolution(self):
     # Test without colon

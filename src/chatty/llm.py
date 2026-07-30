@@ -50,7 +50,7 @@ def init_client(self):
       base_url=base,
       api_key="ollama"  # placeholder key
     )
-  else:  # openrouter
+  elif self.provider == "openrouter":
     base = self.url or "https://openrouter.ai/api/v1"
     key = self.api_key or os.environ.get("OPENROUTER_API_KEY")
     if not key:
@@ -66,6 +66,16 @@ def init_client(self):
         "HTTP-Referer": "https://github.com/davidel/chatty",
         "X-Title": "Chatty"
       }
+    )
+  else:  # Custom OpenAI-compatible provider
+    base = self.url
+    if not base:
+      self._print(f"[bold red]Error:[/bold red] Provider '{self.provider}' requires an API URL. Use [cyan]/url <url>[/cyan] or configure --url.")
+      base = "http://localhost:8000/v1"
+    key = self.api_key or os.environ.get("CUSTOM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+    self.client = openai.OpenAI(
+      base_url=base,
+      api_key=key
     )
 
 
@@ -149,22 +159,16 @@ def _resolve_model_and_provider(self, model_name: str) -> Tuple[str, Optional[Di
   return base_model, extra_body
 
 
-def get_oracle_model(self) -> str:
-  """Returns the configured oracle model, or determines a default based on provider."""
-  oracle_model = getattr(self.config, "oracle_model", None)
-  if oracle_model:
-    return oracle_model
-  if self.provider == "openrouter":
-    return "google/gemini-2.5-pro"
-  other_models = [m for m in self.models if m != self.model]
-  if other_models:
-    return other_models[0]
-  return self.model
+def get_oracle_model(self) -> Optional[str]:
+  """Returns the configured oracle model, or None if not configured."""
+  return getattr(self.config, "oracle_model", None)
 
 
 def consult_oracle(self, query: str) -> str:
   """Consults an oracle model for suggestions/assistance."""
   oracle_model = self.get_oracle_model()
+  if not oracle_model:
+    return "Oracle is not configured. Ask the user to configure an oracle model."
   messages = [
     {
       "role": "system",

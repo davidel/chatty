@@ -18,9 +18,7 @@ def main():
   )
   parser.add_argument(
     "--provider", "-p",
-    choices=["ollama", "openrouter"],
-    default="ollama",
-    help="The LLM backend provider to use (default: ollama)."
+    help="The LLM backend provider to use. Defaults to the domain of the --url if --url is provided, or 'ollama'."
   )
   parser.add_argument(
     "--model", "-m",
@@ -188,6 +186,30 @@ def main():
         console.print(f"[bold red]Error loading prompt configuration:[/bold red] {e}")
       sys.exit(1)
           
+  from urllib.parse import urlparse
+
+  # Determine provider
+  provider = args.provider
+  if not provider:
+    if args.url:
+      parsed = urlparse(args.url)
+      domain = parsed.netloc or parsed.path
+      if ":" in domain:
+        domain = domain.split(":")[0]
+      if not domain:
+        parser.error("Could not parse domain name from --url.")
+      provider = domain
+    else:
+      provider = "ollama"
+
+  # Validate custom provider constraints
+  is_standard_provider = provider in ("ollama", "openrouter")
+  if not is_standard_provider:
+    if not args.url:
+      parser.error(f"Provider '{provider}' requires an API URL. Pass it via --url / -u.")
+    if not args.model:
+      parser.error(f"Provider '{provider}' requires a model. Pass it via --model / -m.")
+
   # Resolve default models
   models = []
   if args.model:
@@ -198,7 +220,7 @@ def main():
           models.append(part)
 
   if not models:
-    if args.provider == "ollama":
+    if provider == "ollama":
       # Attempt to auto-detect model from local Ollama tags
       ollama_url = args.url or "http://localhost:11434/v1"
       local_models = get_ollama_models(ollama_url)
@@ -211,16 +233,18 @@ def main():
         models = ["qwen2.5-coder:7b"]
         if not args.headless:
           console.print(f"[bold blue]Info:[/bold blue] No local Ollama models detected. Fallback default: [bold green]{models[0]}[/bold green]")
-    else:
+    elif provider == "openrouter":
       models = ["google/gemini-2.5-flash"]
       if not args.headless:
         console.print(f"[bold blue]Info:[/bold blue] OpenRouter provider selected. Default model: [bold green]{models[0]}[/bold green]")
+    else:
+      parser.error(f"Provider '{provider}' requires a model. Pass it via --model / -m.")
           
   model = models[0]
   
   # Initialize and execute chat session
   with ChatbotSession(
-    provider=args.provider,
+    provider=provider,
     model=model,
     models=models,
     oracle_model=args.oracle_model,

@@ -833,9 +833,13 @@ class ChatbotSession:
     available = get_available_formatters()
     available_str = ", ".join(available) if available else "none detected"
 
+    has_oracle = bool(self.get_oracle_model())
+
     tools = []
     for t in TOOLS_SCHEMA:
       t_copy = dict(t)
+      if t_copy["function"]["name"] == "ask_oracle" and not has_oracle:
+        continue
       if t_copy["function"]["name"] == "format_file":
         t_copy["function"] = dict(t_copy["function"])
         t_copy["function"]["description"] = (
