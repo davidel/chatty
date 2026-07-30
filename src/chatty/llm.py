@@ -96,6 +96,9 @@ def _create_completion(self, **kwargs) -> Any:
     return self.client.chat.completions.create(**kwargs)
 
   import litellm
+  litellm.set_verbose = False
+  litellm.suppress_logging = True
+  logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
   actual_model = kwargs["model"]
   
