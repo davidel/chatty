@@ -15,6 +15,7 @@ from chatty.llm import (
   _invalidate_token_cache,
   _calculate_tokens_for_messages,
   init_client,
+  _create_completion,
   _throttle_request,
   _format_api_error,
   _is_retryable_exception,
@@ -616,6 +617,9 @@ class ChatbotSession:
   def init_client(self):
     """Initializes or updates the OpenAI client based on active settings."""
     return init_client(self)
+
+  def _create_completion(self, **kwargs):
+    return _create_completion(self, **kwargs)
 
   def _throttle_request(self):
     return _throttle_request(self)

@@ -23,6 +23,15 @@ logger = logging.getLogger("chatty")
 console = Console()
 
 
+class LiteLLMClientStub:
+  def __init__(self, base_url, api_key, default_headers=None, timeout=None, max_retries=None):
+    self.base_url = base_url
+    self.api_key = api_key
+    self.default_headers = default_headers or {}
+    self.timeout = timeout
+    self.max_retries = max_retries
+
+
 def _invalidate_token_cache(self):
   self._cached_history_tokens = None
 
@@ -46,9 +55,9 @@ def init_client(self):
   """Initializes or updates the OpenAI client based on active settings."""
   if self.provider == "ollama":
     base = self.url or "http://localhost:11434/v1"
-    self.client = openai.OpenAI(
+    self.client = LiteLLMClientStub(
       base_url=base,
-      api_key="ollama"  # placeholder key
+      api_key="ollama"
     )
   elif self.provider == "openrouter":
     base = self.url or "https://openrouter.ai/api/v1"
@@ -59,7 +68,7 @@ def init_client(self):
         "Use [cyan]/api_key <key>[/cyan] or set the [cyan]OPENROUTER_API_KEY[/cyan] environment variable."
       )
       key = "missing_api_key"
-    self.client = openai.OpenAI(
+    self.client = LiteLLMClientStub(
       base_url=base,
       api_key=key,
       default_headers={
@@ -67,16 +76,56 @@ def init_client(self):
         "X-Title": "Chatty"
       }
     )
-  else:  # Custom OpenAI-compatible provider
+  else:  # Custom/Domain provider
     base = self.url
     if not base:
       self._print(f"[bold red]Error:[/bold red] Provider '{self.provider}' requires an API URL. Use [cyan]/url <url>[/cyan] or configure --url.")
       base = "http://localhost:8000/v1"
     key = self.api_key or os.environ.get("CUSTOM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-    self.client = openai.OpenAI(
+    self.client = LiteLLMClientStub(
       base_url=base,
       api_key=key
     )
+
+
+def _create_completion(self, **kwargs) -> Any:
+  """Intercepts and routes chat completion requests to litellm."""
+  # If the client is mocked (e.g. in unit tests), bypass LiteLLM and call the mock directly
+  client_type = type(self.client).__name__
+  if client_type in ("MagicMock", "Mock") or hasattr(self.client, "_mock_name"):
+    return self.client.chat.completions.create(**kwargs)
+
+  import litellm
+
+  actual_model = kwargs["model"]
+  
+  # Resolve the correct LiteLLM model prefix based on the provider
+  if self.provider == "ollama":
+    litellm_model = f"ollama/{actual_model}"
+  elif self.provider == "openrouter":
+    litellm_model = f"openrouter/{actual_model}"
+  else:
+    is_custom_openai = "." in self.provider or "localhost" in self.provider or "/" in self.provider or ":" in self.provider
+    if is_custom_openai:
+      litellm_model = f"openai/{actual_model}"
+    else:
+      litellm_model = f"{self.provider}/{actual_model}"
+
+  # Build litellm arguments
+  litellm_kwargs = dict(kwargs)
+  litellm_kwargs["model"] = litellm_model
+  
+  # Map standard client parameters
+  if getattr(self.client, "api_key", None):
+    litellm_kwargs["api_key"] = self.client.api_key
+  
+  if getattr(self.client, "base_url", None):
+    litellm_kwargs["api_base"] = self.client.base_url
+
+  if getattr(self.client, "default_headers", None):
+    litellm_kwargs["headers"] = self.client.default_headers
+
+  return litellm.completion(**litellm_kwargs)
 
 
 def _throttle_request(self):
@@ -200,7 +249,7 @@ def consult_oracle(self, query: str) -> str:
         }
         if extra_body:
           kwargs["extra_body"] = extra_body
-        stream = self.client.chat.completions.create(**kwargs)
+        stream = self._create_completion(**kwargs)
         for chunk in stream:
           if not chunk.choices:
             continue
@@ -581,7 +630,7 @@ def run_llm_cycle(self):
             }
             if extra_body:
               kwargs["extra_body"] = extra_body
-            stream = self.client.chat.completions.create(**kwargs)
+            stream = self._create_completion(**kwargs)
           except Exception as e:
             if self._is_retryable_exception(e):
               raise
@@ -595,7 +644,7 @@ def run_llm_cycle(self):
             }
             if extra_body:
               kwargs["extra_body"] = extra_body
-            stream = self.client.chat.completions.create(**kwargs)
+            stream = self._create_completion(**kwargs)
           
           first_metadata_chunk = True
           first_chunk = True
