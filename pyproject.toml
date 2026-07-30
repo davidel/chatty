@@ -23,6 +23,7 @@ dependencies = [
     "PyYAML",
     "json-repair",
     "psutil",
+    "litellm",
 ]
 
 [project.scripts]
