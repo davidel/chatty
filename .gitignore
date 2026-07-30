@@ -44,3 +44,6 @@ Thumbs.db
 # Landlock compiled binary
 src/chatty/landlock_exec
 src/chatty/landlock_exec.test
+
+# Scratch directory
+scratch/
