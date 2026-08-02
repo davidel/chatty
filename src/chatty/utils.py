@@ -280,29 +280,91 @@ def print_diff(path: str, old_content: str, new_content: str):
   ))
 
 
+def _try_ocr_fallback(content_bytes: bytes) -> str:
+  """Attempts to extract text using OCR from scanned PDFs, if dependencies are present."""
+  import shutil
+  if not shutil.which("tesseract") or not shutil.which("pdftoppm"):
+    return "[Info: PDF contains no extractable text. Scanned PDF detected, but tesseract or pdftoppm is missing. Skipping OCR.]"
+
+  try:
+    import pdf2image
+    import pytesseract
+  except ImportError:
+    return "[Info: PDF contains no extractable text. Scanned PDF detected, but pdf2image or pytesseract is not installed. Skipping OCR.]"
+
+  try:
+    images = pdf2image.convert_from_bytes(content_bytes, last_page=5)
+    ocr_pages = []
+    for idx, img in enumerate(images):
+      text = pytesseract.image_to_string(img)
+      if text.strip():
+        ocr_pages.append(f"--- Page {idx + 1} (OCR) ---\n{text.strip()}")
+    if ocr_pages:
+      return "\n\n".join(ocr_pages)
+    return "[Info: PDF contains no extractable text. OCR was unable to parse any text content.]"
+  except Exception as e:
+    return f"[Error running OCR fallback: {str(e)}]"
+
+
 def tool_fetch_url(url: str, max_chars: int = 24000, sandbox_path: Optional[str] = None) -> str:
-  """Fetch the text content of a public URL and convert it to clean text (removes HTML tags)."""
+  """Fetch the text content of a public URL and convert it to clean text (removes HTML tags or parses PDF)."""
   try:
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     response = requests.get(url, headers=headers, timeout=10)
     response.raise_for_status()
-    html = response.text
-    
-    html_clean = re.sub(r'<(script|style|head|header|footer|nav).*?>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
-    html_clean = re.sub(r'<br\s*/?>', '\n', html_clean, flags=re.IGNORECASE)
-    html_clean = re.sub(r'</?(p|div|li|h[1-6]).*?>', '\n', html_clean, flags=re.IGNORECASE)
-    text = re.sub(r'<.*?>', '', html_clean, flags=re.DOTALL)
-    import html as html_parser
-    text = html_parser.unescape(text)
-    
-    cleaned_lines = []
-    for line in text.split('\n'):
-      stripped = line.strip()
-      if stripped:
-        cleaned_lines.append(stripped)
-      elif cleaned_lines and cleaned_lines[-1] != "":
-        cleaned_lines.append("")
-    full_text = "\n".join(cleaned_lines).strip()
+
+    content_type = ""
+    if hasattr(response, "headers") and hasattr(response.headers, "get"):
+      try:
+        content_type_val = response.headers.get("Content-Type", "")
+        if isinstance(content_type_val, str):
+          content_type = content_type_val.lower()
+      except Exception:
+        pass
+    is_pdf = "application/pdf" in content_type or url.lower().split('?')[0].endswith(".pdf")
+
+    if is_pdf:
+      try:
+        import pypdf
+      except ImportError:
+        return "Error: URL points to a PDF, but 'pypdf' package is not installed. Please run 'pip install pypdf'."
+
+      import io
+      try:
+        reader = pypdf.PdfReader(io.BytesIO(response.content))
+        if reader.is_encrypted:
+          return "[Error: The requested PDF is password-protected or encrypted.]"
+
+        pages_text = []
+        for idx, page in enumerate(reader.pages):
+          page_text = page.extract_text()
+          if page_text and page_text.strip():
+            pages_text.append(f"--- Page {idx + 1} ---\n{page_text.strip()}")
+
+        full_text = "\n\n".join(pages_text).strip()
+        if not full_text:
+          full_text = _try_ocr_fallback(response.content)
+
+      except Exception as pdf_err:
+        return f"Error parsing PDF: {str(pdf_err)}"
+    else:
+      html = response.text
+      html_clean = re.sub(r'<(script|style|head|header|footer|nav).*?>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
+      html_clean = re.sub(r'<br\s*/?>', '\n', html_clean, flags=re.IGNORECASE)
+      html_clean = re.sub(r'</?(p|div|li|h[1-6]).*?>', '\n', html_clean, flags=re.IGNORECASE)
+      text = re.sub(r'<.*?>', '', html_clean, flags=re.DOTALL)
+      import html as html_parser
+      text = html_parser.unescape(text)
+
+      cleaned_lines = []
+      for line in text.split('\n'):
+        stripped = line.strip()
+        if stripped:
+          cleaned_lines.append(stripped)
+        elif cleaned_lines and cleaned_lines[-1] != "":
+          cleaned_lines.append("")
+      full_text = "\n".join(cleaned_lines).strip()
+
     if len(full_text) > max_chars:
       warning_msg = f"\n\n[WARNING: URL content truncated. Total length: {len(full_text)} characters.]"
       if sandbox_path:

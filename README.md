@@ -192,7 +192,7 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
   - **Serper**: Set `SERPER_API_KEY` (Google search proxy).
   - **SerpApi**: Set `SERPAPI_API_KEY` (Google search proxy).
   - **Yahoo Scraper**: Default fallback if no keys are provided (unreliable for heavy use).
-- **`fetch_url`**: Fetches the text content of a public URL (converting HTML to clean text).
+- **`fetch_url`**: Fetches the text content of a public URL. Automatically parses both HTML (converting it to clean plain text) and PDF documents. For scanned PDFs (which lack a text layer), it features an optional zero-overhead OCR fallback utilizing `pytesseract` and `pdf2image` dynamically if available on the host system.
 
 ### Command & Background Execution
 - **`run_command`**: Runs shell commands from the sandbox directory.
@@ -351,6 +351,7 @@ The test suite validates the following components:
 - [test_format.py](file:///tmp/chatty/tests/test_format.py): Verification of json, yaml, and clang-format code styling tools.
 - [test_headless.py](file:///tmp/chatty/tests/test_headless.py): Validates running the chatbot session in headless mode.
 - [test_landlock.py](file:///tmp/chatty/tests/test_landlock.py): Unittests for the Landlock sandboxing mechanism on Linux.
+- [test_pdf_handling.py](file:///tmp/chatty/tests/test_pdf_handling.py): Validates PDF text extraction, encryption handling, scanned PDF detection, and OCR fallback logic.
 - [test_logging.py](file:///tmp/chatty/tests/test_logging.py): Checks for Google-style Logging (glog) file outputs.
 - [test_oracle.py](file:///tmp/chatty/tests/test_oracle.py): Tests the oracle query delegation logic, the `ask_oracle` tool, and oracle resolution.
 - [test_safety.py](file:///tmp/chatty/tests/test_safety.py): Ensures commands and processes are validated for sandboxing.
