@@ -5,6 +5,7 @@ import os
 import re
 import urllib.parse
 from typing import List, Dict, Any, Tuple, Optional
+from html.parser import HTMLParser
 import requests
 import tiktoken
 from rich.console import Console
@@ -306,6 +307,38 @@ def _try_ocr_fallback(content_bytes: bytes) -> str:
     return f"[Error running OCR fallback: {str(e)}]"
 
 
+class HTMLTextExtractor(HTMLParser):
+  """A standard library HTML parser that extracts text while ignoring formatting/script blocks."""
+
+  def __init__(self):
+    super().__init__()
+    self.text_parts = []
+    self.ignore_depth = 0
+    self.ignore_tags = {"script", "style", "head", "header", "footer", "nav"}
+
+  def handle_starttag(self, tag, attrs):
+    if tag in self.ignore_tags:
+      self.ignore_depth += 1
+    elif tag == "br":
+      self.text_parts.append("\n")
+    elif tag in {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+      self.text_parts.append("\n")
+
+  def handle_endtag(self, tag):
+    if tag in self.ignore_tags:
+      self.ignore_depth = max(0, self.ignore_depth - 1)
+    elif tag in {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+      self.text_parts.append("\n")
+
+  def handle_data(self, data):
+    if self.ignore_depth == 0:
+      self.text_parts.append(data)
+
+  def get_text(self):
+    import html as html_parser
+    return html_parser.unescape("".join(self.text_parts))
+
+
 def tool_fetch_url(url: str, max_chars: int = 24000, sandbox_path: Optional[str] = None) -> str:
   """Fetch the text content of a public URL and convert it to clean text (removes HTML tags or parses PDF)."""
   try:
@@ -348,13 +381,9 @@ def tool_fetch_url(url: str, max_chars: int = 24000, sandbox_path: Optional[str]
       except Exception as pdf_err:
         return f"Error parsing PDF: {str(pdf_err)}"
     else:
-      html = response.text
-      html_clean = re.sub(r'<(script|style|head|header|footer|nav).*?>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
-      html_clean = re.sub(r'<br\s*/?>', '\n', html_clean, flags=re.IGNORECASE)
-      html_clean = re.sub(r'</?(p|div|li|h[1-6]).*?>', '\n', html_clean, flags=re.IGNORECASE)
-      text = re.sub(r'<.*?>', '', html_clean, flags=re.DOTALL)
-      import html as html_parser
-      text = html_parser.unescape(text)
+      parser = HTMLTextExtractor()
+      parser.feed(response.text)
+      text = parser.get_text()
 
       cleaned_lines = []
       for line in text.split('\n'):
