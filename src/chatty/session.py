@@ -159,6 +159,7 @@ class SessionConfig:
   max_thinking_chars: int = 12000
   max_thinking_leeway_chars: int = 2000
   api_delay: float = 2.5
+  api_timeout: float = 60.0
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
@@ -196,6 +197,7 @@ class ChatbotSession:
     max_thinking_chars: int = 12000,
     max_thinking_leeway_chars: int = 2000,
     api_delay: float = 2.5,
+    api_timeout: float = 60.0,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -233,7 +235,8 @@ class ChatbotSession:
         models=models or ([model] if model else []),
         max_thinking_chars=max_thinking_chars,
         max_thinking_leeway_chars=max_thinking_leeway_chars,
-        api_delay=api_delay
+        api_delay=api_delay,
+        api_timeout=api_timeout
       )
 
     # Ensure static_skills defaults correctly if not provided

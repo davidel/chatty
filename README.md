@@ -89,6 +89,9 @@ python3 -m chatty [options]
 | `--headless` | *None* | flag | `False` | Run the chatbot in headless mode (no console printing or terminal interactive loop). |
 | `--max-thinking-chars` | *None* | integer | `12000` | Maximum internal thinking characters before prompting the user. |
 | `--max-thinking-leeway-chars` | *None* | integer | `2000` | Leeway in characters beyond the maximum before hard-aborting or prompting. |
+| `--api-delay` | *None* | float | `2.5` | Minimum delay in seconds between consecutive API requests. |
+| `--api-timeout` | *None* | float | `60.0` | Timeout in seconds for API requests and streams. |
+
 
 ---
 

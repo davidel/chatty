@@ -447,6 +447,7 @@ def cmd_config(session: Any, arg: str) -> bool:
   from rich.table import Table
   allowed_keys = {
     "api_delay": float,
+    "api_timeout": float,
     "max_loops": int,
     "context_size": int,
     "max_thinking_chars": int,

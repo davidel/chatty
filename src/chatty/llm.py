@@ -129,6 +129,10 @@ def _create_completion(self, **kwargs) -> Any:
   if getattr(self.client, "default_headers", None):
     litellm_kwargs["headers"] = self.client.default_headers
 
+  timeout = getattr(self.client, "timeout", None) or getattr(self.config, "api_timeout", 60.0)
+  litellm_kwargs["timeout"] = timeout
+
+  logger.info(f"Sending API request to {self.provider} (model={actual_model}, timeout={timeout:.1f}s)...")
   return litellm.completion(**litellm_kwargs)
 
 

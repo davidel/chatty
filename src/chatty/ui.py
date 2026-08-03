@@ -251,6 +251,7 @@ def show_status(session: Any):
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
+  table.add_row("API Request Timeout", f"{session.api_timeout} seconds")
   table.add_row("Total Messages", str(len(session.messages)))
   session._print(table)
 

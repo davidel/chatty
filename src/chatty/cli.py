@@ -165,6 +165,18 @@ def main():
     default=2000,
     help="Leeway in characters beyond the maximum before hard-aborting or prompting (default: 2000)."
   )
+  parser.add_argument(
+    "--api-delay",
+    type=float,
+    default=2.5,
+    help="Minimum delay in seconds between consecutive API requests (default: 2.5)."
+  )
+  parser.add_argument(
+    "--api-timeout",
+    type=float,
+    default=60.0,
+    help="Timeout in seconds for API requests and streams (default: 60.0)."
+  )
   
   args = parser.parse_args()
   
@@ -269,7 +281,9 @@ def main():
     headless=args.headless,
     whitelist=args.whitelist,
     max_thinking_chars=args.max_thinking_chars,
-    max_thinking_leeway_chars=args.max_thinking_leeway_chars
+    max_thinking_leeway_chars=args.max_thinking_leeway_chars,
+    api_delay=args.api_delay,
+    api_timeout=args.api_timeout
   ) as chat_session:
     if not args.headless:
       chat_session.start_loop()
