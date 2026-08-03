@@ -9,7 +9,7 @@ from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.filters import completion_is_selected, Condition
+from prompt_toolkit.filters import completion_is_selected, Condition, is_searching
 from prompt_toolkit.application import get_app
 from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import HTML
@@ -353,7 +353,7 @@ def start_interactive_loop(session: Any):
       return text in session._commands
     return False
 
-  @kb.add('enter', filter=~completion_is_selected | is_exact_command)
+  @kb.add('enter', filter=(~completion_is_selected | is_exact_command) & ~is_searching)
   def _(event):
     event.current_buffer.validate_and_handle()
 
