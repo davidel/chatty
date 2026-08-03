@@ -71,6 +71,37 @@ class TestToolsModularity(unittest.TestCase):
       content = f.read()
     self.assertEqual(content, "Line 1\nLine 2 modified\nLine 3\n")
 
+  def test_patch_file_backslash_tolerance(self):
+    class MockSession:
+      def __init__(self, sandbox):
+        self.sandbox = sandbox
+    session = MockSession(self.sandbox_dir)
+    
+    test_file = "test_backslash.txt"
+    with open(os.path.join(self.sandbox_dir, test_file), "w") as f:
+      f.write("scdiag-pretrain --datasets HAM10000 \"redlessone/Derm1M\" \\\\\n")
+      
+    patch_data = """<<<<<<< SEARCH
+scdiag-pretrain --datasets HAM10000 "redlessone/Derm1M" \\
+=======
+scdiag-pretrain --model convvit \\
+                --datasets HAM10000 "redlessone/Derm1M" \\
+>>>>>>> REPLACE"""
+    
+    res = execute_tool(
+      "patch_file",
+      {
+        "path": test_file,
+        "patch": patch_data
+      },
+      session
+    )
+    self.assertIn("Successfully updated file", res)
+    with open(os.path.join(self.sandbox_dir, test_file), "r") as f:
+      content = f.read()
+    self.assertIn("scdiag-pretrain --model convvit \\", content)
+
+
 
 if __name__ == "__main__":
   unittest.main()

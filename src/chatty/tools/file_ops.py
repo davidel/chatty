@@ -287,8 +287,9 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Optio
   file_lines = file_content_norm.split("\n")
   search_lines = search_block_norm.split("\n")
   
-  file_lines_rstripped = [line.rstrip() for line in file_lines]
-  search_lines_rstripped = [line.rstrip() for line in search_lines]
+  import re
+  file_lines_rstripped = [re.sub(r'\\+', r'\\', line.rstrip()) for line in file_lines]
+  search_lines_rstripped = [re.sub(r'\\+', r'\\', line.rstrip()) for line in search_lines]
   
   line_start_chars = []
   curr = 0
