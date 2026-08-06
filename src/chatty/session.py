@@ -22,6 +22,7 @@ from chatty.llm import (
   _resolve_model_and_provider,
   get_oracle_model,
   consult_oracle,
+  _clean_assistant_message,
   prune_history,
   _log_llm_request,
   _log_llm_response_summary,
@@ -701,6 +702,10 @@ class ChatbotSession:
   def _apply_output_filters(self, text: str, output_filter: Optional[str] = None, head_lines: Optional[int] = None, tail_lines: Optional[int] = None) -> str:
     """Applies output filter regex, head/tail limits, and joins lines."""
     return self.runner._apply_output_filters(text, output_filter, head_lines, tail_lines)
+
+  def _clean_assistant_message(self, msg: Dict[str, Any]) -> None:
+    """Strips verbose thinking/reasoning metadata from the assistant message before sending to the LLM API."""
+    return _clean_assistant_message(self, msg)
 
   def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
     """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
