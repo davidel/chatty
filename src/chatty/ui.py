@@ -314,6 +314,7 @@ def get_rich_status_bar(session: Any):
     session._cached_history_tokens = session._calculate_tokens_for_messages(session.prune_history(log=False))
 
   total_tokens = session._cached_history_tokens
+  cumulative_tokens = session.cumulative_prompt_tokens + session.cumulative_completion_tokens
 
   table = Table(
     show_header=False,
@@ -326,12 +327,11 @@ def get_rich_status_bar(session: Any):
   )
   table.add_column()
   table.add_row(Text.from_markup(
-    f" [bold]Chatty CLI[/bold] |"
-    f" [bold]Provider:[/bold] [green]{session.provider}[/green] |"
-    f" [bold]Model:[/bold] [yellow]{session.model}[/yellow] |"
-    f" [bold]Tokens:[/bold] {total_tokens}/{session.context_size} |"
-    f" [bold]Loops:[/bold] [cyan]{session.current_loop}/{session.max_loops}[/cyan] |"
-    f" [bold]Sandbox:[/bold] {session.sandbox} "
+    f" [bold]Model:[/bold] [green]{session.provider}[/green]:[yellow]{session.model}[/yellow] |"
+    f" [bold]Context:[/bold] {total_tokens}/{session.context_size} |"
+    f" [bold]Usage:[/bold] {cumulative_tokens} |"
+    f" [bold]Ratio:[/bold] {session.token_to_char_ratio:.2f} |"
+    f" [bold]Loops:[/bold] [cyan]{session.current_loop}/{session.max_loops}[/cyan] "
   ))
   return table
 
