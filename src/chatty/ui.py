@@ -391,6 +391,7 @@ def start_interactive_loop(session: Any):
       f" <b>Model:</b> <ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow> |"
       f" <b>Context:</b> {total_tokens}/{session.context_size} |"
       f" <b>Usage:</b> {cumulative_tokens} |"
+      f" <b>Ratio:</b> {session.token_to_char_ratio:.2f} |"
       f" <b>Loops:</b> <ansicyan>{session.current_loop}/{session.max_loops}</ansicyan> "
     )
 
