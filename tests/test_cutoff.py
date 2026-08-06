@@ -816,6 +816,123 @@ class TestUrlCaching(unittest.TestCase):
       if os.path.exists(tmp_path):
         os.remove(tmp_path)
 
+  def test_model_specific_token_usage(self):
+    import json
+    import tempfile
+    import unittest.mock as mock
+    from chatty.session import ChatbotSession
+
+    session = ChatbotSession(
+      provider="openrouter",
+      model="model-A",
+      context_size=1000,
+      sandbox=self.sandbox_dir
+    )
+
+    # 1. Verify initial empty state
+    self.assertEqual(session.model_usage, {})
+
+    # Mock classes for helper
+    class MockUsage:
+      def __init__(self, prompt_tokens, completion_tokens):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = prompt_tokens + completion_tokens
+
+    class MockDelta:
+      def __init__(self, content=None):
+        self.content = content
+        self.tool_calls = None
+
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+
+    class MockChunk:
+      def __init__(self, choices, usage=None):
+        self.choices = choices
+        self.usage = usage
+
+    # 2. Consume tokens on model-A
+    mock_usage_a = MockUsage(prompt_tokens=100, completion_tokens=10)
+    mock_chunks_a = [
+      MockChunk([MockChoice(MockDelta(content="Response A"))], usage=mock_usage_a)
+    ]
+    session.client = mock.Mock()
+    session.client.chat.completions.create.return_value = mock_chunks_a
+    session.messages.append({"role": "user", "content": "Query A"})
+
+    session.run_llm_cycle()
+    
+    self.assertEqual(session.model_usage["model-A"]["prompt_tokens"], 100)
+    self.assertEqual(session.model_usage["model-A"]["completion_tokens"], 10)
+    self.assertEqual(session.cumulative_prompt_tokens, 100)
+    self.assertEqual(session.cumulative_completion_tokens, 10)
+
+    # 3. Switch to model-B and consume tokens
+    session.model = "model-B"
+    mock_usage_b = MockUsage(prompt_tokens=200, completion_tokens=20)
+    mock_chunks_b = [
+      MockChunk([MockChoice(MockDelta(content="Response B"))], usage=mock_usage_b)
+    ]
+    session.client.chat.completions.create.return_value = mock_chunks_b
+    session.messages.append({"role": "user", "content": "Query B"})
+
+    session.run_llm_cycle()
+
+    # Verify model-specific partitioning
+    self.assertEqual(session.model_usage["model-A"]["prompt_tokens"], 100)
+    self.assertEqual(session.model_usage["model-A"]["completion_tokens"], 10)
+    self.assertEqual(session.model_usage["model-B"]["prompt_tokens"], 200)
+    self.assertEqual(session.model_usage["model-B"]["completion_tokens"], 20)
+    
+    # Global counts should be cumulative
+    self.assertEqual(session.cumulative_prompt_tokens, 300)
+    self.assertEqual(session.cumulative_completion_tokens, 30)
+
+    # 4. Save and load session persistence
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+      tmp_path = tmp.name
+    try:
+      session.save_session(tmp_path)
+      
+      new_session = ChatbotSession(
+        provider="openrouter",
+        model="model-B",
+        context_size=1000,
+        sandbox=self.sandbox_dir
+      )
+      new_session.load_session(tmp_path)
+      
+      self.assertEqual(new_session.model_usage["model-A"]["prompt_tokens"], 100)
+      self.assertEqual(new_session.model_usage["model-B"]["prompt_tokens"], 200)
+      self.assertEqual(new_session.cumulative_prompt_tokens, 300)
+      
+      # 5. Legacy migration test
+      legacy_data = {
+        "provider": "openrouter",
+        "model": "model-legacy",
+        "cumulative_prompt_tokens": 500,
+        "cumulative_completion_tokens": 50,
+      }
+      with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(legacy_data, f)
+        
+      legacy_session = ChatbotSession(
+        provider="openrouter",
+        model="model-legacy",
+        context_size=1000,
+        sandbox=self.sandbox_dir
+      )
+      legacy_session.load_session(tmp_path)
+      
+      # Verified it migrated to the active model in the loaded legacy session
+      self.assertEqual(legacy_session.model_usage["model-legacy"]["prompt_tokens"], 500)
+      self.assertEqual(legacy_session.model_usage["model-legacy"]["completion_tokens"], 50)
+    finally:
+      if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -253,8 +253,26 @@ def show_status(session: Any):
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
   table.add_row("API Request Timeout", f"{session.api_timeout} seconds")
   table.add_row("Total Messages", str(len(session.messages)))
-  cumulative_tokens = session.cumulative_prompt_tokens + session.cumulative_completion_tokens
-  table.add_row("Session Cumulative Tokens", f"{cumulative_tokens} (Input: {session.cumulative_prompt_tokens}, Output: {session.cumulative_completion_tokens})")
+
+  # Display current model usage
+  model_usage = getattr(session, "model_usage", {})
+  cur_usage = model_usage.get(session.model, {"prompt_tokens": 0, "completion_tokens": 0})
+  cur_total = cur_usage.get("prompt_tokens", 0) + cur_usage.get("completion_tokens", 0)
+  table.add_row(f"Usage ({session.model})", f"{cur_total} (Input: {cur_usage.get('prompt_tokens', 0)}, Output: {cur_usage.get('completion_tokens', 0)})")
+
+  # Display total session usage
+  session_prompt = sum(u.get("prompt_tokens", 0) for u in model_usage.values())
+  session_completion = sum(u.get("completion_tokens", 0) for u in model_usage.values())
+  session_total = session_prompt + session_completion
+  table.add_row("Session Total Tokens", f"{session_total} (Input: {session_prompt}, Output: {session_completion})")
+
+  # Display breakdown for other models if any
+  other_models = [m for m in model_usage if m != session.model]
+  for m in other_models:
+    u = model_usage[m]
+    t = u.get("prompt_tokens", 0) + u.get("completion_tokens", 0)
+    table.add_row(f"  └─ Usage ({m})", f"{t} (Input: {u.get('prompt_tokens', 0)}, Output: {u.get('completion_tokens', 0)})")
+
   session._print(table)
 
 
@@ -314,7 +332,8 @@ def get_rich_status_bar(session: Any):
     session._cached_history_tokens = session._calculate_tokens_for_messages(session.prune_history(log=False))
 
   total_tokens = session._cached_history_tokens
-  cumulative_tokens = session.cumulative_prompt_tokens + session.cumulative_completion_tokens
+  model_usage = session.model_usage.get(session.model, {"prompt_tokens": 0, "completion_tokens": 0}) if hasattr(session, "model_usage") else {"prompt_tokens": 0, "completion_tokens": 0}
+  cumulative_tokens = model_usage.get("prompt_tokens", 0) + model_usage.get("completion_tokens", 0)
 
   table = Table(
     show_header=False,
@@ -385,7 +404,8 @@ def start_interactive_loop(session: Any):
   def get_bottom_toolbar():
     active_messages = session.prune_history(log=False)
     total_tokens = session._calculate_tokens_for_messages(active_messages)
-    cumulative_tokens = session.cumulative_prompt_tokens + session.cumulative_completion_tokens
+    model_usage = session.model_usage.get(session.model, {"prompt_tokens": 0, "completion_tokens": 0}) if hasattr(session, "model_usage") else {"prompt_tokens": 0, "completion_tokens": 0}
+    cumulative_tokens = model_usage.get("prompt_tokens", 0) + model_usage.get("completion_tokens", 0)
 
     return HTML(
       f" <b>Model:</b> <ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow> |"

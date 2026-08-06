@@ -267,6 +267,7 @@ class ChatbotSession:
     self.cumulative_prompt_tokens = 0
     self.cumulative_completion_tokens = 0
     self.token_to_char_ratio = 0.25
+    self.model_usage = {}
     self._messages = CachedList([], on_change=self._invalidate_token_cache)
     self.current_loop = 0
     default_prompt = (
@@ -1190,6 +1191,7 @@ class ChatbotSession:
       "cumulative_prompt_tokens": getattr(self, "cumulative_prompt_tokens", 0),
       "cumulative_completion_tokens": getattr(self, "cumulative_completion_tokens", 0),
       "token_to_char_ratio": getattr(self, "token_to_char_ratio", 0.25),
+      "model_usage": getattr(self, "model_usage", {}),
     }
     if self.api_key:
       session_data["api_key"] = self.api_key
@@ -1240,6 +1242,14 @@ class ChatbotSession:
     self.cumulative_prompt_tokens = session_data.get("cumulative_prompt_tokens", 0)
     self.cumulative_completion_tokens = session_data.get("cumulative_completion_tokens", 0)
     self.token_to_char_ratio = session_data.get("token_to_char_ratio", 0.25)
+    self.model_usage = session_data.get("model_usage", {})
+    if not self.model_usage and (self.cumulative_prompt_tokens > 0 or self.cumulative_completion_tokens > 0):
+      self.model_usage = {
+        self.model: {
+          "prompt_tokens": self.cumulative_prompt_tokens,
+          "completion_tokens": self.cumulative_completion_tokens
+        }
+      }
     self.init_client()
     self.load_skills()
 

@@ -308,6 +308,15 @@ def consult_oracle(self, query: str) -> str:
       self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
       self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
 
+      # Model specific usage update
+      oracle_model = self.get_oracle_model() or self.model
+      if not hasattr(self, "model_usage"):
+        self.model_usage = {}
+      if oracle_model not in self.model_usage:
+        self.model_usage[oracle_model] = {"prompt_tokens": 0, "completion_tokens": 0}
+      self.model_usage[oracle_model]["prompt_tokens"] += p_tok
+      self.model_usage[oracle_model]["completion_tokens"] += c_tok
+
       self.last_api_call_time = time.time()
       if content_accumulated:
         self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
@@ -972,6 +981,14 @@ def run_llm_cycle(self):
 
         self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
         self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
+
+        # Model specific usage update
+        if not hasattr(self, "model_usage"):
+          self.model_usage = {}
+        if self.model not in self.model_usage:
+          self.model_usage[self.model] = {"prompt_tokens": 0, "completion_tokens": 0}
+        self.model_usage[self.model]["prompt_tokens"] += p_tok
+        self.model_usage[self.model]["completion_tokens"] += c_tok
 
         logger.info(
           f"LLM call succeeded. Content size: {len(content_accumulated)} chars, "
