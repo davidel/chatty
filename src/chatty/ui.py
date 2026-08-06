@@ -388,13 +388,10 @@ def start_interactive_loop(session: Any):
     cumulative_tokens = session.cumulative_prompt_tokens + session.cumulative_completion_tokens
 
     return HTML(
-      f" <b>Chatty CLI</b> |"
-      f" <b>Provider:</b> <ansigreen>{session.provider}</ansigreen> |"
-      f" <b>Model:</b> <ansiyellow>{session.model}</ansiyellow> |"
+      f" <b>Model:</b> <ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow> |"
       f" <b>Context:</b> {total_tokens}/{session.context_size} |"
       f" <b>Usage:</b> {cumulative_tokens} |"
-      f" <b>Loops:</b> <ansicyan>{session.current_loop}/{session.max_loops}</ansicyan> |"
-      f" <b>Sandbox:</b> {session.sandbox} "
+      f" <b>Loops:</b> <ansicyan>{session.current_loop}/{session.max_loops}</ansicyan> "
     )
 
   def prompt_continuation(width, line_number, is_soft_wrap):
@@ -404,10 +401,7 @@ def start_interactive_loop(session: Any):
 
   while True:
     # Format interactive prompt dynamically
-    prompt_html = (
-      f"<ansicyan><b>AI-Sandbox</b></ansicyan> "
-      f"(<ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow>) &gt; "
-    )
+    prompt_html = "&gt; "
 
     try:
       # Read user input
