@@ -47,6 +47,9 @@ def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
         content += json.dumps(msg["tool_calls"])
       if msg.get("tool_call_id"):
         content += msg["tool_call_id"]
+      for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
+        if msg.get(field):
+          content += str(msg[field])
       total_tokens += count_tokens(content) + 12
   return total_tokens
 
@@ -323,9 +326,12 @@ def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
           f"... [TRUNCATED {truncated_len} CHARACTERS OF HISTORICAL TOOL OUTPUT] ...\n\n"
           f"{content[-half:]}"
         )
-    if cloned_msg.get("role") == "assistant" and self.provider != "openrouter":
-      for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
-        cloned_msg.pop(field, None)
+    if cloned_msg.get("role") == "assistant":
+      is_gemini = self.model and "gemini" in self.model.lower()
+      is_openrouter_gemini = (self.provider == "openrouter" and is_gemini)
+      if not is_openrouter_gemini:
+        for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
+          cloned_msg.pop(field, None)
     processed_messages.append(cloned_msg)
     
   pruned = []

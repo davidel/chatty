@@ -381,18 +381,8 @@ def start_interactive_loop(session: Any):
   ))
 
   def get_bottom_toolbar():
-    total_tokens = 0
     active_messages = session.prune_history(log=False)
-    if active_messages:
-      sys_msg = active_messages[0]
-      total_tokens += count_tokens(sys_msg.get("content") or "")
-      for msg in active_messages[1:]:
-        content = msg.get("content") or ""
-        if msg.get("tool_calls"):
-          content += json.dumps(msg["tool_calls"])
-        if msg.get("tool_call_id"):
-          content += msg["tool_call_id"]
-        total_tokens += count_tokens(content) + 12
+    total_tokens = session._calculate_tokens_for_messages(active_messages)
 
     return HTML(
       f" <b>Chatty CLI</b> |"
