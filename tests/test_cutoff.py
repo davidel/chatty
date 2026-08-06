@@ -404,13 +404,13 @@ class TestReasoningAccumulation(unittest.TestCase):
     self.assertEqual(last_msg["thought_signature"], "sig123")
 
     # Verify that when pruning history (preparing payload for next turn),
-    # the reasoning fields are stripped for non-Gemini models on OpenRouter
+    # verbose reasoning fields are stripped for OpenRouter, but thought_signature is kept
     pruned = session.prune_history(log=False)
     pruned_msg = pruned[-1]
     self.assertEqual(pruned_msg["role"], "assistant")
     self.assertEqual(pruned_msg["content"], "Hello!")
     self.assertNotIn("reasoning", pruned_msg)
-    self.assertNotIn("thought_signature", pruned_msg)
+    self.assertIn("thought_signature", pruned_msg)
 
   def test_cumulative_token_tracking(self):
     import unittest.mock as mock

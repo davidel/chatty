@@ -352,11 +352,10 @@ def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
           f"{content[-half:]}"
         )
     if cloned_msg.get("role") == "assistant":
-      is_gemini = self.model and "gemini" in self.model.lower()
-      is_openrouter_gemini = (self.provider == "openrouter" and is_gemini)
-      if not is_openrouter_gemini:
-        for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
-          cloned_msg.pop(field, None)
+      for field in ["reasoning", "reasoning_content", "reasoning_details"]:
+        cloned_msg.pop(field, None)
+      if self.provider != "openrouter":
+        cloned_msg.pop("thought_signature", None)
     processed_messages.append(cloned_msg)
     
   pruned = []
