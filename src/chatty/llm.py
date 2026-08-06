@@ -261,7 +261,12 @@ def consult_oracle(self, query: str) -> str:
         if extra_body:
           kwargs["extra_body"] = extra_body
         stream = self._create_completion(**kwargs)
+        usage_metadata = None
         for chunk in stream:
+          if hasattr(chunk, "usage") and chunk.usage:
+            usage_metadata = chunk.usage
+          elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+            usage_metadata = chunk.model_extra["usage"]
           if not chunk.choices:
             continue
           choice = chunk.choices[0]
@@ -270,6 +275,26 @@ def consult_oracle(self, query: str) -> str:
             content_accumulated += delta.content
             panels[0]["content"] = content_accumulated
             live.update(LiveScreenLayout(panels, None))
+      
+      # Update cumulative token counts for Oracle
+      p_tok = None
+      c_tok = None
+      if usage_metadata:
+        p_tok = getattr(usage_metadata, "prompt_tokens", None)
+        if p_tok is None and isinstance(usage_metadata, dict):
+          p_tok = usage_metadata.get("prompt_tokens")
+        c_tok = getattr(usage_metadata, "completion_tokens", None)
+        if c_tok is None and isinstance(usage_metadata, dict):
+          c_tok = usage_metadata.get("completion_tokens")
+
+      if p_tok is None:
+        p_tok = self._calculate_tokens_for_messages(messages)
+      if c_tok is None:
+        c_tok = count_tokens(content_accumulated)
+
+      self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
+      self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
+
       self.last_api_call_time = time.time()
       if content_accumulated:
         self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
@@ -903,6 +928,29 @@ def run_llm_cycle(self):
           self._print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
         
         logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
+        
+        # Update cumulative token counts
+        p_tok = None
+        c_tok = None
+        if usage_metadata:
+          p_tok = getattr(usage_metadata, "prompt_tokens", None)
+          if p_tok is None and isinstance(usage_metadata, dict):
+            p_tok = usage_metadata.get("prompt_tokens")
+          c_tok = getattr(usage_metadata, "completion_tokens", None)
+          if c_tok is None and isinstance(usage_metadata, dict):
+            c_tok = usage_metadata.get("completion_tokens")
+
+        if p_tok is None:
+          p_tok = self._calculate_tokens_for_messages(active_messages)
+        if c_tok is None:
+          out_content = content_accumulated or ""
+          reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
+                                   extra_fields_accumulated.get("reasoning") or "")
+          c_tok = count_tokens(out_content) + count_tokens(reasoning_accumulated)
+
+        self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
+        self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
+
         self._log_llm_response_summary(
           content_accumulated=content_accumulated,
           tool_calls_accumulated=tool_calls_accumulated,

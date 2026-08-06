@@ -412,6 +412,53 @@ class TestReasoningAccumulation(unittest.TestCase):
     self.assertNotIn("reasoning", pruned_msg)
     self.assertNotIn("thought_signature", pruned_msg)
 
+  def test_cumulative_token_tracking(self):
+    import unittest.mock as mock
+    from chatty.session import ChatbotSession
+
+    session = ChatbotSession(
+      provider="openrouter",
+      model="google/gemini-2.5-flash",
+      context_size=10000,
+      sandbox="/tmp"
+    )
+
+    class MockUsage:
+      def __init__(self, prompt_tokens=150, completion_tokens=50):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = prompt_tokens + completion_tokens
+
+    class MockDelta:
+      def __init__(self, content=None):
+        self.content = content
+        self.tool_calls = None
+
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+
+    class MockChunk:
+      def __init__(self, choices, usage=None):
+        self.choices = choices
+        self.usage = usage
+
+    mock_usage = MockUsage()
+    mock_chunks = [
+      MockChunk([MockChoice(MockDelta(content="Hello!"))], usage=mock_usage)
+    ]
+
+    session.client = mock.Mock()
+    session.client.chat.completions.create.return_value = mock_chunks
+
+    self.assertEqual(session.cumulative_prompt_tokens, 0)
+    self.assertEqual(session.cumulative_completion_tokens, 0)
+
+    session.run_llm_cycle()
+
+    self.assertEqual(session.cumulative_prompt_tokens, 150)
+    self.assertEqual(session.cumulative_completion_tokens, 50)
+
   def test_console_printing_on_stream_completion(self):
     import unittest.mock as mock
     from chatty.session import ChatbotSession

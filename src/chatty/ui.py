@@ -253,6 +253,8 @@ def show_status(session: Any):
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
   table.add_row("API Request Timeout", f"{session.api_timeout} seconds")
   table.add_row("Total Messages", str(len(session.messages)))
+  cumulative_tokens = session.cumulative_prompt_tokens + session.cumulative_completion_tokens
+  table.add_row("Session Cumulative Tokens", f"{cumulative_tokens} (Input: {session.cumulative_prompt_tokens}, Output: {session.cumulative_completion_tokens})")
   session._print(table)
 
 
@@ -383,12 +385,14 @@ def start_interactive_loop(session: Any):
   def get_bottom_toolbar():
     active_messages = session.prune_history(log=False)
     total_tokens = session._calculate_tokens_for_messages(active_messages)
+    cumulative_tokens = session.cumulative_prompt_tokens + session.cumulative_completion_tokens
 
     return HTML(
       f" <b>Chatty CLI</b> |"
       f" <b>Provider:</b> <ansigreen>{session.provider}</ansigreen> |"
       f" <b>Model:</b> <ansiyellow>{session.model}</ansiyellow> |"
-      f" <b>Tokens:</b> {total_tokens}/{session.context_size} |"
+      f" <b>Context:</b> {total_tokens}/{session.context_size} |"
+      f" <b>Usage:</b> {cumulative_tokens} |"
       f" <b>Loops:</b> <ansicyan>{session.current_loop}/{session.max_loops}</ansicyan> |"
       f" <b>Sandbox:</b> {session.sandbox} "
     )

@@ -262,6 +262,8 @@ class ChatbotSession:
     
     # Internal state
     self._cached_history_tokens = None
+    self.cumulative_prompt_tokens = 0
+    self.cumulative_completion_tokens = 0
     self._messages = CachedList([], on_change=self._invalidate_token_cache)
     self.current_loop = 0
     default_prompt = (
@@ -1174,6 +1176,8 @@ class ChatbotSession:
       "tool_calls_count": self.tool_calls_count,
       "external_binaries_count": self.external_binaries_count,
       "external_binaries_breakdown": self.external_binaries_breakdown,
+      "cumulative_prompt_tokens": getattr(self, "cumulative_prompt_tokens", 0),
+      "cumulative_completion_tokens": getattr(self, "cumulative_completion_tokens", 0),
     }
     if self.api_key:
       session_data["api_key"] = self.api_key
@@ -1221,6 +1225,8 @@ class ChatbotSession:
       self.api_key = session_data["api_key"]
     if "url" in session_data:
       self.url = session_data["url"]
+    self.cumulative_prompt_tokens = session_data.get("cumulative_prompt_tokens", 0)
+    self.cumulative_completion_tokens = session_data.get("cumulative_completion_tokens", 0)
     self.init_client()
     self.load_skills()
 
