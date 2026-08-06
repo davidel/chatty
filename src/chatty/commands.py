@@ -330,9 +330,9 @@ def cmd_history(session: Any, arg: str) -> bool:
     display_text += content
     if "tool_calls" in msg:
       display_text += f"\n[Calls tools: {[tc['function']['name'] for tc in msg['tool_calls']]}]"
-    tok = count_tokens(content)
+    tok = session.count_tokens_estimate(content)
     if reasoning:
-      tok += count_tokens(reasoning)
+      tok += session.count_tokens_estimate(reasoning)
     console.print(f" {idx + 1}. [bold]{role}[/bold]: {display_text[:80].replace('\n', ' ')}... ({tok} tokens)")
   return True
 

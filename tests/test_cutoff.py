@@ -743,6 +743,79 @@ class TestUrlCaching(unittest.TestCase):
     # After exiting context block, the directory should be cleaned up automatically
     self.assertFalse(os.path.exists(cache_dir))
 
+  def test_dynamic_token_ratio_estimation(self):
+    import json
+    import tempfile
+    import unittest.mock as mock
+    from chatty.session import ChatbotSession
+
+    session = ChatbotSession(
+      provider="openrouter",
+      model="mock-model",
+      context_size=1000,
+      sandbox=self.sandbox_dir
+    )
+
+    # 1. Check initial state
+    self.assertEqual(session.token_to_char_ratio, 0.25)
+    self.assertEqual(session.count_tokens_estimate("hello world"), 2)
+
+    # 2. Simulate run_llm_cycle success to update ratio via moving average
+    class MockUsage:
+      def __init__(self, prompt_tokens, completion_tokens):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = prompt_tokens + completion_tokens
+
+    class MockDelta:
+      def __init__(self, content=None):
+        self.content = content
+        self.tool_calls = None
+
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+
+    class MockChunk:
+      def __init__(self, choices, usage=None):
+        self.choices = choices
+        self.usage = usage
+
+    mock_usage = MockUsage(prompt_tokens=100, completion_tokens=10)
+    mock_chunks = [
+      MockChunk([MockChoice(MockDelta(content="Hello!"))], usage=mock_usage)
+    ]
+
+    session.client = mock.Mock()
+    session.client.chat.completions.create.return_value = mock_chunks
+    session.messages.append({"role": "user", "content": "a" * 120})
+
+    with mock.patch("json.dumps", return_value="a" * 200):
+      session.run_llm_cycle()
+
+    # Dynamic ratio should update: 0.8 * 0.25 + 0.2 * (100 / 200) = 0.2 + 0.1 = 0.3
+    self.assertAlmostEqual(session.token_to_char_ratio, 0.3)
+    self.assertEqual(session.count_tokens_estimate("hello world"), 3)
+
+    # 3. Test saving and loading persistence
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+      tmp_path = tmp.name
+    try:
+      session.save_session(tmp_path)
+      
+      new_session = ChatbotSession(
+        provider="openrouter",
+        model="mock-model",
+        context_size=1000,
+        sandbox=self.sandbox_dir
+      )
+      new_session.load_session(tmp_path)
+      self.assertAlmostEqual(new_session.token_to_char_ratio, 0.3)
+      self.assertEqual(new_session.count_tokens_estimate("hello world"), 3)
+    finally:
+      if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+
 
 if __name__ == "__main__":
     unittest.main()

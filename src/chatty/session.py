@@ -23,6 +23,7 @@ from chatty.llm import (
   get_oracle_model,
   consult_oracle,
   _clean_assistant_message,
+  count_tokens_estimate,
   prune_history,
   _log_llm_request,
   _log_llm_response_summary,
@@ -265,6 +266,7 @@ class ChatbotSession:
     self._cached_history_tokens = None
     self.cumulative_prompt_tokens = 0
     self.cumulative_completion_tokens = 0
+    self.token_to_char_ratio = 0.25
     self._messages = CachedList([], on_change=self._invalidate_token_cache)
     self.current_loop = 0
     default_prompt = (
@@ -706,6 +708,10 @@ class ChatbotSession:
   def _clean_assistant_message(self, msg: Dict[str, Any]) -> None:
     """Strips verbose thinking/reasoning metadata from the assistant message before sending to the LLM API."""
     return _clean_assistant_message(self, msg)
+
+  def count_tokens_estimate(self, text: str) -> int:
+    """Estimates the token count of a string using the dynamic token_to_char_ratio."""
+    return count_tokens_estimate(self, text)
 
   def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
     """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
@@ -1183,6 +1189,7 @@ class ChatbotSession:
       "external_binaries_breakdown": self.external_binaries_breakdown,
       "cumulative_prompt_tokens": getattr(self, "cumulative_prompt_tokens", 0),
       "cumulative_completion_tokens": getattr(self, "cumulative_completion_tokens", 0),
+      "token_to_char_ratio": getattr(self, "token_to_char_ratio", 0.25),
     }
     if self.api_key:
       session_data["api_key"] = self.api_key
@@ -1232,6 +1239,7 @@ class ChatbotSession:
       self.url = session_data["url"]
     self.cumulative_prompt_tokens = session_data.get("cumulative_prompt_tokens", 0)
     self.cumulative_completion_tokens = session_data.get("cumulative_completion_tokens", 0)
+    self.token_to_char_ratio = session_data.get("token_to_char_ratio", 0.25)
     self.init_client()
     self.load_skills()
 

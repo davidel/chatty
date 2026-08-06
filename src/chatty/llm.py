@@ -36,11 +36,17 @@ def _invalidate_token_cache(self):
   self._cached_history_tokens = None
 
 
+def count_tokens_estimate(self, text: str) -> int:
+  """Estimates the token count of a string using the dynamic token_to_char_ratio."""
+  ratio = getattr(self, "token_to_char_ratio", 0.25)
+  return int(len(text) * ratio)
+
+
 def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
   total_tokens = 0
   if messages:
     sys_msg = messages[0]
-    total_tokens += count_tokens(sys_msg.get("content") or "")
+    total_tokens += self.count_tokens_estimate(sys_msg.get("content") or "")
     for msg in messages[1:]:
       content = msg.get("content") or ""
       if msg.get("tool_calls"):
@@ -50,7 +56,7 @@ def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
       for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
         if msg.get(field):
           content += str(msg[field])
-      total_tokens += count_tokens(content) + 12
+      total_tokens += self.count_tokens_estimate(content) + 12
   return total_tokens
 
 
@@ -289,8 +295,15 @@ def consult_oracle(self, query: str) -> str:
 
       if p_tok is None:
         p_tok = self._calculate_tokens_for_messages(messages)
+      else:
+        # Refine token_to_char_ratio using Moving Average
+        prompt_chars = len(json.dumps(messages))
+        if prompt_chars > 0:
+          current_ratio = p_tok / prompt_chars
+          self.token_to_char_ratio = 0.8 * self.token_to_char_ratio + 0.2 * current_ratio
+
       if c_tok is None:
-        c_tok = count_tokens(content_accumulated)
+        c_tok = self.count_tokens_estimate(content_accumulated)
 
       self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
       self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
@@ -338,7 +351,7 @@ def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
   system_msg = {"role": "system", "content": sys_prompt}
   if self.prompt_caching:
     system_msg["cache_control"] = {"type": "ephemeral"}
-  sys_tokens = count_tokens(sys_prompt)
+  sys_tokens = self.count_tokens_estimate(sys_prompt)
   
   if sys_tokens >= self.context_size:
     return [system_msg]
@@ -375,7 +388,7 @@ def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
     if msg.get("tool_call_id"):
       content += msg["tool_call_id"]
       
-    msg_tokens = count_tokens(content) + 12  # add safety overhead per message structure
+    msg_tokens = self.count_tokens_estimate(content) + 12  # add safety overhead per message structure
     
     if accumulated_tokens + msg_tokens > self.context_size:
       break
@@ -944,11 +957,18 @@ def run_llm_cycle(self):
 
         if p_tok is None:
           p_tok = self._calculate_tokens_for_messages(active_messages)
+        else:
+          # Refine token_to_char_ratio using Moving Average
+          prompt_chars = len(json.dumps(active_messages))
+          if prompt_chars > 0:
+            current_ratio = p_tok / prompt_chars
+            self.token_to_char_ratio = 0.8 * self.token_to_char_ratio + 0.2 * current_ratio
+
         if c_tok is None:
           out_content = content_accumulated or ""
           reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
                                    extra_fields_accumulated.get("reasoning") or "")
-          c_tok = count_tokens(out_content) + count_tokens(reasoning_accumulated)
+          c_tok = self.count_tokens_estimate(out_content) + self.count_tokens_estimate(reasoning_accumulated)
 
         self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
         self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
