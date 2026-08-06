@@ -931,8 +931,6 @@ def run_llm_cycle(self):
           logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")
           self._print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
         
-        logger.info(f"LLM call succeeded. Content size: {len(content_accumulated)} chars, Tool calls count: {len(tool_calls_accumulated)}")
-        
         # Update cumulative token counts
         p_tok = None
         c_tok = None
@@ -954,6 +952,13 @@ def run_llm_cycle(self):
 
         self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
         self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
+
+        logger.info(
+          f"LLM call succeeded. Content size: {len(content_accumulated)} chars, "
+          f"Tool calls: {len(tool_calls_accumulated)}, "
+          f"Tokens this call: {p_tok} prompt, {c_tok} completion. "
+          f"Session cumulative: {self.cumulative_prompt_tokens} prompt, {self.cumulative_completion_tokens} completion."
+        )
 
         self._log_llm_response_summary(
           content_accumulated=content_accumulated,
