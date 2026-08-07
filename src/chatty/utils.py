@@ -504,3 +504,35 @@ def repair_json(json_str: str) -> str:
   return s
 
 
+def format_short_number(val: float) -> str:
+  """Formats a number using metric/SI postfixes (K, M, G, T)."""
+  if val < 0:
+    return "-" + format_short_number(-val)
+  if val < 1000:
+    if isinstance(val, float) and val.is_integer():
+      return str(int(val))
+    return str(val)
+  elif val < 1_000_000:
+    num = val / 1000
+    res = f"{num:.2f}"
+    if "." in res:
+      res = res.rstrip("0").rstrip(".")
+    return f"{res}K"
+  elif val < 1_000_000_000:
+    num = val / 1_000_000
+    res = f"{num:.2f}"
+    if "." in res:
+      res = res.rstrip("0").rstrip(".")
+    return f"{res}M"
+  elif val < 1_000_000_000_000:
+    num = val / 1_000_000_000
+    res = f"{num:.2f}"
+    if "." in res:
+      res = res.rstrip("0").rstrip(".")
+    return f"{res}G"
+  else:
+    num = val / 1_000_000_000_000
+    res = f"{num:.2f}"
+    if "." in res:
+      res = res.rstrip("0").rstrip(".")
+    return f"{res}T"

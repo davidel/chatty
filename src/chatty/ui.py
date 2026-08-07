@@ -22,7 +22,7 @@ from rich.columns import Columns
 from rich.segment import Segment
 
 from chatty.tools import TOOLS_SCHEMA
-from chatty.utils import count_tokens
+from chatty.utils import count_tokens, format_short_number
 
 logger = logging.getLogger("chatty")
 console = Console()
@@ -348,7 +348,7 @@ def get_rich_status_bar(session: Any):
   table.add_row(Text.from_markup(
     f" [bold]Model:[/bold] [green]{session.provider}[/green]:[yellow]{session.model}[/yellow] |"
     f" [bold]Context:[/bold] {total_tokens}/{session.context_size} |"
-    f" [bold]Usage:[/bold] {cumulative_tokens} |"
+    f" [bold]Usage:[/bold] {format_short_number(cumulative_tokens)} |"
     f" [bold]Ratio:[/bold] {session.token_to_char_ratio:.2f} |"
     f" [bold]Loops:[/bold] [cyan]{session.current_loop}/{session.max_loops}[/cyan] "
   ))
@@ -410,7 +410,7 @@ def start_interactive_loop(session: Any):
     return HTML(
       f" <b>Model:</b> <ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow> |"
       f" <b>Context:</b> {total_tokens}/{session.context_size} |"
-      f" <b>Usage:</b> {cumulative_tokens} |"
+      f" <b>Usage:</b> {format_short_number(cumulative_tokens)} |"
       f" <b>Ratio:</b> {session.token_to_char_ratio:.2f} |"
       f" <b>Loops:</b> <ansicyan>{session.current_loop}/{session.max_loops}</ansicyan> "
     )
