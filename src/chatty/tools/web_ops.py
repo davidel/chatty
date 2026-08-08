@@ -5,7 +5,7 @@ import re
 from urllib.parse import quote_plus, unquote
 from rich.console import Console
 
-from chatty.utils import tool_fetch_url
+from chatty.utils import tool_fetch_url, get_random_user_agent_headers
 
 console = Console()
 
@@ -134,9 +134,7 @@ def tool_search_web(query: str, max_results: int = 10) -> str:
       # Fallback to Yahoo scraper
       backend_used = "Yahoo HTML Scraper (Fallback)"
       url = f"https://search.yahoo.com/search?p={quote_plus(query)}"
-      headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
-      }
+      headers = get_random_user_agent_headers()
       r = requests.get(url, headers=headers, timeout=10)
       r.raise_for_status()
       
