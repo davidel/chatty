@@ -576,7 +576,7 @@ TOOLS_SCHEMA = [
         "properties": {
           "query": {
             "type": "string",
-            "description": "The specific question, prompt, or explanation of the stuck state to ask the oracle model. Include all necessary context, code snippets, or logs."
+            "description": "The specific question, prompt, or explanation of the stuck state to ask the oracle model. Include all necessary context. You can reference any local file using the '@PATH' syntax (e.g., '@src/main.py'), and its full contents will be automatically expanded and included in the query."
           }
         },
         "required": ["query"]

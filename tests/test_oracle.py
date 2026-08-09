@@ -169,3 +169,60 @@ class TestOracle(unittest.TestCase):
     err_msg3 = "Invalid request parameter: max_tokens"
     exc3 = openai.APIStatusError(message=err_msg3, response=mock_response, body=None)
     self.assertFalse(self.session._is_retryable_exception(exc3))
+
+  @patch("chatty.session.openai.OpenAI")
+  def test_ask_oracle_with_file_expansion(self, mock_openai):
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+    chunk = MagicMock()
+    chunk.choices = [MagicMock(delta=MagicMock(content="Oracle suggestion"))]
+    mock_client.chat.completions.create.return_value = [chunk]
+
+    # Create dummy files in the sandbox
+    file_path = os.path.join(self.sandbox_dir, "hello.txt")
+    with open(file_path, "w", encoding="utf-8") as f:
+      f.write("Hello, World!")
+
+    other_file_path = os.path.join(self.sandbox_dir, "test.py")
+    with open(other_file_path, "w", encoding="utf-8") as f:
+      f.write("print('test')")
+
+    # Execute consult_oracle with @hello.txt and @test.py and check substitution
+    query = "Check this @hello.txt and also @test.py. What about @nonexistent.txt or non-file @someone?"
+    res = self.session.consult_oracle(query)
+
+    self.assertEqual(res, "Oracle suggestion")
+    mock_client.chat.completions.create.assert_called_once()
+    args, kwargs = mock_client.chat.completions.create.call_args
+    sent_query = kwargs["messages"][1]["content"]
+
+    self.assertIn("--- START OF FILE hello.txt ---", sent_query)
+    self.assertIn("Hello, World!", sent_query)
+    self.assertIn("--- END OF FILE hello.txt ---", sent_query)
+    self.assertIn("--- START OF FILE test.py ---", sent_query)
+    self.assertIn("print('test')", sent_query)
+    self.assertIn("--- END OF FILE test.py ---", sent_query)
+    self.assertIn("@nonexistent.txt", sent_query)
+    self.assertNotIn("--- START OF FILE nonexistent.txt ---", sent_query)
+    self.assertIn("@someone", sent_query)
+
+  @patch("chatty.session.openai.OpenAI")
+  def test_ask_oracle_with_file_expansion_outside_sandbox(self, mock_openai):
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+    chunk = MagicMock()
+    chunk.choices = [MagicMock(delta=MagicMock(content="Oracle suggestion"))]
+    mock_client.chat.completions.create.return_value = [chunk]
+
+    # Reference file outside sandbox, e.g. ../outside.txt
+    query = "Check @../outside.txt"
+    res = self.session.consult_oracle(query)
+
+    self.assertEqual(res, "Oracle suggestion")
+    mock_client.chat.completions.create.assert_called_once()
+    args, kwargs = mock_client.chat.completions.create.call_args
+    sent_query = kwargs["messages"][1]["content"]
+
+    self.assertIn("[Error reading file ../outside.txt: Access Denied:", sent_query)

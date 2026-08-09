@@ -230,11 +230,37 @@ def get_oracle_model(self) -> Optional[str]:
   return getattr(self.config, "oracle_model", None)
 
 
+def _expand_query_files(self, query: str) -> str:
+  """
+  Finds @PATH references in the query, resolves them within the sandbox,
+  and replaces them with the file's content (if the file exists and is readable).
+  """
+  from chatty.safety import get_safe_path
+  pattern = re.compile(r'(?<![a-zA-Z0-9_])@([a-zA-Z0-9_\-\.\/]*[a-zA-Z0-9_\-])')
+
+  def replace_match(match):
+    path = match.group(1)
+    try:
+      if not getattr(self, "sandbox", None):
+        return match.group(0)
+      safe_path = get_safe_path(self.sandbox, path, write=False)
+      if os.path.isfile(safe_path):
+        with open(safe_path, 'r', encoding='utf-8', errors='replace') as f:
+          content = f.read()
+        return f"\n--- START OF FILE {path} ---\n{content}\n--- END OF FILE {path} ---\n"
+    except Exception as e:
+      return f"\n[Error reading file {path}: {str(e)}]\n"
+    return match.group(0)
+
+  return pattern.sub(replace_match, query)
+
+
 def consult_oracle(self, query: str) -> str:
   """Consults an oracle model for suggestions/assistance."""
   oracle_model = self.get_oracle_model()
   if not oracle_model:
     return "Oracle is not configured. Ask the user to configure an oracle model."
+  expanded_query = _expand_query_files(self, query)
   messages = [
     {
       "role": "system",
@@ -247,7 +273,7 @@ def consult_oracle(self, query: str) -> str:
     },
     {
       "role": "user",
-      "content": query
+      "content": expanded_query
     }
   ]
   logger.info(f"Consulting oracle (model={oracle_model}) with query: {query}")
