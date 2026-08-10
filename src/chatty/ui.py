@@ -227,7 +227,7 @@ def show_help(session: Any):
   table.add_row("/tool_stats", "Show statistics on tool and external binary calls")
   table.add_row("/provider [ollama|openrouter]", "View or switch the LLM backend provider")
   table.add_row("/model [ID|name]", "View or switch the current LLM model by ID or name")
-  table.add_row("/models [add <name> | remove <ID/name>]", "List, add, or remove LLM models in the session")
+  table.add_row("/models [add <name> | remove <ID/name> | available [--refresh] | search <query>]", "List, add, remove, or search/list available LLM models in the session")
   table.add_row("/oracle [name]", "View or switch the oracle model used for suggestions")
   table.add_row("/sandbox [path]", "View or change the sandbox directory path")
   table.add_row("/context [tokens]", "View or modify the history token limit")

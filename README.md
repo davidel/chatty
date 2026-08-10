@@ -137,7 +137,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/tool_stats` | None | Renders execution statistics (call counts, failures, and breakdowns for tools and binaries). |
 | `/provider` | `[name]` | View current provider or switch backend on the fly. Accepts standard or custom provider names (e.g., `ollama`, `openrouter`, `anthropic`, `gemini`, `api.deepseek.com`). |
 | `/model` | `[ID\|name]` | View active model name or switch to another model by name or 1-based index/ID. |
-| `/models` | `[add <name>\|remove <ID\|name>]` | List currently loaded models, or add/remove them dynamically. |
+| `/models` | `[add <name>\|remove <ID\|name>\|available [--refresh]\|search <query>]` | List, add, remove, or search/list available LLM models in the session. |
 | `/oracle` | `[name]` | View active oracle model name or switch to another oracle model by name. |
 | `/sandbox` | `[path]` | View sandbox path or change it. Instantly loads any skills found in the new sandbox. |
 | `/whitelist` / `/permissions` | `[add <path> [ro\|rw] \| remove <path> \| clear]` | View or manage whitelisted out-of-sandbox paths. |
