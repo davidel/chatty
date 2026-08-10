@@ -1219,3 +1219,97 @@ def run_llm_cycle(self):
   if loop_count >= max_tool_loops:
     self._print("[bold red]Reached maximum sequential tool loop executions. Breaking cycle.[/bold red]")
   self.current_loop = 0
+
+
+def get_cache_filepath():
+  home = os.path.expanduser("~")
+  cache_dir = os.path.join(home, ".gemini", "antigravity-cli")
+  os.makedirs(cache_dir, exist_ok=True)
+  return os.path.join(cache_dir, "openrouter_models_cache.json")
+
+
+def load_cached_models() -> Optional[List[Dict[str, Any]]]:
+  cache_path = get_cache_filepath()
+  if os.path.exists(cache_path):
+    try:
+      with open(cache_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        # Invalidate cache if older than 24 hours
+        if time.time() - data.get("timestamp", 0) < 86400:
+          return data.get("models")
+    except Exception:
+      pass
+  return None
+
+
+def save_cached_models(models: List[Dict[str, Any]]):
+  cache_path = get_cache_filepath()
+  try:
+    with open(cache_path, "w", encoding="utf-8") as f:
+      json.dump({"timestamp": time.time(), "models": models}, f)
+  except Exception:
+    pass
+
+
+def fetch_available_models(session, force_refresh=False) -> List[Dict[str, Any]]:
+  """Fetches available models depending on the active provider."""
+  if session.provider == "openrouter":
+    if not force_refresh:
+      cached = load_cached_models()
+      if cached is not None:
+        return cached
+
+    url = "https://openrouter.ai/api/v1/models?sort=most-popular"
+    headers = {}
+    key = session.api_key or os.environ.get("OPENROUTER_API_KEY")
+    if key and key != "missing_api_key":
+      headers["Authorization"] = f"Bearer {key}"
+
+    try:
+      import urllib.request
+      req = urllib.request.Request(url, headers=headers)
+      with urllib.request.urlopen(req, timeout=10) as response:
+        data = json.loads(response.read().decode())
+        models = [
+          {
+            "id": m["id"],
+            "name": m["name"],
+            "context": m.get("context_length"),
+            "pricing_input": float(m.get("pricing", {}).get("prompt", 0)) * 1e6,
+            "pricing_output": float(m.get("pricing", {}).get("completion", 0)) * 1e6,
+          }
+          for m in data.get("data", [])
+        ]
+        save_cached_models(models)
+        return models
+    except Exception as e:
+      logger.error(f"Error fetching OpenRouter models: {e}")
+      return []
+
+  elif session.provider == "ollama":
+    base_url = session.url or "http://localhost:11434/v1"
+    if base_url.endswith("/v1"):
+      api_url = base_url[:-3] + "/api/tags"
+    else:
+      api_url = base_url.rstrip("/") + "/api/tags"
+
+    try:
+      import urllib.request
+      req = urllib.request.Request(api_url)
+      with urllib.request.urlopen(req, timeout=5) as response:
+        data = json.loads(response.read().decode())
+        return [
+          {
+            "id": m["name"],
+            "name": m["name"].split(":")[0],
+            "size": m.get("size", 0),
+            "details": m.get("details", {})
+          }
+          for m in data.get("models", [])
+        ]
+    except Exception as e:
+      logger.error(f"Error fetching Ollama models: {e}")
+      return []
+
+  return []
+

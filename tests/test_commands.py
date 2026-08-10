@@ -202,6 +202,21 @@ class TestCommandsRegistry(unittest.TestCase):
     completions_normal = list(completer.get_completions(Document("look at non_existent_file"), None))
     self.assertEqual(len(completions_normal), 0)
 
+    # 6. Test model name auto-completion under /models add and /model
+    self.session.available_models = [
+      {"id": "openai/gpt-4o", "name": "GPT-4o"},
+      {"id": "google/gemini-flash-1.5", "name": "Gemini"},
+    ]
+    completer_with_session = ChattyCompleter(["/exit", "/models", "/model"], session=self.session)
+    
+    completions_model = list(completer_with_session.get_completions(Document("/models add openai/"), None))
+    self.assertEqual(len(completions_model), 1)
+    self.assertEqual(completions_model[0].text, "openai/gpt-4o")
+    
+    completions_model_short = list(completer_with_session.get_completions(Document("/model google/"), None))
+    self.assertEqual(len(completions_model_short), 1)
+    self.assertEqual(completions_model_short[0].text, "google/gemini-flash-1.5")
+
 
 class TestCompressCommand(unittest.TestCase):
 
@@ -337,6 +352,60 @@ class TestCompressCommand(unittest.TestCase):
     # Negative integer
     res = cmd_compress(self.session, "-1")
     self.assertTrue(res)
+
+  def test_cmd_models_available_and_search(self):
+    # Setup test models in session
+    self.session.provider = "openrouter"
+    self.session.available_models = [
+      {"id": "openai/gpt-4o", "name": "GPT-4o", "context": 128000, "pricing_input": 5.0, "pricing_output": 15.0},
+      {"id": "google/gemini-flash-1.5", "name": "Gemini Flash 1.5", "context": 1000000, "pricing_input": 0.075, "pricing_output": 0.3},
+      {"id": "meta-llama/llama-3-8b", "name": "Llama 3 8b", "context": 8192, "pricing_input": 0.15, "pricing_output": 0.15},
+    ]
+
+    # Test openrouter available command
+    self.assertTrue(cmd_models(self.session, "available"))
+
+    # Test openrouter search command
+    self.assertTrue(cmd_models(self.session, "search gemini"))
+    self.assertTrue(cmd_models(self.session, "search non_existent_model"))
+
+    # Test ollama available command
+    self.session.provider = "ollama"
+    self.session.available_models = [
+      {"id": "llama3:latest", "name": "llama3", "size": int(4.7 * (1024**3)), "details": {"quantization_level": "Q4_K_M"}},
+      {"id": "mistral:latest", "name": "mistral", "size": int(4.1 * (1024**3)), "details": {"quantization_level": "Q4_0"}},
+    ]
+    self.assertTrue(cmd_models(self.session, "available"))
+    self.assertTrue(cmd_models(self.session, "search mistral"))
+
+  def test_fetch_available_models(self):
+    from chatty.llm import fetch_available_models
+    import unittest.mock as mock
+
+    # Mock urllib.request.urlopen
+    with mock.patch("urllib.request.urlopen") as mock_urlopen:
+      # Mock openrouter API response
+      self.session.provider = "openrouter"
+      self.session.api_key = "dummy_key"
+      mock_response = mock.Mock()
+      mock_response.read.return_value = b'{"data": [{"id": "model-1", "name": "Model 1", "context_length": 4096, "pricing": {"prompt": "0.000001", "completion": "0.000002"}}]}'
+      mock_urlopen.return_value.__enter__.return_value = mock_response
+
+      models = fetch_available_models(self.session, force_refresh=True)
+      self.assertEqual(len(models), 1)
+      self.assertEqual(models[0]["id"], "model-1")
+      self.assertEqual(models[0]["pricing_input"], 1.0)
+      
+      # Mock ollama API response
+      self.session.provider = "ollama"
+      self.session.url = "http://localhost:11434"
+      mock_response_ollama = mock.Mock()
+      mock_response_ollama.read.return_value = b'{"models": [{"name": "llama3:latest", "size": 4000000000, "details": {"quantization_level": "Q4"}}]}'
+      mock_urlopen.return_value.__enter__.return_value = mock_response_ollama
+      
+      models_ollama = fetch_available_models(self.session)
+      self.assertEqual(len(models_ollama), 1)
+      self.assertEqual(models_ollama[0]["id"], "llama3:latest")
 
 
 if __name__ == "__main__":

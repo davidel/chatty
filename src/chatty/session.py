@@ -27,8 +27,10 @@ from chatty.llm import (
   prune_history,
   _log_llm_request,
   _log_llm_response_summary,
-  run_llm_cycle
+  run_llm_cycle,
+  fetch_available_models
 )
+
 
 import openai
 from rich.console import Console, Group
@@ -340,7 +342,10 @@ class ChatbotSession:
     os.chdir(self.sandbox)
     
     # Initialize client
+    self.available_models = []
+    self._models_loading = False
     self.init_client()
+    self.update_available_models_async()
     
     # Landlock sandboxing support
     self.landlock_bin = None
@@ -626,6 +631,23 @@ class ChatbotSession:
   def init_client(self):
     """Initializes or updates the OpenAI client based on active settings."""
     return init_client(self)
+
+  def update_available_models_async(self, force_refresh=False):
+    import threading
+    if self._models_loading:
+      return
+    self._models_loading = True
+    
+    def fetch_thread():
+      try:
+        models = fetch_available_models(self, force_refresh=force_refresh)
+        self.available_models = models
+      except Exception as e:
+        logger.error(f"Background models fetch error: {e}")
+      finally:
+        self._models_loading = False
+        
+    threading.Thread(target=fetch_thread, daemon=True).start()
 
   def _create_completion(self, **kwargs):
     return _create_completion(self, **kwargs)

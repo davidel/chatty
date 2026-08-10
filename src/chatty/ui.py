@@ -151,7 +151,8 @@ def optional_live(renderable, console, enabled=True, **kwargs):
 
 
 class ChattyCompleter(Completer):
-  def __init__(self, commands):
+  def __init__(self, commands, session=None):
+    self.session = session
     self.commands = sorted(commands)
     self.path_completer = PathCompleter(expanduser=True)
 
@@ -176,6 +177,16 @@ class ChattyCompleter(Completer):
           sub_doc = Document(path_text, cursor_position=len(path_text))
           for completion in self.path_completer.get_completions(sub_doc, complete_event):
             yield completion
+        elif cmd in ('/model', '/models'):
+          sub_text = parts[1] if len(parts) > 1 else ""
+          is_models_add = (cmd == '/models' and sub_text.startswith('add '))
+          if is_models_add or cmd == '/model':
+            prefix = sub_text[4:] if is_models_add else sub_text
+            if self.session and getattr(self.session, "available_models", None):
+              for m in self.session.available_models:
+                m_id = m.get("id", "")
+                if m_id.startswith(prefix):
+                  yield Completion(m_id, start_position=-len(prefix))
     else:
       if text and not text.endswith(' ') and not text.endswith('\n'):
         words = text.split()
@@ -383,7 +394,7 @@ def start_interactive_loop(session: Any):
   toolbar_style = Style.from_dict({
     'bottom-toolbar': 'bg:#222222 fg:#e0e0e0 noreverse',
   })
-  completer = ChattyCompleter(session._commands.keys())
+  completer = ChattyCompleter(session._commands.keys(), session=session)
   prompt_session = PromptSession(
     history=FileHistory(history_file),
     key_bindings=kb,

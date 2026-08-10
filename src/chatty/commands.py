@@ -59,6 +59,7 @@ def cmd_provider(session: Any, arg: str) -> bool:
   else:
     session.provider = arg
     session.init_client()
+    session.update_available_models_async()
     console.print(f"Switched provider to: [bold green]{session.provider}[/bold green]")
     if arg not in ("ollama", "openrouter"):
       console.print("[bold yellow]Remember:[/bold yellow] Use '/url <api_url>' and '/api_key <key>' to configure your custom endpoint.")
@@ -131,6 +132,8 @@ def cmd_models(session: Any, arg: str) -> bool:
     console.print("  [cyan]/model <ID>[/cyan] - Switch to model by ID")
     console.print("  [cyan]/models add <model_name>[/cyan] - Add a new model")
     console.print("  [cyan]/models remove <ID or model_name>[/cyan] - Remove a model")
+    console.print("  [cyan]/models available [--refresh][/cyan] - List available models from active provider")
+    console.print("  [cyan]/models search <query>[/cyan] - Search available models from active provider")
     return True
 
   subcmd = parts[0].lower()
@@ -177,8 +180,100 @@ def cmd_models(session: Any, arg: str) -> bool:
       if session.model == removed_model:
         session.model = session.models[0]
         console.print(f"Active model switched to: [bold green]{session.model}[/bold green]")
+  elif subcmd == "available":
+    force_refresh = False
+    if len(parts) > 1:
+      force_refresh = "--refresh" in parts[1] or "-r" in parts[1]
+    
+    if force_refresh or not getattr(session, "available_models", None):
+      console.print("[yellow]Refreshing available models list...[/yellow]")
+      from chatty.llm import fetch_available_models
+      session.available_models = fetch_available_models(session, force_refresh=True)
+      
+    if not getattr(session, "available_models", None):
+      console.print("[bold red]No available models found or failed to query provider.[/bold red]")
+      return True
+      
+    from rich.table import Table
+    table = Table(title=f"Available Models from {session.provider.upper()}", show_header=True, header_style="bold magenta")
+    
+    if session.provider == "openrouter":
+      table.add_column("Model ID", style="cyan")
+      table.add_column("Name", style="white")
+      table.add_column("Context Length", style="green", justify="right")
+      table.add_column("Input (per 1M)", style="yellow", justify="right")
+      table.add_column("Output (per 1M)", style="yellow", justify="right")
+      
+      # Top 15 most popular models from the fetched registry
+      for m in session.available_models[:15]:
+        table.add_row(
+          m.get("id", ""), 
+          m.get("name", ""), 
+          f"{m['context']:,}" if m.get("context") else "Unknown",
+          f"${m.get('pricing_input', 0):.2f}",
+          f"${m.get('pricing_output', 0):.2f}"
+        )
+      console.print(table)
+      console.print("\n[dim]Only displaying the top 15 popular models. Search for other models using '/models search <query>'.[/dim]")
+      
+    elif session.provider == "ollama":
+      table.add_column("Model Tag", style="cyan")
+      table.add_column("Name", style="white")
+      table.add_column("Size", style="green", justify="right")
+      table.add_column("Quantization", style="yellow")
+      
+      for m in session.available_models:
+        size_gb = m.get("size", 0) / (1024**3)
+        quant = m.get("details", {}).get("quantization_level", "Unknown")
+        table.add_row(m.get("id", ""), m.get("name", ""), f"{size_gb:.2f} GB", quant)
+      console.print(table)
+      
+  elif subcmd == "search":
+    if len(parts) < 2:
+      console.print("[bold red]Error: Usage: /models search <query>[/bold red]")
+      return True
+      
+    query = parts[1].strip().lower()
+    results = [m for m in getattr(session, "available_models", []) if query in m.get("id", "").lower() or query in m.get("name", "").lower()]
+    
+    if not results:
+      console.print(f"[yellow]No models matching '{query}' found.[/yellow]")
+      return True
+      
+    from rich.table import Table
+    table = Table(title=f"Search Results for '{query}'", show_header=True, header_style="bold magenta")
+    
+    if session.provider == "openrouter":
+      table.add_column("Model ID", style="cyan")
+      table.add_column("Name", style="white")
+      table.add_column("Context Length", style="green", justify="right")
+      table.add_column("Input (per 1M)", style="yellow", justify="right")
+      table.add_column("Output (per 1M)", style="yellow", justify="right")
+      
+      for m in results[:25]: # Limit to top 25 results to avoid terminal spam
+        table.add_row(
+          m.get("id", ""), 
+          m.get("name", ""), 
+          f"{m['context']:,}" if m.get("context") else "Unknown",
+          f"${m.get('pricing_input', 0):.2f}",
+          f"${m.get('pricing_output', 0):.2f}"
+        )
+      console.print(table)
+      if len(results) > 25:
+        console.print(f"[dim]... and {len(results) - 25} more results. Refine your query to narrow down.[/dim]")
+    elif session.provider == "ollama":
+      table.add_column("Model Tag", style="cyan")
+      table.add_column("Name", style="white")
+      table.add_column("Size", style="green", justify="right")
+      table.add_column("Quantization", style="yellow")
+      
+      for m in results:
+        size_gb = m.get("size", 0) / (1024**3)
+        quant = m.get("details", {}).get("quantization_level", "Unknown")
+        table.add_row(m.get("id", ""), m.get("name", ""), f"{size_gb:.2f} GB", quant)
+      console.print(table)
   else:
-    console.print(f"[bold red]Unknown models command '{subcmd}'. Use '/models' to list, '/models add <name>', or '/models remove <id/name>'.[/bold red]")
+    console.print(f"[bold red]Unknown models command '{subcmd}'. Use '/models' to list, '/models add <name>', '/models remove <id/name>', '/models available', or '/models search <query>'.[/bold red]")
   return True
 
 
@@ -224,6 +319,7 @@ def cmd_api_key(session: Any, arg: str) -> bool:
   else:
     session.api_key = arg
     session.init_client()
+    session.update_available_models_async(force_refresh=True)
     console.print("[bold green]API key updated successfully.[/bold green]")
   return True
 
