@@ -134,9 +134,21 @@ def tool_search_web(query: str, max_results: int = 10) -> str:
       # Fallback to Yahoo scraper
       backend_used = "Yahoo HTML Scraper (Fallback)"
       url = f"https://search.yahoo.com/search?p={quote_plus(query)}"
-      headers = get_random_user_agent_headers()
-      r = requests.get(url, headers=headers, timeout=10)
-      r.raise_for_status()
+      
+      max_retries = 3
+      r = None
+      for attempt in range(max_retries):
+        try:
+          headers = get_random_user_agent_headers()
+          r = requests.get(url, headers=headers, timeout=10)
+          r.raise_for_status()
+          break
+        except requests.exceptions.RequestException as e:
+          if attempt == max_retries - 1:
+            raise e
+          import time
+          time.sleep(0.5)
+      
       
       blocks = re.split(r'<div[^>]*class="[^"]*algo-sr[^"]*"', r.text)
       for block in blocks[1:]:
