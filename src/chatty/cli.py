@@ -7,6 +7,7 @@ from rich.console import Console
 from chatty.logging_setup import setup_logging
 from chatty.utils import get_ollama_models, load_system_prompt_from_file
 from chatty.session import ChatbotSession
+from chatty.llm import get_default_openrouter_model
 
 logger = logging.getLogger("chatty")
 console = Console()
@@ -246,7 +247,7 @@ def main():
         if not args.headless:
           console.print(f"[bold blue]Info:[/bold blue] No local Ollama models detected. Fallback default: [bold green]{models[0]}[/bold green]")
     elif provider == "openrouter":
-      models = ["google/gemini-2.5-flash"]
+      models = [get_default_openrouter_model(args.api_key)]
       if not args.headless:
         console.print(f"[bold blue]Info:[/bold blue] OpenRouter provider selected. Default model: [bold green]{models[0]}[/bold green]")
     else:

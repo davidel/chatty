@@ -148,23 +148,31 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
     if len(parts) >= 3:
       yaml_content = parts[1]
       body = parts[2].strip()
-      
-      for line in yaml_content.splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'):
-          continue
-        if ":" in line:
-          key, val = line.split(":", 1)
-          key = key.strip()
-          val = val.strip().strip('"').strip("'")
-          
-          if val.startswith('[') and val.endswith(']'):
-            import ast
-            try:
-              val = ast.literal_eval(val)
-            except Exception:
-              pass
-          metadata[key] = val
+      try:
+        import yaml
+        parsed = yaml.safe_load(yaml_content)
+        if isinstance(parsed, dict):
+          metadata = parsed
+        else:
+          metadata = {}
+      except Exception:
+        # Fallback to naive parser
+        for line in yaml_content.splitlines():
+          line = line.strip()
+          if not line or line.startswith('#'):
+            continue
+          if ":" in line:
+            key, val = line.split(":", 1)
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            
+            if val.startswith('[') and val.endswith(']'):
+              import ast
+              try:
+                val = ast.literal_eval(val)
+              except Exception:
+                pass
+            metadata[key] = val
   return metadata, body
 
 

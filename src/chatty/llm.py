@@ -1222,8 +1222,12 @@ def run_llm_cycle(self):
 
 
 def get_cache_filepath():
-  home = os.path.expanduser("~")
-  cache_dir = os.path.join(home, ".gemini", "antigravity-cli")
+  env_path = os.environ.get("CHATTY_CACHE_PATH")
+  if env_path:
+    cache_dir = os.path.abspath(env_path)
+  else:
+    home = os.path.expanduser("~")
+    cache_dir = os.path.join(home, ".cache", "chatty")
   os.makedirs(cache_dir, exist_ok=True)
   return os.path.join(cache_dir, "openrouter_models_cache.json")
 
@@ -1313,3 +1317,44 @@ def fetch_available_models(session, force_refresh=False) -> List[Dict[str, Any]]
 
   return []
 
+
+def get_default_openrouter_model(api_key: Optional[str] = None) -> str:
+  """Returns the most popular free model currently offered on OpenRouter."""
+  try:
+    cached = load_cached_models()
+    if cached:
+      for m in cached:
+        if m.get("pricing_input") == 0.0 and m.get("pricing_output") == 0.0:
+          return m["id"]
+          
+    url = "https://openrouter.ai/api/v1/models"
+    headers = {}
+    key = api_key or os.environ.get("OPENROUTER_API_KEY")
+    if key and key != "missing_api_key":
+      headers["Authorization"] = f"Bearer {key}"
+      
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=5) as response:
+      data = json.loads(response.read().decode())
+      for m in data.get("data", []):
+        pricing = m.get("pricing", {})
+        prompt_price = float(pricing.get("prompt", 0))
+        completion_price = float(pricing.get("completion", 0))
+        if prompt_price == 0.0 and completion_price == 0.0:
+          models = [
+            {
+              "id": model["id"],
+              "name": model["name"],
+              "context": model.get("context_length"),
+              "pricing_input": float(model.get("pricing", {}).get("prompt", 0)) * 1e6,
+              "pricing_output": float(model.get("pricing", {}).get("completion", 0)) * 1e6,
+            }
+            for model in data.get("data", [])
+          ]
+          save_cached_models(models)
+          return m["id"]
+  except Exception:
+    pass
+    
+  return "google/gemini-2.5-flash:free"

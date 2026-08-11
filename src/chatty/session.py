@@ -169,6 +169,141 @@ class SessionConfig:
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
 
 
+def find_workspace_root() -> str:
+  curr = os.path.abspath(os.getcwd())
+  visited = set()
+  while True:
+    visited.add(curr)
+    if os.path.exists(os.path.join(curr, ".git")):
+      return curr
+    parent = os.path.dirname(curr)
+    if parent == curr or parent in visited:
+      break
+    curr = parent
+  return os.path.abspath(os.getcwd())
+
+
+def resolve_path(path_str: str, workspace_root: str) -> str:
+  path_str = path_str.strip()
+  if path_str.startswith("/"):
+    return path_str
+  elif path_str.startswith("~/"):
+    return os.path.expanduser(path_str)
+  else:
+    return os.path.abspath(os.path.join(workspace_root, path_str))
+
+
+def parse_manifest_entries(manifest_path: str, workspace_root: str, seen_configs=None) -> List[Dict[str, Any]]:
+  if seen_configs is None:
+    seen_configs = set()
+  abs_manifest_path = os.path.abspath(manifest_path)
+  if abs_manifest_path in seen_configs:
+    return []
+  seen_configs.add(abs_manifest_path)
+  if not os.path.exists(abs_manifest_path):
+    return []
+  try:
+    with open(abs_manifest_path, "r", encoding="utf-8") as f:
+      config = json.load(f)
+  except Exception:
+    return []
+  local_entries = []
+  inherits = config.get("inherits", [])
+  if isinstance(inherits, list):
+    for item in inherits:
+      if isinstance(item, dict) and "path" in item:
+        inherited_manifest = resolve_path(item["path"], workspace_root)
+        inherited_entries = parse_manifest_entries(inherited_manifest, workspace_root, seen_configs)
+        for entry in inherited_entries:
+          include_only = item.get("include_only")
+          exclude = item.get("exclude")
+          name = entry.get("name")
+          if name:
+            if include_only and not any(re.match(p, name) for p in include_only):
+              continue
+            if exclude and any(re.match(p, name) for p in exclude):
+              continue
+          local_entries.append(entry)
+  entries = config.get("entries", [])
+  if isinstance(entries, list):
+    for entry in entries:
+      if isinstance(entry, dict) and "path" in entry:
+        resolved_path_val = resolve_path(entry["path"], workspace_root)
+        local_entries.append({
+          "path": resolved_path_val,
+          "exclude": entry.get("exclude"),
+          "include_only": entry.get("include_only")
+        })
+      elif isinstance(entry, str):
+        local_entries.append({
+          "path": resolve_path(entry, workspace_root)
+        })
+  return local_entries
+
+
+def load_skill_from_dir(skill_dir: str) -> Optional[Dict[str, Any]]:
+  if not os.path.isdir(skill_dir):
+    return None
+  skill_md_path = os.path.join(skill_dir, "SKILL.md")
+  if not os.path.exists(skill_md_path):
+    return None
+  try:
+    with open(skill_md_path, 'r', encoding='utf-8', errors='ignore') as f:
+      content = f.read()
+    meta, body = parse_frontmatter(content)
+    if "name" not in meta:
+      meta["name"] = os.path.basename(skill_dir)
+    return {
+      "metadata": meta,
+      "body": body,
+      "path": skill_dir
+    }
+  except Exception:
+    return None
+
+
+def scan_skills_directory(skills_dir: str, include_only=None, exclude=None) -> List[Dict[str, Any]]:
+  skills = []
+  if not os.path.exists(skills_dir) or not os.path.isdir(skills_dir):
+    return skills
+  try:
+    for item in os.listdir(skills_dir):
+      item_path = os.path.join(skills_dir, item)
+      if os.path.isdir(item_path):
+        if include_only and not any(re.match(p, item) for p in include_only):
+          continue
+        if exclude and any(re.match(p, item) for p in exclude):
+          continue
+        skill = load_skill_from_dir(item_path)
+        if skill:
+          skills.append(skill)
+  except Exception:
+    pass
+  return skills
+
+
+def scan_plugins_directory(plugins_dir: str, include_only=None, exclude=None) -> List[Dict[str, Any]]:
+  skills = []
+  if not os.path.exists(plugins_dir) or not os.path.isdir(plugins_dir):
+    return skills
+  try:
+    for item in os.listdir(plugins_dir):
+      plugin_path = os.path.join(plugins_dir, item)
+      if os.path.isdir(plugin_path):
+        plugin_json_path = os.path.join(plugin_path, "plugin.json")
+        if os.path.exists(plugin_json_path):
+          if include_only and not any(re.match(p, item) for p in include_only):
+            continue
+          if exclude and any(re.match(p, item) for p in exclude):
+            continue
+          plugin_skills_dir = os.path.join(plugin_path, "skills")
+          if os.path.exists(plugin_skills_dir) and os.path.isdir(plugin_skills_dir):
+            skills.extend(scan_skills_directory(plugin_skills_dir))
+  except Exception:
+    pass
+  return skills
+
+
 class ChatbotSession:
   _active_session = None
 
@@ -442,108 +577,110 @@ class ChatbotSession:
     self.skills = {}
     self.ondemand_skills = {}
     
-    # 1. Load static/dynamic skills
-    skills_search_dirs = []
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    default_skills_dir = os.path.join(script_dir, "skills")
-    if os.path.exists(default_skills_dir) and os.path.isdir(default_skills_dir):
-      skills_search_dirs.append(default_skills_dir)
+    workspace_root = find_workspace_root()
+    roots = []
+    
+    # Hierarchical walk from CWD to repo root
+    cwd = os.getcwd()
+    curr = os.path.abspath(cwd)
+    visited = set()
+    while True:
+      visited.add(curr)
+      for folder in [".agents", ".agent", "_agents", "_agent", ".chatty"]:
+        p = os.path.join(curr, folder)
+        if os.path.exists(p) and os.path.isdir(p):
+          roots.append(os.path.abspath(p))
+      if os.path.exists(os.path.join(curr, ".git")):
+        break
+      parent = os.path.dirname(curr)
+      if parent == curr or parent in visited:
+        break
+      curr = parent
       
+    # Global Config Root
+    home = os.path.expanduser("~")
+    global_root = os.path.join(home, ".chatty", "config")
+    if os.path.exists(global_root) and os.path.isdir(global_root):
+      roots.append(os.path.abspath(global_root))
+      
+    # Deduplicate customization roots
+    unique_roots = []
+    for r in roots:
+      if r not in unique_roots:
+        unique_roots.append(r)
+        
+    all_skills = []
+    
+    # Load skills from Customization Roots (skills/ and plugins/ subdirs)
+    for r in unique_roots:
+      skills_dir = os.path.join(r, "skills")
+      all_skills.extend(scan_skills_directory(skills_dir))
+      
+      plugins_dir = os.path.join(r, "plugins")
+      all_skills.extend(scan_plugins_directory(plugins_dir))
+      
+      skills_json = os.path.join(r, "skills.json")
+      if os.path.exists(skills_json):
+        entries = parse_manifest_entries(skills_json, workspace_root)
+        for entry in entries:
+          all_skills.extend(scan_skills_directory(entry["path"], entry.get("include_only"), entry.get("exclude")))
+          
+      plugins_json = os.path.join(r, "plugins.json")
+      if os.path.exists(plugins_json):
+        entries = parse_manifest_entries(plugins_json, workspace_root)
+        for entry in entries:
+          plugin_skills_dir = os.path.join(entry["path"], "skills")
+          all_skills.extend(scan_skills_directory(plugin_skills_dir, entry.get("include_only"), entry.get("exclude")))
+          
+    # Load from environment variables for backward compatibility
     env_paths = os.environ.get("CHATBOT_SKILLS_PATH", "")
     if env_paths:
       for p in env_paths.split(os.pathsep):
         p = p.strip()
         if p and os.path.exists(p) and os.path.isdir(p):
-          skills_search_dirs.append(p)
+          all_skills.extend(scan_skills_directory(p))
           
-    for p in self.skills_paths:
-      p = p.strip()
-      if p and os.path.exists(p) and os.path.isdir(p):
-        skills_search_dirs.append(p)
-        
-    sandbox_skills_dir = os.path.join(self.sandbox, "skills")
-    if os.path.exists(sandbox_skills_dir) and os.path.isdir(sandbox_skills_dir):
-      skills_search_dirs.append(sandbox_skills_dir)
-      
-    unique_skills_dirs = []
-    for d in skills_search_dirs:
-      abs_d = os.path.abspath(d)
-      if abs_d not in unique_skills_dirs:
-        unique_skills_dirs.append(abs_d)
-        
-    for skills_dir in unique_skills_dirs:
-      try:
-        for item in os.listdir(skills_dir):
-          item_path = os.path.join(skills_dir, item)
-          if os.path.isdir(item_path):
-            skill_md_path = os.path.join(item_path, "SKILL.md")
-            if os.path.exists(skill_md_path):
-              try:
-                with open(skill_md_path, 'r', encoding='utf-8', errors='ignore') as f:
-                  content = f.read()
-                meta, body = parse_frontmatter(content)
-                if "name" not in meta:
-                  meta["name"] = item
-                self.skills[item] = {
-                  "metadata": meta,
-                  "body": body
-                }
-              except Exception:
-                pass
-      except Exception:
-        pass
-    logger.info(f"Loaded {len(self.skills)} skills: {list(self.skills.keys())}")
-
-    # 2. Load on-demand skills
-    ondemand_search_dirs = []
-    default_ondemand_dir = os.path.join(script_dir, "ondemand_skills")
-    if os.path.exists(default_ondemand_dir) and os.path.isdir(default_ondemand_dir):
-      ondemand_search_dirs.append(default_ondemand_dir)
-      
     env_ondemand_paths = os.environ.get("CHATBOT_ONDEMAND_SKILLS_PATH", "")
     if env_ondemand_paths:
       for p in env_ondemand_paths.split(os.pathsep):
         p = p.strip()
         if p and os.path.exists(p) and os.path.isdir(p):
-          ondemand_search_dirs.append(p)
+          all_skills.extend(scan_skills_directory(p))
           
-    for p in self.ondemand_skills_paths:
+    # Load from config parameters
+    for p in getattr(self, "skills_paths", []):
       p = p.strip()
       if p and os.path.exists(p) and os.path.isdir(p):
-        ondemand_search_dirs.append(p)
+        all_skills.extend(scan_skills_directory(p))
         
+    for p in getattr(self, "ondemand_skills_paths", []):
+      p = p.strip()
+      if p and os.path.exists(p) and os.path.isdir(p):
+        all_skills.extend(scan_skills_directory(p))
+        
+    # Sandbox directories
+    sandbox_skills_dir = os.path.join(self.sandbox, "skills")
+    if os.path.exists(sandbox_skills_dir) and os.path.isdir(sandbox_skills_dir):
+      all_skills.extend(scan_skills_directory(sandbox_skills_dir))
+      
     sandbox_ondemand_dir = os.path.join(self.sandbox, "ondemand_skills")
     if os.path.exists(sandbox_ondemand_dir) and os.path.isdir(sandbox_ondemand_dir):
-      ondemand_search_dirs.append(sandbox_ondemand_dir)
+      all_skills.extend(scan_skills_directory(sandbox_ondemand_dir))
       
-    unique_ondemand_dirs = []
-    for d in ondemand_search_dirs:
-      abs_d = os.path.abspath(d)
-      if abs_d not in unique_ondemand_dirs:
-        unique_ondemand_dirs.append(abs_d)
+    # Built-in skills shipped with the package
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    default_skills_dir = os.path.join(script_dir, "skills")
+    if os.path.exists(default_skills_dir) and os.path.isdir(default_skills_dir):
+      all_skills.extend(scan_skills_directory(default_skills_dir))
+      
+    # Populate the skills registry (preserves order, last discovered wins if names clash)
+    for skill in all_skills:
+      name = skill["metadata"].get("name")
+      if name:
+        self.skills[name] = skill
+        self.ondemand_skills[name] = skill
         
-    for skills_dir in unique_ondemand_dirs:
-      try:
-        for item in os.listdir(skills_dir):
-          item_path = os.path.join(skills_dir, item)
-          if os.path.isdir(item_path):
-            skill_md_path = os.path.join(item_path, "SKILL.md")
-            if os.path.exists(skill_md_path):
-              try:
-                with open(skill_md_path, 'r', encoding='utf-8', errors='ignore') as f:
-                  content = f.read()
-                meta, body = parse_frontmatter(content)
-                if "name" not in meta:
-                  meta["name"] = item
-                self.ondemand_skills[item] = {
-                  "metadata": meta,
-                  "body": body
-                }
-              except Exception:
-                pass
-      except Exception:
-        pass
-    logger.info(f"Loaded {len(self.ondemand_skills)} on-demand skills: {list(self.ondemand_skills.keys())}")
+    logger.info(f"Loaded {len(self.skills)} skills: {list(self.skills.keys())}")
 
   def get_active_system_prompt(self) -> str:
     """Returns system prompt integrated with dynamically activated skills."""
@@ -564,69 +701,57 @@ class ChatbotSession:
       skills_text = "\n\n".join(active_skills)
       return f"{self.system_prompt}\n\n## Available Skills\n{skills_text}"
 
-    active_skills = []
-    active_names = []
+    # Progressive disclosure mode
+    available_skills_lines = []
+    sandbox_path = getattr(self, "sandbox", "")
+    for skill_name, skill in sorted(self.skills.items()):
+      meta = skill["metadata"]
+      desc = meta.get("description") or "No description provided."
+      desc = " ".join(desc.split())
+      
+      path_str = ""
+      skill_path = skill.get("path")
+      if skill_path:
+        try:
+          rel = os.path.relpath(skill_path, sandbox_path)
+          if not rel.startswith(".."):
+            path_str = f" (Location: {rel})"
+          else:
+            home = os.path.expanduser("~")
+            if skill_path.startswith(home):
+              path_str = f" (Location: ~{skill_path[len(home):]})"
+            else:
+              path_str = f" (Location: {skill_path})"
+        except Exception:
+          path_str = f" (Location: {skill_path})"
+          
+      available_skills_lines.append(f"- **{meta.get('name')}**: {desc}{path_str}")
 
+    available_skills_text = ""
+    if available_skills_lines:
+      available_skills_text = "## Available Skills\n" + "\n".join(available_skills_lines)
+
+    active_skills_blocks = []
+    active_names = []
     for skill_name in sorted(self.explicit_skills):
-      skill = self.ondemand_skills.get(skill_name)
+      skill = self.skills.get(skill_name)
       if skill:
         meta = skill["metadata"]
-        active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+        active_skills_blocks.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
         active_names.append(meta.get("name"))
 
-    last_user_msg = ""
-    for msg in reversed(self.messages):
-      if msg.get("role") == "user":
-        last_user_msg = msg.get("content") or ""
-        break
-        
-    prompt_lower = last_user_msg.lower()
-    
-    # Check regular skills
-    for skill_name, skill in self.skills.items():
-      meta = skill["metadata"]
-      name = meta.get("name", "").lower()
-      desc = meta.get("description", "").lower()
-      tags = meta.get("tags", [])
-      if not isinstance(tags, list):
-        tags = [tags]
-        
-      match = False
-      if name and name in prompt_lower:
-        match = True
-      elif any(str(tag).lower() in prompt_lower for tag in tags):
-        match = True
-        
-      if match:
-        active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
-        active_names.append(meta.get("name"))
-
-    # Check on-demand skills (excluding any already explicitly loaded)
-    for skill_name, skill in self.ondemand_skills.items():
-      if skill_name in self.explicit_skills:
-        continue
-      meta = skill["metadata"]
-      name = meta.get("name", "").lower()
-      desc = meta.get("description", "").lower()
-      tags = meta.get("tags", [])
-      if not isinstance(tags, list):
-        tags = [tags]
-        
-      match = False
-      if name and name in prompt_lower:
-        match = True
-      elif any(str(tag).lower() in prompt_lower for tag in tags):
-        match = True
-        
-      if match:
-        active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
-        active_names.append(meta.get("name"))
-        
-    if active_skills:
+    activated_skills_text = ""
+    if active_skills_blocks:
       logger.info(f"System prompt built with activated skills: {active_names}")
-      skills_text = "\n\n".join(active_skills)
-      return f"{self.system_prompt}\n\n## Activated Skills\n{skills_text}"
-    return self.system_prompt
+      activated_skills_text = "## Activated Skills\n" + "\n\n".join(active_skills_blocks)
+
+    parts = [self.system_prompt]
+    if available_skills_text:
+      parts.append(available_skills_text)
+    if activated_skills_text:
+      parts.append(activated_skills_text)
+
+    return "\n\n".join(parts)
 
   def init_client(self):
     """Initializes or updates the OpenAI client based on active settings."""

@@ -12,7 +12,7 @@ Chatty provides a local terminal loop that allows an LLM agent to interact with 
 
 ## Features
 
-- **Multi-Provider Flexibility**: Switch seamlessly between local Ollama instances, cloud-based OpenRouter endpoints, or any custom API provider (such as Anthropic, Gemini, DeepSeek, Groq, etc.) via LiteLLM integration.
+- **Multi-Provider Flexibility**: Switch seamlessly between local Ollama instances, cloud-based OpenRouter endpoints, or any custom API provider (such as Anthropic, Chatty, DeepSeek, Groq, etc.) via LiteLLM integration.
 - **Oracle Query Delegation**: Consult a more advanced oracle model dynamically during a session via the [ask_oracle](file:///tmp/chatty/src/chatty/tools/__init__.py#L668) tool or the `/oracle` slash command.
 - **Sandboxed Operations**: Restricts file modifications and commands strictly to a sandbox root (default `./sandbox`), enhanced by Linux Landlock kernel-level isolation when running on Linux.
 - **User-Space AST Validation**: Parses Python scripts executed via shell commands and blocks direct filesystem operations unless explicitly permitted or whitelisted by the user.
@@ -62,8 +62,8 @@ python3 -m chatty [options]
 
 | Parameter | Short | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--provider` | `-p` | string | `ollama` | Backend provider to use (e.g., `ollama`, `openrouter`, `anthropic`, `gemini`, etc.). If omitted and `--url` is set, resolves automatically to the domain of the URL. |
-| `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. Ollama: auto-detects first local model (falls back to `qwen2.5-coder:7b`). OpenRouter: defaults to `google/gemini-2.5-flash`. Custom: required (no fallback). |
+| `--provider` | `-p` | string | `ollama` | Backend provider to use (e.g., `ollama`, `openrouter`, `anthropic`, `chatty`, etc.). If omitted and `--url` is set, resolves automatically to the domain of the URL. |
+| `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. Ollama: auto-detects first local model (falls back to `qwen2.5-coder:7b`). OpenRouter: dynamically defaults to the most popular free model (falls back to `google/gemini-2.5-flash:free`). Custom: required (no fallback). |
 | `--oracle-model` | *None* | string | *None* | Model identifier to use as the oracle. No default is assumed (the oracle tool is only active if an oracle model is explicitly configured). |
 | `--context-size` | `-c` | integer | `8192` | Target context window length constraint in tokens. |
 | `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. |
@@ -97,7 +97,7 @@ python3 -m chatty [options]
 
 ## Custom OpenAI-Compatible & Multi-Provider Support
 
-Chatty uses **LiteLLM** under the hood, meaning you can connect to any third-party cloud provider (like Anthropic or Gemini) or any OpenAI-compatible custom endpoint. 
+Chatty uses **LiteLLM** under the hood, meaning you can connect to any third-party cloud provider (like Anthropic or Chatty) or any OpenAI-compatible custom endpoint. 
 
 ### 1. OpenAI-Compatible Custom Endpoints
 To connect to custom endpoints (like DeepSeek, Groq, Together AI, or local vLLM servers), specify `--url` and `--model` (along with `--api-key` if required). The provider name will automatically be resolved to the domain name of your URL:
@@ -114,14 +114,14 @@ chatty --url https://api.together.xyz/v1 --api-key YOUR_TOGETHER_KEY --model Qwe
 ```
 
 ### 2. Native Multi-Provider Support via LiteLLM
-You can also call other native providers supported by LiteLLM (such as Anthropic or Google Gemini) directly by specifying their provider name and model:
+You can also call other native providers supported by LiteLLM (such as Anthropic or Google Chatty) directly by specifying their provider name and model:
 
 ```bash
 # Run using Anthropic Claude 3.5 Sonnet (expects ANTHROPIC_API_KEY env variable)
 chatty --provider anthropic --model claude-3-5-sonnet
 
-# Run using Google Gemini Pro (expects GEMINI_API_KEY env variable)
-chatty --provider gemini --model gemini-2.5-pro
+# Run using Google Chatty Pro (expects CHATTY_API_KEY env variable)
+chatty --provider chatty --model chatty-2.5-pro
 ```
 
 ---
@@ -135,7 +135,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/help` | None | Displays a formatted usage table of all slash commands. |
 | `/status` | None | Shows active session variables (provider, model, oracle, sandbox, tokens, loops, etc.). |
 | `/tool_stats` | None | Renders execution statistics (call counts, failures, and breakdowns for tools and binaries). |
-| `/provider` | `[name]` | View current provider or switch backend on the fly. Accepts standard or custom provider names (e.g., `ollama`, `openrouter`, `anthropic`, `gemini`, `api.deepseek.com`). |
+| `/provider` | `[name]` | View current provider or switch backend on the fly. Accepts standard or custom provider names (e.g., `ollama`, `openrouter`, `anthropic`, `chatty`, `api.deepseek.com`). |
 | `/model` | `[ID\|name]` | View active model name or switch to another model by name or 1-based index/ID. |
 | `/models` | `[add <name>\|remove <ID\|name>\|available [--refresh]\|search <query>]` | List, add, remove, or search/list available LLM models in the session. |
 | `/oracle` | `[name]` | View active oracle model name or switch to another oracle model by name. |
@@ -263,46 +263,44 @@ To allow the chatbot to access files or directories outside the sandboxed folder
 
 ## Extending Chatty with Skills
 
-**Skills** are modular system prompt extensions that can be imported to give the LLM custom domain knowledge. A skill is a subdirectory located inside a registered skill path containing a `SKILL.md` file (for example, see [skills/greetings/SKILL.md](file:///tmp/chatty/src/chatty/skills/greetings/SKILL.md)):
+**Skills** are modular system prompt extensions and runbooks that give the LLM custom domain knowledge. Under the standard, a skill is structured as a directory containing a required `SKILL.md` file (for example, see [skills/greetings/SKILL.md](file:///tmp/chatty/src/chatty/skills/greetings/SKILL.md)) and optional helper subfolders:
 
 ```text
-my_skills_dir/
-└── database_guidelines/
-    ├── SKILL.md
-    └── sample_schema.sql
+skills/database_guidelines/
+├── SKILL.md          # Required: Main instruction file with YAML frontmatter
+├── scripts/          # Optional: Helper scripts and utilities
+├── examples/         # Optional: Reference implementations
+├── resources/        # Optional: Additional assets or templates
+└── references/       # Optional: Detailed documentation or manuals
 ```
 
 ### SKILL.md Structure
-The `SKILL.md` must start with YAML frontmatter:
+The `SKILL.md` must start with YAML frontmatter containing the `name` and `description` fields:
 ```markdown
 ---
-name: Database Operations
-description: Instructions for sql query formatting and schemas.
-tags: [sql, postgres, sqlite, db]
+name: database-operations
+description: Instructions for SQL query formatting and schemas.
 ---
 Always format queries in uppercase... (Rest of system guidelines)
 ```
 
-### Loading Skills
-Chatty differentiates between **Static/Dynamic** skills and **On-demand** skills by loading them from different directories:
+### Discovery Locations
+Chatty automatically discovers skills and plugins by searching recursive and machine-local customization roots:
+1. **Workspace Customizations**: Searches for folders named `.agents/`, `.agent/`, `_agents/`, `_agent/`, or `.chatty/` by walking up parent directories from the current working directory to the repository root.
+2. **Global Customizations**: Loads customizations globally from `~/.chatty/config/`.
+3. **Built-in Package Skills**: Automatically loads default skills packaged with Chatty.
+4. **Configuration Manifests**: Explicitly registers additional paths using `skills.json` and `plugins.json` configs placed in customization roots.
 
-| Type | Default System Path | Environment Variable | CLI Argument | Sandbox Path |
-| :--- | :--- | :--- | :--- | :--- |
-| **Static / Dynamic** | `src/chatty/skills/` | `CHATBOT_SKILLS_PATH` | `--skills-path` / `-k` | `<sandbox>/skills/` |
-| **On-demand** | `src/chatty/ondemand_skills/` | `CHATBOT_ONDEMAND_SKILLS_PATH` | `--ondemand-skills-path` / `-o` | `<sandbox>/ondemand_skills/` |
-
-### Activation Modes
-- **Static Mode (`--static-skills` / default for OpenRouter)**: 
-  * All loaded **Static / Dynamic** skills are automatically and permanently appended to the system prompt (enabling efficient prompt caching).
-  * Loaded **On-demand** skills are **only** appended if you explicitly request them using the `/skill NAME` command.
-- **Dynamic Mode (default for Ollama)**:
-  * Automatically scans your prompt against all loaded skills (static/dynamic and on-demand) and dynamically injects them if keywords or tags match.
-  * Explicitly loaded on-demand skills (via `/skill NAME`) are always injected.
+### Progressive Disclosure
+To conserve LLM context window size, Chatty uses progressive disclosure:
+- By default, only the **names** and **descriptions** of all discovered skills are injected into the system instructions.
+- The full content of a skill is loaded into context **only** when explicitly activated.
+- If a skill is running in static mode (or configured to load permanently), all skills can be loaded statically on initialization.
 
 ### The `/skill` command
-* `/skill`: Lists all available on-demand skills and those currently explicitly loaded.
-* `/skill name1 name2`: Explicitly loads one or more on-demand skills.
-* `/skill clear`: Clears all explicitly loaded on-demand skills. Loaded skills are saved for the session, ensuring they persist and are correctly re-injected if `/clear` is run.
+* `/skill`: Lists all available skills and those currently explicitly loaded.
+* `/skill name1 name2`: Explicitly activates one or more skills.
+* `/skill clear`: Clears all explicitly loaded skills. Loaded skills persist through session clears (via `/clear`).
 
 ---
 
