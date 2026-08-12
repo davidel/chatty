@@ -564,3 +564,63 @@ def format_short_number(val: float) -> str:
     if "." in res:
       res = res.rstrip("0").rstrip(".")
     return f"{res}T"
+
+
+def copy_to_clipboard(text: str) -> bool:
+  """Tries to copy text to the system clipboard.
+
+  First attempts to use `pyperclip` if it is installed, falling back
+  to common command line clipboard utilities.
+  """
+  try:
+    import pyperclip
+    pyperclip.copy(text)
+    return True
+  except (ImportError, Exception):
+    pass
+
+  import subprocess
+  import shutil
+
+  # Try wl-copy (Wayland)
+  if shutil.which("wl-copy"):
+    try:
+      subprocess.run(["wl-copy"], input=text, text=True, check=True)
+      return True
+    except Exception:
+      pass
+
+  # Try xclip (X11)
+  if shutil.which("xclip"):
+    try:
+      subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True, check=True)
+      return True
+    except Exception:
+      pass
+
+  # Try xsel (X11)
+  if shutil.which("xsel"):
+    try:
+      subprocess.run(["xsel", "--clipboard", "--input"], input=text, text=True, check=True)
+      return True
+    except Exception:
+      pass
+
+  # Try pbcopy (macOS)
+  if shutil.which("pbcopy"):
+    try:
+      subprocess.run(["pbcopy"], input=text, text=True, check=True)
+      return True
+    except Exception:
+      pass
+
+  # Try clip.exe (WSL/Windows)
+  if shutil.which("clip.exe"):
+    try:
+      subprocess.run(["clip.exe"], input=text, text=True, check=True)
+      return True
+    except Exception:
+      pass
+
+  return False
+

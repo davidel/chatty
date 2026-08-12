@@ -679,6 +679,122 @@ def cmd_restore(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_copy(session: Any, arg: str) -> bool:
+  """Extracts code blocks from the last assistant message and copies to clipboard."""
+  assistant_msgs = [m for m in session.messages if m.get("role") == "assistant" and m.get("content")]
+  if not assistant_msgs:
+    console.print("[bold red]No assistant response found in this session yet.[/bold red]")
+    return True
+
+  last_content = assistant_msgs[-1]["content"]
+
+  import re
+  blocks = re.findall(r"```(\w*)\r?\n(.*?)\r?\n```", last_content, re.DOTALL)
+  if not blocks:
+    console.print("[bold red]No code blocks found in the last assistant response.[/bold red]")
+    return True
+
+  arg = arg.strip()
+  if arg:
+    try:
+      idx = int(arg)
+      if not (1 <= idx <= len(blocks)):
+        console.print(f"[bold red]Error: Invalid code block index {idx}. Choose between 1 and {len(blocks)}.[/bold red]")
+        return True
+      selected_block = blocks[idx - 1]
+      selected_index = idx
+    except ValueError:
+      console.print("[bold red]Error: Block index must be a number.[/bold red]")
+      return True
+  else:
+    if len(blocks) == 1:
+      selected_block = blocks[0]
+      selected_index = 1
+    else:
+      # Multiple blocks, show list
+      console.print("[bold yellow]Multiple code blocks found in the last response:[/bold yellow]")
+      for i, (lang, content) in enumerate(blocks, 1):
+        line_count = len(content.splitlines())
+        lang_str = lang if lang else "text"
+        preview = content.splitlines()[0] if content else ""
+        if len(preview) > 50:
+          preview = preview[:47] + "..."
+        console.print(f"  [cyan]{i}.[/cyan] {lang_str} ({line_count} lines) -> [dim]{preview}[/dim]")
+      console.print("Usage: /copy <block_index>")
+      return True
+
+  code_content = selected_block[1]
+  from chatty.utils import copy_to_clipboard
+  if copy_to_clipboard(code_content):
+    console.print(f"[bold green]Copied code block {selected_index} to clipboard.[/bold green]")
+  else:
+    console.print("[bold red]Failed to copy to clipboard. Please install a clipboard utility (e.g. xclip, xsel, or wl-copy).[/bold red]")
+  return True
+
+
+def cmd_write(session: Any, arg: str) -> bool:
+  """Writes a code block from the last assistant message to a file."""
+  arg = arg.strip()
+  if not arg:
+    console.print("[bold red]Error: Usage: /write <file_path> [block_index][/bold red]")
+    return True
+
+  parts = arg.split()
+  block_index = None
+
+  if len(parts) > 1 and parts[-1].isdigit():
+    block_index = int(parts[-1])
+    file_path = " ".join(parts[:-1])
+  else:
+    file_path = " ".join(parts)
+
+  assistant_msgs = [m for m in session.messages if m.get("role") == "assistant" and m.get("content")]
+  if not assistant_msgs:
+    console.print("[bold red]No assistant response found in this session yet.[/bold red]")
+    return True
+
+  last_content = assistant_msgs[-1]["content"]
+
+  import re
+  blocks = re.findall(r"```(\w*)\r?\n(.*?)\r?\n```", last_content, re.DOTALL)
+  if not blocks:
+    console.print("[bold red]No code blocks found in the last assistant response.[/bold red]")
+    return True
+
+  if block_index is not None:
+    if not (1 <= block_index <= len(blocks)):
+      console.print(f"[bold red]Error: Invalid code block index {block_index}. Choose between 1 and {len(blocks)}.[/bold red]")
+      return True
+    selected_block = blocks[block_index - 1]
+    selected_index = block_index
+  else:
+    if len(blocks) == 1:
+      selected_block = blocks[0]
+      selected_index = 1
+    else:
+      # Multiple blocks, show list
+      console.print("[bold yellow]Multiple code blocks found. Please specify which block to write:[/bold yellow]")
+      for i, (lang, content) in enumerate(blocks, 1):
+        line_count = len(content.splitlines())
+        lang_str = lang if lang else "text"
+        preview = content.splitlines()[0] if content else ""
+        if len(preview) > 50:
+          preview = preview[:47] + "..."
+        console.print(f"  [cyan]{i}.[/cyan] {lang_str} ({line_count} lines) -> [dim]{preview}[/dim]")
+      console.print(f"Usage: /write {file_path} <block_index>")
+      return True
+
+  code_content = selected_block[1]
+  from chatty.tools import tool_write_file
+
+  result = tool_write_file(session.sandbox, file_path, code_content)
+  if result.startswith("Error"):
+    console.print(f"[bold red]{result}[/bold red]")
+  else:
+    console.print(f"[bold green]Saved code block {selected_index} to '{file_path}'.[/bold green]")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -711,5 +827,10 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/config": cmd_config,
   "/backups": cmd_backups,
   "/restore": cmd_restore,
+  "/copy": cmd_copy,
+  "/clip": cmd_copy,
+  "/write": cmd_write,
+  "/save_code": cmd_write,
 }
+
 

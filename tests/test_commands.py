@@ -407,6 +407,81 @@ class TestCompressCommand(unittest.TestCase):
       self.assertEqual(len(models_ollama), 1)
       self.assertEqual(models_ollama[0]["id"], "llama3:latest")
 
+  def test_cmd_copy_and_write(self):
+    from unittest.mock import patch
+
+    # 1. No assistant messages
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/copy"](self.session, "")
+      self.assertTrue(res)
+      mock_print.assert_any_call("[bold red]No assistant response found in this session yet.[/bold red]")
+
+    # 2. Add assistant message without code blocks
+    self.session.messages.append({"role": "assistant", "content": "Hello! I am an assistant."})
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/copy"](self.session, "")
+      self.assertTrue(res)
+      mock_print.assert_any_call("[bold red]No code blocks found in the last assistant response.[/bold red]")
+
+    # 3. Add assistant message with 1 code block
+    self.session.messages.append({
+      "role": "assistant",
+      "content": "Here is the code:\n```python\nprint('hello')\n```\nEnjoy!"
+    })
+
+    # Test copy with 1 code block
+    with patch("chatty.commands.console.print") as mock_print, \
+         patch("chatty.utils.copy_to_clipboard") as mock_copy:
+      mock_copy.return_value = True
+      res = COMMANDS["/copy"](self.session, "")
+      self.assertTrue(res)
+      mock_copy.assert_called_once_with("print('hello')")
+      mock_print.assert_any_call("[bold green]Copied code block 1 to clipboard.[/bold green]")
+
+    # Test write with 1 code block
+    with patch("chatty.commands.console.print") as mock_print:
+      # Write block to a file
+      res = COMMANDS["/write"](self.session, "my_file.py")
+      self.assertTrue(res)
+      # Check file contents
+      file_path = os.path.join(self.sandbox_dir, "my_file.py")
+      self.assertTrue(os.path.exists(file_path))
+      with open(file_path, "r", encoding="utf-8") as f:
+        self.assertEqual(f.read(), "print('hello')")
+
+    # 4. Add assistant message with multiple code blocks
+    self.session.messages.append({
+      "role": "assistant",
+      "content": "Here is Python:\n```python\nprint('one')\n```\nAnd Bash:\n```bash\necho 'two'\n```"
+    })
+
+    # Test copy multiple blocks without specifying index (shows choice menu)
+    with patch("chatty.commands.console.print") as mock_print, \
+         patch("chatty.utils.copy_to_clipboard") as mock_copy:
+      res = COMMANDS["/copy"](self.session, "")
+      self.assertTrue(res)
+      mock_copy.assert_not_called()
+      mock_print.assert_any_call("[bold yellow]Multiple code blocks found in the last response:[/bold yellow]")
+
+    # Test copy multiple blocks specifying index 2
+    with patch("chatty.commands.console.print") as mock_print, \
+         patch("chatty.utils.copy_to_clipboard") as mock_copy:
+      mock_copy.return_value = True
+      res = COMMANDS["/copy"](self.session, "2")
+      self.assertTrue(res)
+      mock_copy.assert_called_once_with("echo 'two'")
+      mock_print.assert_any_call("[bold green]Copied code block 2 to clipboard.[/bold green]")
+
+    # Test write multiple blocks specifying index 1
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/write"](self.session, "first.py 1")
+      self.assertTrue(res)
+      first_file = os.path.join(self.sandbox_dir, "first.py")
+      self.assertTrue(os.path.exists(first_file))
+      with open(first_file, "r", encoding="utf-8") as f:
+        self.assertEqual(f.read(), "print('one')")
+
 
 if __name__ == "__main__":
   unittest.main()
+
