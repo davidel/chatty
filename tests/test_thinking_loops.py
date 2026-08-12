@@ -27,8 +27,12 @@ class TestThinkingLoops(unittest.TestCase):
     # Set the thinking budget on the existing config object
     self.session.config.max_thinking_chars = 100
     self.session.config.max_thinking_leeway_chars = 0
+    # Patch sys.stdin.isatty to False by default to prevent blocking on select/stdin in PTY environments
+    self.isatty_patcher = patch("chatty.llm.sys.stdin.isatty", return_value=False)
+    self.mock_isatty_default = self.isatty_patcher.start()
 
   def tearDown(self):
+    self.isatty_patcher.stop()
     os.chdir(self.old_cwd)
     shutil.rmtree(self.sandbox_dir)
 

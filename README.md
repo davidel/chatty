@@ -155,8 +155,11 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/backups` | `<file_path>` | Lists all available timestamped backups for a given file. |
 | `/restore` | `<file_path> [index_or_timestamp]` | Restores a file to a specific backup version (defaults to the latest). |
 | `/tools` | None | Lists available sandboxed tools and their schema definitions. |
+| `/config` | `[key=value]` | List, view, or change configuration parameters live. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
 | `/compress` | `[N]` | Directs the model to summarize current conversational state using a structured format, resets older history, and keeps N (default 4) recent messages intact. |
+| `/copy` / `/clip` | `[index]` | Copy a code block from the last AI response to the clipboard. |
+| `/write` / `/save_code` | `<path> [index]` | Write a code block from the last AI response to a file. |
 | `/exit` / `/quit` | None | Cleanly terminates background processes and exits Chatty. |
 
 ---
