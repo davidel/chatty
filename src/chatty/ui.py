@@ -172,7 +172,7 @@ class ChattyCompleter(Completer):
       else:
         parts = text.split(maxsplit=1)
         cmd = parts[0].lower()
-        if cmd in ('/load', '/save', '/save_session', '/load_session'):
+        if cmd in ('/load', '/save', '/save_session', '/load_session', '/show'):
           path_text = parts[1] if len(parts) > 1 else ""
           sub_doc = Document(path_text, cursor_position=len(path_text))
           for completion in self.path_completer.get_completions(sub_doc, complete_event):

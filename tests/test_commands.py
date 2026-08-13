@@ -172,7 +172,7 @@ class TestCommandsRegistry(unittest.TestCase):
     from prompt_toolkit.document import Document
     from chatty.session import ChattyCompleter
 
-    completer = ChattyCompleter(["/exit", "/help", "/load"])
+    completer = ChattyCompleter(["/exit", "/help", "/load", "/show"])
     
     # 1. Test completing a prefix of a slash command
     completions = list(completer.get_completions(Document("/he"), None))
@@ -182,10 +182,10 @@ class TestCommandsRegistry(unittest.TestCase):
 
     # 2. Test completing all slash commands when typing just slash
     completions_all = list(completer.get_completions(Document("/"), None))
-    self.assertEqual(len(completions_all), 3)
-    self.assertEqual([c.text for c in completions_all], ["/exit", "/help", "/load"])
+    self.assertEqual(len(completions_all), 4)
+    self.assertEqual([c.text for c in completions_all], ["/exit", "/help", "/load", "/show"])
 
-    # 3. Test that path completion is invoked for '/load '
+    # 3. Test that path completion is invoked for '/load ' and '/show '
     # Create a dummy file in the sandbox directory (which is the current working directory)
     dummy_file = os.path.join(self.sandbox_dir, "test_file_completion.txt")
     with open(dummy_file, "w") as f:
@@ -193,6 +193,9 @@ class TestCommandsRegistry(unittest.TestCase):
 
     completions_path = list(completer.get_completions(Document("/load test_file_comp"), None))
     self.assertTrue(any(c.display_text == "test_file_completion.txt" for c in completions_path))
+
+    completions_show_path = list(completer.get_completions(Document("/show test_file_comp"), None))
+    self.assertTrue(any(c.display_text == "test_file_completion.txt" for c in completions_show_path))
 
     # 4. Test inline path autocompletion in general sentences
     completions_general = list(completer.get_completions(Document("look at test_file_comp"), None))
