@@ -481,6 +481,68 @@ class TestCompressCommand(unittest.TestCase):
       with open(first_file, "r", encoding="utf-8") as f:
         self.assertEqual(f.read(), "print('one')")
 
+    # Test write to a file outside the sandbox (it should bypass the sandbox checks and write successfully)
+    with tempfile.TemporaryDirectory() as external_dir:
+      external_file = os.path.join(external_dir, "outside_sandbox.py")
+      with patch("chatty.commands.console.print") as mock_print:
+        res = COMMANDS["/write"](self.session, f"{external_file} 1")
+        self.assertTrue(res)
+        self.assertTrue(os.path.exists(external_file))
+        with open(external_file, "r", encoding="utf-8") as f:
+          self.assertEqual(f.read(), "print('one')")
+
+  def test_cmd_show(self):
+    from unittest.mock import patch
+    from rich.markdown import Markdown
+
+    # 1. No file path provided
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/show"](self.session, "")
+      self.assertTrue(res)
+      mock_print.assert_any_call("[bold red]Error: Usage: /show <file_path>[/bold red]")
+
+    # 2. File does not exist
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/show"](self.session, "non_existent_file.md")
+      self.assertTrue(res)
+      mock_print.assert_any_call(f"[bold red]Error: File '{os.path.join(self.sandbox_dir, 'non_existent_file.md')}' does not exist.[/bold red]")
+
+    # 3. Path is a directory
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/show"](self.session, ".")
+      self.assertTrue(res)
+      expected_path = os.path.realpath(self.sandbox_dir)
+      mock_print.assert_any_call(f"[bold red]Error: '{expected_path}' is a directory.[/bold red]")
+
+    # 4. Valid file exists
+    md_file_path = os.path.join(self.sandbox_dir, "test.md")
+    with open(md_file_path, "w", encoding="utf-8") as f:
+      f.write("# Hello World\nThis is markdown.")
+
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/show"](self.session, "test.md")
+      self.assertTrue(res)
+      args, kwargs = mock_print.call_args
+      self.assertTrue(len(args) > 0)
+      self.assertIsInstance(args[0], Markdown)
+      self.assertEqual(args[0].markup, "# Hello World\nThis is markdown.")
+
+    # 5. Python file rendering as Syntax
+    py_file_path = os.path.join(self.sandbox_dir, "test.py")
+    with open(py_file_path, "w", encoding="utf-8") as f:
+      f.write("print('hello')")
+
+    from rich.syntax import Syntax
+
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/show"](self.session, "test.py")
+      self.assertTrue(res)
+      args, kwargs = mock_print.call_args
+      self.assertTrue(len(args) > 0)
+      self.assertIsInstance(args[0], Syntax)
+      self.assertEqual(args[0].code, "print('hello')")
+      self.assertEqual(args[0].lexer.name, "Python")
+
 
 if __name__ == "__main__":
   unittest.main()

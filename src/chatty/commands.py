@@ -785,13 +785,63 @@ def cmd_write(session: Any, arg: str) -> bool:
       return True
 
   code_content = selected_block[1]
-  from chatty.tools import tool_write_file
+  import os
 
-  result = tool_write_file(session.sandbox, file_path, code_content)
-  if result.startswith("Error"):
-    console.print(f"[bold red]{result}[/bold red]")
-  else:
+  file_path = os.path.expanduser(file_path)
+  if not os.path.isabs(file_path):
+    file_path = os.path.join(session.sandbox, file_path)
+
+  try:
+    dir_name = os.path.dirname(file_path)
+    if dir_name:
+      os.makedirs(dir_name, exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as f:
+      f.write(code_content)
     console.print(f"[bold green]Saved code block {selected_index} to '{file_path}'.[/bold green]")
+  except Exception as e:
+    console.print(f"[bold red]Error saving code block: {str(e)}[/bold red]")
+  return True
+
+
+def cmd_show(session: Any, arg: str) -> bool:
+  """Reads a Markdown file and renders it beautifully inside Chatty using rich."""
+  file_path = arg.strip()
+  if not file_path:
+    console.print("[bold red]Error: Usage: /show <file_path>[/bold red]")
+    return True
+
+  import os
+
+  file_path = os.path.expanduser(file_path)
+  if not os.path.isabs(file_path):
+    file_path = os.path.join(session.sandbox, file_path)
+  file_path = os.path.realpath(file_path)
+
+  if not os.path.exists(file_path):
+    console.print(f"[bold red]Error: File '{file_path}' does not exist.[/bold red]")
+    return True
+
+  if os.path.isdir(file_path):
+    console.print(f"[bold red]Error: '{file_path}' is a directory.[/bold red]")
+    return True
+
+  try:
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+      content = f.read()
+
+    _, ext = os.path.splitext(file_path.lower())
+    if ext in [".md", ".markdown"]:
+      from rich.markdown import Markdown
+
+      console.print(Markdown(content))
+    else:
+      from rich.syntax import Syntax
+
+      lexer = Syntax.guess_lexer(file_path)
+      syntax = Syntax(content, lexer=lexer, line_numbers=True, theme="monokai")
+      console.print(syntax)
+  except Exception as e:
+    console.print(f"[bold red]Error reading file: {str(e)}[/bold red]")
   return True
 
 
@@ -831,6 +881,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/clip": cmd_copy,
   "/write": cmd_write,
   "/save_code": cmd_write,
+  "/show": cmd_show,
 }
 
 

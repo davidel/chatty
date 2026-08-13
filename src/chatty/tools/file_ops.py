@@ -176,7 +176,7 @@ def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
   """Write text content to a file inside the sandbox."""
   try:
     safe_p = get_safe_path(sandbox_dir, path, write=True)
-      
+
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     backup_file(sandbox_dir, rel_path)
     old_content = ""
@@ -186,14 +186,14 @@ def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
           old_content = f.read()
       except Exception:
         pass
-        
+
     os.makedirs(os.path.dirname(safe_p), exist_ok=True)
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.write(content)
-      
+
     if old_content:
       print_diff(rel_path, old_content, content)
-      
+
     return f"Successfully wrote to file '{rel_path}'."
   except Exception as e:
     return f"Error writing file: {str(e)}"
