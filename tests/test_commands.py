@@ -546,6 +546,66 @@ class TestCompressCommand(unittest.TestCase):
       self.assertEqual(args[0].code, "print('hello')")
       self.assertEqual(args[0].lexer.name, "Python")
 
+  def test_cmd_history(self):
+    from unittest.mock import patch
+    from rich.panel import Panel
+    from rich.markdown import Markdown
+
+    # Clear messages
+    self.session.messages = []
+
+    # 1. Test history empty
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/history"](self.session, "")
+      self.assertTrue(res)
+      mock_print.assert_any_call("[bold yellow]Conversation history is empty.[/bold yellow]")
+
+    # Add dummy messages
+    self.session.messages = [
+      {"role": "system", "content": "You are a chatbot."},
+      {"role": "user", "content": "Hello"},
+      {"role": "assistant", "content": "Hi there!", "reasoning": "thought process", "tool_calls": [{"function": {"name": "test_tool", "arguments": "{}"}}]},
+    ]
+
+    # 2. Test displaying entire history (empty arg)
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/history"](self.session, "")
+      self.assertTrue(res)
+      self.assertTrue(mock_print.call_count > 1)
+
+    # 3. Test invalid index (non-integer)
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/history"](self.session, "abc")
+      self.assertTrue(res)
+      mock_print.assert_any_call("[bold red]Error: History index must be an integer.[/bold red]")
+
+    # 4. Test invalid index (out of range)
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/history"](self.session, "5")
+      self.assertTrue(res)
+      mock_print.assert_any_call("[bold red]Error: Invalid history index '5'. Available indices: 1 to 3 (or negative indexes -1 to -3).[/bold red]")
+
+    # 5. Test valid index (positive 1-based)
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/history"](self.session, "3")
+      self.assertTrue(res)
+      # Check that panels (Thinking Process, Assistant Response, and Tool Calls) were rendered
+      panels_rendered = [args[0] for args, kwargs in mock_print.call_args_list if len(args) > 0 and isinstance(args[0], Panel)]
+      self.assertTrue(len(panels_rendered) >= 2)
+      # Check thinking process panel
+      self.assertTrue(any(p.title == "🧠 Thinking Process" and p.renderable == "thought process" for p in panels_rendered))
+      # Check assistant response panel
+      assistant_panel = next(p for p in panels_rendered if p.title == "🤖 Assistant Response")
+      self.assertIsInstance(assistant_panel.renderable, Markdown)
+      self.assertEqual(assistant_panel.renderable.markup, "Hi there!")
+
+    # 6. Test valid index (negative)
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/history"](self.session, "-1")
+      self.assertTrue(res)
+      panels_rendered = [args[0] for args, kwargs in mock_print.call_args_list if len(args) > 0 and isinstance(args[0], Panel)]
+      self.assertTrue(any(p.title == "🧠 Thinking Process" and p.renderable == "thought process" for p in panels_rendered))
+
 
 if __name__ == "__main__":
   unittest.main()

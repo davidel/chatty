@@ -415,6 +415,91 @@ def cmd_skill(session: Any, arg: str) -> bool:
 
 
 def cmd_history(session: Any, arg: str) -> bool:
+  if not session.messages:
+    console.print("[bold yellow]Conversation history is empty.[/bold yellow]")
+    return True
+
+  arg = arg.strip()
+  if arg:
+    try:
+      idx = int(arg)
+    except ValueError:
+      console.print("[bold red]Error: History index must be an integer.[/bold red]")
+      return True
+
+    total = len(session.messages)
+    if idx < 0:
+      msg_idx = total + idx + 1
+    else:
+      msg_idx = idx
+
+    if not (1 <= msg_idx <= total):
+      console.print(f"[bold red]Error: Invalid history index '{arg}'. Available indices: 1 to {total} (or negative indexes -1 to -{total}).[/bold red]")
+      return True
+
+    msg = session.messages[msg_idx - 1]
+    role = msg.get("role", "unknown")
+    content = msg.get("content") or ""
+    reasoning = msg.get("reasoning_content") or msg.get("reasoning")
+
+    console.print(f"[bold cyan]History Entry {msg_idx} of {total}[/bold cyan]")
+    
+    metadata_lines = []
+    metadata_lines.append(f"  [bold]Role:[/bold] {role}")
+    if "name" in msg:
+      metadata_lines.append(f"  [bold]Name:[/bold] {msg['name']}")
+    if "tool_call_id" in msg:
+      metadata_lines.append(f"  [bold]Tool Call ID:[/bold] {msg['tool_call_id']}")
+
+    tok = session.count_tokens_estimate(content)
+    if reasoning:
+      tok += session.count_tokens_estimate(reasoning)
+    metadata_lines.append(f"  [bold]Estimated Tokens:[/bold] {tok}")
+    
+    console.print("\n".join(metadata_lines))
+    console.print()
+
+    if reasoning:
+      console.print(Panel(reasoning.strip(), title="🧠 Thinking Process", border_style="yellow"))
+      console.print()
+
+    if content.strip():
+      from rich.markdown import Markdown
+      if role == "assistant":
+        border_style = "green"
+        title = "🤖 Assistant Response"
+      elif role == "user":
+        border_style = "blue"
+        title = "👤 User Message"
+      elif role == "system":
+        border_style = "magenta"
+        title = "⚙️ System Instructions"
+      elif role == "tool":
+        border_style = "cyan"
+        title = f"🛠️ Tool Output ({msg.get('name', 'unknown')})"
+      else:
+        border_style = "white"
+        title = f"Message ({role})"
+        
+      console.print(Panel(Markdown(content.strip()), title=title, border_style=border_style))
+      console.print()
+
+    if "tool_calls" in msg and msg["tool_calls"]:
+      from rich.table import Table
+      
+      table = Table(show_header=True, header_style="bold magenta", box=None, expand=True)
+      table.add_column("Tool Name", style="green", width=25)
+      table.add_column("Arguments", style="white")
+      
+      for tc in msg["tool_calls"]:
+        func = tc.get("function", {})
+        table.add_row(func.get("name", ""), func.get("arguments", ""))
+      
+      console.print(Panel(table, title="🛠️ Tool Calls", border_style="yellow"))
+      console.print()
+
+    return True
+
   console.print("[bold cyan]Conversation History (estimated tokens):[/bold cyan]")
   for idx, msg in enumerate(session.messages):
     role = msg["role"]

@@ -222,34 +222,44 @@ def show_help(session: Any):
   table = Table(title="Slash Commands", show_header=True, header_style="bold magenta")
   table.add_column("Command", style="cyan")
   table.add_column("Description", style="white")
-  table.add_row("/help", "Show this help screen")
-  table.add_row("/status", "Display current session configuration")
-  table.add_row("/tool_stats", "Show statistics on tool and external binary calls")
-  table.add_row("/provider [ollama|openrouter]", "View or switch the LLM backend provider")
-  table.add_row("/model [ID|name]", "View or switch the current LLM model by ID or name")
-  table.add_row("/models [add <name> | remove <ID/name> | available [--refresh] | search <query>]", "List, add, remove, or search/list available LLM models in the session")
-  table.add_row("/oracle [name]", "View or switch the oracle model used for suggestions")
-  table.add_row("/sandbox [path]", "View or change the sandbox directory path")
-  table.add_row("/context [tokens]", "View or modify the history token limit")
-  table.add_row("/loops [iterations]", "View or modify the max sequential tool loops limit")
-  table.add_row("/api_key [key]", "Configure the OpenRouter API Key")
-  table.add_row("/system [text]", "View or edit the system instructions")
-  table.add_row("/load <path> [append|replace]", "Load system prompt guidelines from a file")
-  table.add_row("/save_session <path>", "Save the entire session status to a JSON file")
-  table.add_row("/load_session <path>", "Load a saved session status from a JSON file")
-  table.add_row("/history", "View message records and sizing details")
-  table.add_row("/undo [count]", "Undo the last conversation turn(s)")
-  table.add_row("/pop <index>", "Truncate history from index (1-based) onwards")
-  table.add_row("/tools", "List available sandbox tools and schemas")
-  table.add_row("/whitelist [add <path> [ro|rw] | remove <path> | clear]", "Manage whitelisted out-of-sandbox paths")
-  table.add_row("/skill [NAME...|clear]", "Load skill(s) on-demand or clear explicitly loaded skills")
-  table.add_row("/config [key=value]", "List, view, or change configuration parameters live")
-  table.add_row("/clear / /reset", "Clear conversation memory")
-  table.add_row("/compress [N]", "Summarize history, clear context, reload summary, keeping N (default 4) recent messages")
-  table.add_row("/copy [index] / /clip", "Copy a code block from the last AI response to the clipboard")
-  table.add_row("/write <path> [index] / /save_code", "Write a code block from the last AI response to a file")
-  table.add_row("/show <path>", "Read and render a Markdown file beautifully in the terminal")
-  table.add_row("/exit / /quit", "Exit the application")
+
+  rows = [
+    ("/help", "Show this help screen"),
+    ("/status", "Display current session configuration"),
+    ("/tool_stats", "Show statistics on tool and external binary calls"),
+    ("/provider [ollama|openrouter]", "View or switch the LLM backend provider"),
+    ("/model [ID|name]", "View or switch the current LLM model by ID or name"),
+    ("/models [add <name> | remove <ID/name> | available [--refresh] | search <query>]", "List, add, remove, or search/list available LLM models in the session"),
+    ("/oracle [name]", "View or switch the oracle model used for suggestions"),
+    ("/sandbox [path]", "View or change the sandbox directory path"),
+    ("/context [tokens]", "View or modify the history token limit"),
+    ("/loops [iterations]", "View or modify the max sequential tool loops limit"),
+    ("/api_key [key]", "Configure the OpenRouter API Key"),
+    ("/system [text]", "View or edit the system instructions"),
+    ("/load <path> [append|replace]", "Load system prompt guidelines from a file"),
+    ("/save_session <path>", "Save the entire session status to a JSON file"),
+    ("/load_session <path>", "Load a saved session status from a JSON file"),
+    ("/history [N]", "View message records or show the N-th entry in detail"),
+    ("/undo [count]", "Undo the last conversation turn(s)"),
+    ("/pop <index>", "Truncate history from index (1-based) onwards"),
+    ("/tools", "List available sandbox tools and schemas"),
+    ("/whitelist [add <path> [ro|rw] | remove <path> | clear]", "Manage whitelisted out-of-sandbox paths"),
+    ("/skill [NAME...|clear]", "Load skill(s) on-demand or clear explicitly loaded skills"),
+    ("/config [key=value]", "List, view, or change configuration parameters live"),
+    ("/clear / /reset", "Clear conversation memory"),
+    ("/compress [N]", "Summarize history, clear context, reload summary, keeping N (default 4) recent messages"),
+    ("/copy [index] / /clip", "Copy a code block from the last AI response to the clipboard"),
+    ("/write <path> [index] / /save_code", "Write a code block from the last AI response to a file"),
+    ("/show <path>", "Read and render a Markdown file beautifully in the terminal"),
+    ("/exit / /quit", "Exit the application"),
+  ]
+
+  # Sort by command name alphabetically (case-insensitively)
+  rows.sort(key=lambda r: r[0].lower())
+
+  for cmd, desc in rows:
+    table.add_row(cmd, desc)
+
   session._print(table)
 
 
