@@ -38,6 +38,11 @@ from chatty.tools.registry import TOOL_REGISTRY
 
 def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
   """Executes the specified tool with arguments in the sandbox directory."""
+  if getattr(session, "in_recon_phase", False):
+    from chatty.session import READ_ONLY_TOOLS
+    if name not in READ_ONLY_TOOLS:
+      return f"Error: Tool '{name}' is not allowed in reconnaissance mode. Only read-only queries are permitted."
+
   if not hasattr(session, "tool_calls_count"):
     session.tool_calls_count = {}
   session.tool_calls_count[name] = session.tool_calls_count.get(name, 0) + 1

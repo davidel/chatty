@@ -647,6 +647,14 @@ class ThinkingBudgetExceeded(RuntimeError):
 def run_llm_cycle(self):
   """Executes a full inference cycle, resolving tool calls recursively."""
   self.load_skills()
+
+  if (getattr(self.config, "recon_model", None)
+      and not getattr(self, "in_recon_phase", False)
+      and self.messages
+      and self.messages[-1].get("role") == "user"):
+    user_input = self.messages[-1].get("content") or ""
+    self.run_recon_phase(user_input)
+
   max_tool_loops = self.max_loops
   loop_count = 0
   logger.info(f"Starting LLM cycle. Max sequential tool loops: {max_tool_loops}")
@@ -696,10 +704,11 @@ def run_llm_cycle(self):
         "thought_signature": None
       }
       
-      logger.info(f"Loop {loop_count + 1}/{max_tool_loops} (Attempt {attempt}/{max_retries}): Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
+      logger.info(f"Loop {loop_count + 1}/{max_tool_loops} (Attempt {attempt}/{max_retries}): Sending request to LLM (model={self.config.recon_model if getattr(self, 'in_recon_phase', False) else self.model}) with {len(active_messages)} messages")
       try:
         # Live rendering console helper
-        panels = [{"title": "Assistant", "content": "Connecting to LLM...", "border_style": "green"}]
+        title = "Recon Assistant" if getattr(self, "in_recon_phase", False) else "Assistant"
+        panels = [{"title": title, "content": "Connecting to LLM...", "border_style": "cyan" if getattr(self, "in_recon_phase", False) else "green"}]
         with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), 
                            console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
           self._active_live = live
@@ -707,7 +716,8 @@ def run_llm_cycle(self):
           self._log_llm_request(active_messages, self.get_tools())
           
           # Resolve model and provider
-          actual_model, extra_body = self._resolve_model_and_provider(self.model)
+          model_to_use = self.config.recon_model if getattr(self, "in_recon_phase", False) else self.model
+          actual_model, extra_body = self._resolve_model_and_provider(model_to_use)
           
           self._throttle_request()
           # Try calling with stream_options={"include_usage": True}
@@ -918,17 +928,20 @@ def run_llm_cycle(self):
               first_chunk = False
               panels = []
               if reasoning_accumulated.strip():
+                title = "Recon Thinking" if getattr(self, "in_recon_phase", False) else "Thinking"
                 panels.append({
-                  "title": "Thinking",
+                  "title": title,
                   "content": reasoning_accumulated,
                   "border_style": "yellow"
                 })
               if content_accumulated:
+                title = "Recon Assistant" if getattr(self, "in_recon_phase", False) else "Assistant"
                 panels.append({
-                  "title": "Assistant",
+                  "title": title,
                   "content": content_accumulated,
-                  "border_style": "green"
+                  "border_style": "cyan" if getattr(self, "in_recon_phase", False) else "green"
                 })
+              
               
               if panels:
                 live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
@@ -968,9 +981,11 @@ def run_llm_cycle(self):
         final_panels = []
         if reasoning_accumulated.strip():
           disp_reasoning = truncate_thinking_by_line(reasoning_accumulated)
-          final_panels.append(Panel(Markdown(disp_reasoning), title="Thinking", border_style="yellow"))
+          title = "Recon Thinking" if getattr(self, "in_recon_phase", False) else "Thinking"
+          final_panels.append(Panel(Markdown(disp_reasoning), title=title, border_style="yellow"))
         if content_accumulated:
-          final_panels.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
+          title = "Recon Assistant" if getattr(self, "in_recon_phase", False) else "Assistant"
+          final_panels.append(Panel(Markdown(content_accumulated), title=title, border_style="cyan" if getattr(self, "in_recon_phase", False) else "green"))
         
         if final_panels:
           self._print(Group(*final_panels))

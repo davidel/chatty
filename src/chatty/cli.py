@@ -31,6 +31,10 @@ def main():
     help="Model identifier to use as the oracle. Default determines based on provider."
   )
   parser.add_argument(
+    "--recon-model",
+    help="Model identifier to use for the cheap worker reconnaissance phase. Optional."
+  )
+  parser.add_argument(
     "--context-size", "-c",
     type=int,
     default=8192,
@@ -261,6 +265,7 @@ def main():
     model=model,
     models=models,
     oracle_model=args.oracle_model,
+    recon_model=args.recon_model,
     context_size=args.context_size,
     sandbox=args.sandbox,
     api_key=args.api_key,

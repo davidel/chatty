@@ -139,6 +139,7 @@ class SessionConfig:
   provider: str
   model: str
   oracle_model: Optional[str] = None
+  recon_model: Optional[str] = None
   context_size: int = 8192
   sandbox: str = "./sandbox"
   api_key: Optional[str] = None
@@ -304,6 +305,13 @@ def scan_plugins_directory(plugins_dir: str, include_only=None, exclude=None) ->
   return skills
 
 
+READ_ONLY_TOOLS = {
+  "list_dir", "read_file", "locate_files", "get_file_info",
+  "search_grep", "list_file_backups", "read_file_backup",
+  "hex_dump", "fetch_url", "search_web", "sleep", "ask_question"
+}
+
+
 class ChatbotSession:
   _active_session = None
 
@@ -312,6 +320,7 @@ class ChatbotSession:
     provider: Optional[str] = None,
     model: Optional[str] = None,
     oracle_model: Optional[str] = None,
+    recon_model: Optional[str] = None,
     context_size: Optional[int] = None,
     sandbox: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -351,6 +360,7 @@ class ChatbotSession:
         provider=provider,
         model=model,
         oracle_model=oracle_model,
+        recon_model=recon_model,
         context_size=context_size if context_size is not None else 8192,
         sandbox=sandbox if sandbox is not None else "./sandbox",
         api_key=api_key,
@@ -400,6 +410,9 @@ class ChatbotSession:
     self._finalizer = weakref.finalize(self, cleanup_resources, self.background_commands, self.sandbox)
     
     # Internal state
+    self.loaded_files = {}
+    self.active_files = set()
+    self.in_recon_phase = False
     self._cached_history_tokens = None
     self.cumulative_prompt_tokens = 0
     self.cumulative_completion_tokens = 0
@@ -682,8 +695,164 @@ class ChatbotSession:
         
     logger.info(f"Loaded {len(self.skills)} skills: {list(self.skills.keys())}")
 
+
+  def get_sorted_loaded_files(self) -> List[str]:
+    """
+    Sorts loaded files using the smart caching heuristic:
+    Tier 1: Configuration / build files (pyproject.toml, package.json, etc.)
+    Tier 2: Read-only reference files (sorted by ascending git commit count, or mtime if no git)
+    Tier 3: Active/modified files (placed at the end)
+    """
+    files = list(self.loaded_files.keys())
+    if not files:
+      return []
+
+    # Identify Tier 1 (Config files)
+    config_extensions = {".toml", ".json", ".yaml", ".yml", ".txt", ".md"}
+    config_names = {"makefile", "dockerfile", "cmakelists.txt"}
+    
+    tier1 = []
+    other_files = []
+    
+    for f in files:
+      base = os.path.basename(f).lower()
+      ext = os.path.splitext(base)[1]
+      if base in config_names or ext in config_extensions:
+        tier1.append(f)
+      else:
+        other_files.append(f)
+        
+    # Sort Tier 1 alphabetically to keep it fully deterministic
+    tier1.sort()
+    
+    # Partition other_files into Tier 2 (Reference) and Tier 3 (Active)
+    tier2 = []
+    tier3 = []
+    
+    for f in other_files:
+      if f in self.active_files:
+        tier3.append(f)
+      else:
+        tier2.append(f)
+        
+    # Sort Tier 2 by commit count or mtime
+    def get_commit_count(path: str) -> int:
+      abs_path = os.path.join(self.sandbox, path)
+      if not os.path.exists(abs_path):
+        return 999999
+      import subprocess
+      try:
+        res = subprocess.run(
+          ["git", "rev-list", "--count", "HEAD", "--", abs_path],
+          cwd=self.sandbox,
+          stdout=subprocess.PIPE,
+          stderr=subprocess.PIPE,
+          text=True,
+          timeout=2
+        )
+        if res.returncode == 0:
+          return int(res.stdout.strip())
+      except Exception:
+        pass
+      try:
+        return int(os.path.getmtime(abs_path))
+      except Exception:
+        return 0
+
+    tier2.sort(key=lambda x: (get_commit_count(x), x))
+    
+    # Sort Tier 3 alphabetically
+    tier3.sort()
+    
+    return tier1 + tier2 + tier3
+
+  def get_workspace_files_context(self) -> str:
+    """Formats the sorted loaded files as a markdown block for the system prompt."""
+    sorted_paths = self.get_sorted_loaded_files()
+    if not sorted_paths:
+      return ""
+      
+    blocks = [
+      "## Workspace Files Context",
+      "These are the contents of the files currently loaded in your workspace context. "
+      "You do not need to call read_file to view them. When you make changes to these files, "
+      "they will be updated in this context automatically.",
+      "---"
+    ]
+    
+    for path in sorted_paths:
+      content = self.loaded_files.get(path, "")
+      lines = content.splitlines()
+      numbered_content = "\n".join(f"{i+1}: {line}" for i, line in enumerate(lines))
+      blocks.append(f"### File: {path}\n```\n{numbered_content}\n```\n---")
+      
+    return "\n\n".join(blocks)
+
+  def run_recon_phase(self, user_input: str):
+    """
+    Runs a cheap discovery loop (Phase 1) using the recon_model to locate and inspect files.
+    Gathers read files into self.loaded_files.
+    """
+    if not self.config.recon_model:
+      return
+
+    logger.info(f"Starting Recon Phase using model: {self.config.recon_model}")
+    self._print(f"[bold blue]🔍 Running Reconnaissance using {self.config.recon_model}...[/bold blue]")
+    
+    # Save original state
+    old_messages = list(self.messages)
+    old_prompt_caching = self.prompt_caching
+    
+    # Set up recon phase context
+    self.in_recon_phase = True
+    self.prompt_caching = False  # Keep recon cheap and direct
+    
+    # We construct a dedicated system instruction for the recon worker
+    recon_system = (
+      "You are a reconnaissance agent. Your sole task is to search the codebase and locate "
+      "all files relevant to the user request. You must inspect files using read_file to verify "
+      "their relevance. Read as many files as necessary to fully answer or understand the context.\n"
+      "CRITICAL: Do NOT attempt to write or edit files. Do NOT run build, compilation, or test commands.\n"
+      "Only use read-only tools: locate_files, search_grep, list_dir, read_file, get_file_info.\n"
+      "Once you have found and read all relevant files, explain which files you inspected and stop."
+    )
+    
+    # Temporary message list for the recon agent
+    self.messages = CachedList([
+      {"role": "system", "content": recon_system},
+      {"role": "user", "content": f"Please find and read all files relevant to this task: {user_input}"}
+    ], on_change=self._invalidate_token_cache)
+    
+    try:
+      # Run a standard completion cycle, but with limited max loops
+      old_max_loops = self.max_loops
+      self.max_loops = 5
+      
+      # run_llm_cycle will use our recon_model because self.in_recon_phase is True
+      run_llm_cycle(self)
+      
+      self.max_loops = old_max_loops
+    except Exception as e:
+      logger.exception(f"Error during recon phase: {e}")
+      self._print(f"[bold yellow]⚠️ Reconnaissance encountered an error: {e}. Proceeding to main execution.[/bold yellow]")
+    finally:
+      # Restore original session state
+      self.in_recon_phase = False
+      self.prompt_caching = old_prompt_caching
+      self.messages = CachedList(old_messages, on_change=self._invalidate_token_cache)
+      
+      # Print recon summary
+      loaded_paths = self.get_sorted_loaded_files()
+      if loaded_paths:
+        self._print(f"[bold green]✓ Recon completed. Loaded {len(loaded_paths)} file(s) into context:[/bold green]")
+        for path in loaded_paths:
+          self._print(f"  - [cyan]{path}[/cyan]")
+      else:
+        self._print("[bold yellow]✓ Recon completed. No files were loaded.[/bold yellow]")
+
   def get_active_system_prompt(self) -> str:
-    """Returns system prompt integrated with dynamically activated skills."""
+    """Returns system prompt integrated with dynamically activated skills and workspace files."""
+    skills_text = ""
     if self.static_skills:
       active_skills = []
       # Append all static skills
@@ -696,61 +865,68 @@ class ChatbotSession:
         if skill:
           meta = skill["metadata"]
           active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
-      if not active_skills:
-        return self.system_prompt
-      skills_text = "\n\n".join(active_skills)
-      return f"{self.system_prompt}\n\n## Available Skills\n{skills_text}"
-
-    # Progressive disclosure mode
-    available_skills_lines = []
-    sandbox_path = getattr(self, "sandbox", "")
-    for skill_name, skill in sorted(self.skills.items()):
-      meta = skill["metadata"]
-      desc = meta.get("description") or "No description provided."
-      desc = " ".join(desc.split())
-      
-      path_str = ""
-      skill_path = skill.get("path")
-      if skill_path:
-        try:
-          rel = os.path.relpath(skill_path, sandbox_path)
-          if not rel.startswith(".."):
-            path_str = f" (Location: {rel})"
-          else:
-            home = os.path.expanduser("~")
-            if skill_path.startswith(home):
-              path_str = f" (Location: ~{skill_path[len(home):]})"
-            else:
-              path_str = f" (Location: {skill_path})"
-        except Exception:
-          path_str = f" (Location: {skill_path})"
-          
-      available_skills_lines.append(f"- **{meta.get('name')}**: {desc}{path_str}")
-
-    available_skills_text = ""
-    if available_skills_lines:
-      available_skills_text = "## Available Skills\n" + "\n".join(available_skills_lines)
-
-    active_skills_blocks = []
-    active_names = []
-    for skill_name in sorted(self.explicit_skills):
-      skill = self.skills.get(skill_name)
-      if skill:
+      if active_skills:
+        skills_text = "## Available Skills\n" + "\n\n".join(active_skills)
+    else:
+      # Progressive disclosure mode
+      available_skills_lines = []
+      sandbox_path = getattr(self, "sandbox", "")
+      for skill_name, skill in sorted(self.skills.items()):
         meta = skill["metadata"]
-        active_skills_blocks.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
-        active_names.append(meta.get("name"))
+        desc = meta.get("description") or "No description provided."
+        desc = " ".join(desc.split())
+        
+        path_str = ""
+        skill_path = skill.get("path")
+        if skill_path:
+          try:
+            rel = os.path.relpath(skill_path, sandbox_path)
+            if not rel.startswith(".."):
+              path_str = f" (Location: {rel})"
+            else:
+              home = os.path.expanduser("~")
+              if skill_path.startswith(home):
+                path_str = f" (Location: ~{skill_path[len(home):]})"
+              else:
+                path_str = f" (Location: {skill_path})"
+          except Exception:
+            path_str = f" (Location: {skill_path})"
+            
+        available_skills_lines.append(f"- **{meta.get('name')}**: {desc}{path_str}")
 
-    activated_skills_text = ""
-    if active_skills_blocks:
-      logger.info(f"System prompt built with activated skills: {active_names}")
-      activated_skills_text = "## Activated Skills\n" + "\n\n".join(active_skills_blocks)
+      available_skills_text = ""
+      if available_skills_lines:
+        available_skills_text = "## Available Skills\n" + "\n".join(available_skills_lines)
+
+      active_skills_blocks = []
+      active_names = []
+      for skill_name in sorted(self.explicit_skills):
+        skill = self.skills.get(skill_name)
+        if skill:
+          meta = skill["metadata"]
+          active_skills_blocks.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
+          active_names.append(meta.get("name"))
+
+      activated_skills_text = ""
+      if active_skills_blocks:
+        logger.info(f"System prompt built with activated skills: {active_names}")
+        activated_skills_text = "## Activated Skills\n" + "\n\n".join(active_skills_blocks)
+
+      parts = []
+      if available_skills_text:
+        parts.append(available_skills_text)
+      if activated_skills_text:
+        parts.append(activated_skills_text)
+      skills_text = "\n\n".join(parts)
 
     parts = [self.system_prompt]
-    if available_skills_text:
-      parts.append(available_skills_text)
-    if activated_skills_text:
-      parts.append(activated_skills_text)
-
+    if skills_text:
+      parts.append(skills_text)
+      
+    files_context = self.get_workspace_files_context()
+    if files_context:
+      parts.append(files_context)
+      
     return "\n\n".join(parts)
 
   def init_client(self):
@@ -1016,6 +1192,10 @@ class ChatbotSession:
           "You can optionally specify a custom formatter and the path to a tool-specific rules/configuration file."
         )
       tools.append(t_copy)
+
+    # Filter for recon phase if active
+    if getattr(self, "in_recon_phase", False):
+      tools = [t for t in tools if t["function"]["name"] in READ_ONLY_TOOLS]
 
     if self.prompt_caching:
       if tools:

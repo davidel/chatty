@@ -252,6 +252,7 @@ def show_help(session: Any):
     ("/write <path> [index] / /save_code", "Write a code block from the last AI response to a file"),
     ("/show <path>", "Read and render a Markdown file beautifully in the terminal"),
     ("/exit / /quit", "Exit the application"),
+    ("/recon_model [name]", "View or switch the reconnaissance (cheap worker) model"),
   ]
 
   # Sort by command name alphabetically (case-insensitively)
@@ -271,6 +272,7 @@ def show_status(session: Any):
   table.add_row("Provider", session.provider)
   table.add_row("Model", session.model)
   table.add_row("Oracle Model", session.get_oracle_model() or "Not configured")
+  table.add_row("Recon Model", getattr(session.config, "recon_model", None) or "Not configured")
   table.add_row("Sandbox Path", session.sandbox)
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
