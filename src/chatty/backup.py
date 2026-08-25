@@ -47,17 +47,14 @@ def backup_file(sandbox_dir: str, rel_path: str) -> None:
     file_backups_dir = os.path.join(get_backups_dir(sandbox_dir), rel_path)
     os.makedirs(file_backups_dir, exist_ok=True)
     
-    with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
-      content = f.read()
-      
     timestamp = int(time.time() * 1000)
     backup_path = os.path.join(file_backups_dir, f"{timestamp}.bak")
     while os.path.exists(backup_path):
       timestamp += 1
       backup_path = os.path.join(file_backups_dir, f"{timestamp}.bak")
     
-    with open(backup_path, 'w', encoding='utf-8') as f:
-      f.write(content)
+    import shutil
+    shutil.copy2(abs_path, backup_path)
       
     logger.info(f"Created backup of '{rel_path}' at '{os.path.relpath(backup_path, sandbox_dir)}'")
     prune_backups(file_backups_dir, max_backups=10)
@@ -137,11 +134,8 @@ def restore_backup(sandbox_dir: str, rel_path: str, timestamp: int = None) -> st
   abs_path = get_safe_path(sandbox_dir, rel_path, write=True)
   os.makedirs(os.path.dirname(abs_path), exist_ok=True)
   
-  with open(backup_file_path, 'r', encoding='utf-8') as f:
-    content = f.read()
-    
-  with open(abs_path, 'w', encoding='utf-8') as f:
-    f.write(content)
+  import shutil
+  shutil.copy2(backup_file_path, abs_path)
     
   time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(target_ts / 1000.0))
   return f"Successfully restored '{rel_path}' to backup version from {time_str}."

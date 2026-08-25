@@ -238,7 +238,13 @@ class SubprocessRunner:
 
       if self.session.landlock_bin and self.session.sandbox:
         from chatty.landlock import wrap_command_with_landlock
-        cmd_args = wrap_command_with_landlock(self.session.landlock_bin, self.session.sandbox, command)
+        rw_whitelist = list(self.session.allowed_rw_paths) + list(self.session.temp_allowed_rw_paths)
+        cmd_args = wrap_command_with_landlock(
+          self.session.landlock_bin,
+          self.session.sandbox,
+          command,
+          rw_paths=rw_whitelist
+        )
         shell_val = False
       else:
         cmd_args = command

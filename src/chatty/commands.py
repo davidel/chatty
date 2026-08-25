@@ -4,7 +4,7 @@ from typing import Dict, Callable, Any
 
 from rich.console import Console
 from rich.panel import Panel
-from chatty.utils import load_system_prompt_from_file, count_tokens
+from chatty.utils import load_system_prompt_from_file
 
 console = Console()
 

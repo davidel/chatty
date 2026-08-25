@@ -7,7 +7,6 @@ import urllib.parse
 from typing import List, Dict, Any, Tuple, Optional
 from html.parser import HTMLParser
 import requests
-import tiktoken
 from rich.console import Console
 
 logger = logging.getLogger("chatty")
@@ -196,14 +195,7 @@ def load_system_prompt_from_file(file_path: str) -> str:
       return f.read().strip()
 
 
-def count_tokens(text: str) -> int:
-  """Estimates token length using tiktoken's cl100k_base encoder."""
-  try:
-    encoding = tiktoken.get_encoding("cl100k_base")
-    return len(encoding.encode(text, disallowed_special=()))
-  except Exception:
-    # fallback estimation if tiktoken fails
-    return len(text) // 4
+
 
 
 def truncate_output(text: str, max_chars: int = 16000) -> str:

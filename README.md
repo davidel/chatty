@@ -19,7 +19,6 @@ Chatty provides a local terminal loop that allows an LLM agent to interact with 
 - **Interactive UI**: Status bars showing the provider, active model, token counter, active loop count, and sandbox directory path. Autocomplete and multiline inputs are fully integrated.
 - **Slash Commands**: Modify settings dynamically mid-session, view tool metrics, or compress history to save tokens.
 - **Dynamic & Static Skills**: Dynamically import system prompts and guidelines from external files or directories via keyword/tag triggers or statically on initialization.
-- **Syntax Pre-verification**: Prevents writing broken scripts (Python, C++, Verilog, JSON, YAML) by verifying code syntax prior to saving updates.
 - **Context Optimization**: Automates context truncation and history compression. Implements ephemeral `cache_control` tagging to maximize prompt caching efficiency for OpenRouter.
 - **Google-Style Logging**: Standardized process tracking via custom `glog` styling.
 
@@ -171,7 +170,7 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 ### File Manipulation Tools
 - **`list_dir`**: Explores directories inside the sandbox. Truncates output above `--max-dir-items` to prevent token flooding.
 - **`read_file`**: Reads text files. Accepts optional `start_line` and `end_line` parameters (1-indexed), supports displaying line numbers, and honors `--max-read-chars`.
-- **`write_file`**: Writes full text contents to a file. Triggers automated syntax checking.
+- **`write_file`**: Writes full text contents to a file.
 - **`patch_file`**: Replaces one or more unique blocks of code inside a file using Aider-style SEARCH/REPLACE blocks. Highly robust to whitespace and indentation differences (automatically adjusts output indentation to match the file). Supports chaining multiple blocks sequentially in one patch parameter to perform multiple edits in a single call.
 - **`format_file`**: Styles source files using formatters: `black`/`ruff` for Python, `clang-format` for C/C++, `prettier` for frontend, or custom JSON/YAML encoders. Displays diff results.
 - **`move_file`**: Renames or moves files and directories safely inside the sandbox boundaries.

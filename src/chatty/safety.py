@@ -283,11 +283,20 @@ def has_forbidden_filesystem_ops(sig: str) -> bool:
   if not sig or sig == "invalid_syntax":
     return False
   for op in sig.split(','):
-    if op.startswith("import:") and op.split(":")[1] in {"os", "shutil", "pathlib", "glob", "fnmatch"}:
+    # Block static filesystem imports
+    if op.startswith("import:") and op.split(":")[1] in {"os", "shutil", "pathlib", "glob", "fnmatch", "importlib"}:
       return True
+    # Block direct open calls
     if op == "call:open":
       return True
+    # Block static filesystem call patterns
     if op.startswith("call:") and op.split(":")[1].split(".")[0] in {"os", "shutil", "pathlib", "glob", "fnmatch"}:
+      return True
+    # Block dynamic execution & builtins/reflection bypasses
+    if op.startswith("call:") and op.split(":")[1].split(".")[0] in {"eval", "exec", "getattr", "setattr", "__builtins__", "importlib"}:
+      return True
+    # Block direct call to import_module
+    if op == "call:import_module":
       return True
   return False
 

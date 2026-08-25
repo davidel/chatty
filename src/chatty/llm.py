@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Tuple, Optional
 
 import openai
 from chatty.tools import execute_tool, get_available_formatters, TOOLS_SCHEMA
-from chatty.utils import count_tokens, truncate_output, sanitize_tool_output, repair_json, truncate_thinking_by_line
+from chatty.utils import truncate_output, sanitize_tool_output, repair_json, truncate_thinking_by_line
 from chatty.ui import optional_live, LazyMarkdown, LiveScreenLayout
 from chatty.safety import active_session_var
 
@@ -673,14 +673,22 @@ def run_llm_cycle(self):
       
       # If the previous attempt was aborted due to an internal thinking loop, feed it back
       if last_aborted_thinking:
-        active_messages.append({
-          "role": "user",
-          "content": (
-            "⚠️ The system aborted your previous attempt because you got stuck in an internal thinking loop. "
-            "Review your thinking path below, identify the repetition/deadlock, and use a completely different approach or respond directly:\n\n"
-            f"--- ABORTED THINKING PATH ---\n{last_aborted_thinking}\n------------------------------"
-          )
-        })
+        nudge_content = (
+          "⚠️ The system aborted your previous attempt because you got stuck in an internal thinking loop. "
+          "Review your thinking path below, identify the repetition/deadlock, and use a completely different approach or respond directly:\n\n"
+          f"--- ABORTED THINKING PATH ---\n{last_aborted_thinking}\n------------------------------"
+        )
+        if active_messages and active_messages[-1].get("role") == "user":
+          last_msg = active_messages[-1]
+          if last_msg.get("content"):
+            last_msg["content"] = f"{last_msg['content']}\n\n{nudge_content}"
+          else:
+            last_msg["content"] = nudge_content
+        else:
+          active_messages.append({
+            "role": "user",
+            "content": nudge_content
+          })
         last_aborted_thinking = None
       
       # Cache token count for the status bar during streaming

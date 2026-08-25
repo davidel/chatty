@@ -22,7 +22,7 @@ from rich.columns import Columns
 from rich.segment import Segment
 
 from chatty.tools import TOOLS_SCHEMA
-from chatty.utils import count_tokens, format_short_number
+from chatty.utils import format_short_number
 
 logger = logging.getLogger("chatty")
 console = Console()

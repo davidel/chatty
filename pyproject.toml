@@ -17,7 +17,6 @@ classifiers = [
 dependencies = [
     "requests",
     "openai",
-    "tiktoken",
     "rich",
     "prompt-toolkit",
     "PyYAML",

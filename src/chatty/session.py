@@ -51,7 +51,6 @@ from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 
 from chatty.utils import (
-  count_tokens,
   truncate_output,
   get_ollama_models,
   load_system_prompt_from_file,
@@ -568,6 +567,13 @@ class ChatbotSession:
     config = self.__dict__.get("config")
     if name != "config" and config is not None and hasattr(config, name):
       setattr(config, name, value)
+      if name == "sandbox":
+        try:
+          abs_val = os.path.abspath(value)
+          os.makedirs(abs_val, exist_ok=True)
+          os.chdir(abs_val)
+        except Exception as e:
+          logger.error(f"Failed to change directory to new sandbox: {e}")
     else:
       super().__setattr__(name, value)
 
@@ -1111,7 +1117,14 @@ class ChatbotSession:
         "state from it into the new summary."
       )
 
-    active_messages.append({"role": "user", "content": summary_instruction})
+    if active_messages and active_messages[-1].get("role") == "user":
+      last_msg = active_messages[-1]
+      if last_msg.get("content"):
+        last_msg["content"] = f"{last_msg['content']}\n\n{summary_instruction}"
+      else:
+        last_msg["content"] = summary_instruction
+    else:
+      active_messages.append({"role": "user", "content": summary_instruction})
 
     # Log request details in DEBUG mode
     self._log_llm_request(active_messages, None)

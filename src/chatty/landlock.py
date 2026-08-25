@@ -68,16 +68,24 @@ def compile_landlock_binary() -> Optional[str]:
   return target_path
 
 
-def wrap_command_with_landlock(binary_path: str, sandbox_dir: str, command: str) -> List[str]:
-  rw_paths = [sandbox_dir, tempfile.gettempdir()]
+def wrap_command_with_landlock(
+  binary_path: str,
+  sandbox_dir: str,
+  command: str,
+  rw_paths: Optional[List[str]] = None
+) -> List[str]:
+  all_rw = [sandbox_dir, tempfile.gettempdir()]
   if os.path.exists("/dev/null"):
-    rw_paths.append("/dev/null")
+    all_rw.append("/dev/null")
+  if rw_paths:
+    all_rw.extend(rw_paths)
   # Remove duplicate paths and resolve them
-  rw_paths = list(dict.fromkeys(os.path.realpath(p) for p in rw_paths))
+  all_rw = list(dict.fromkeys(os.path.realpath(p) for p in all_rw))
 
   args = [binary_path, "--ro", "/"]
-  for path in rw_paths:
+  for path in all_rw:
     args.extend(["--rw", path])
 
   args.extend(["--", "/bin/sh", "-c", command])
   return args
+
