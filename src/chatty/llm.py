@@ -648,9 +648,6 @@ def run_llm_cycle(self):
   """Executes a full inference cycle, resolving tool calls recursively."""
   self.load_skills()
 
-  if not getattr(self, "in_recon_phase", False):
-    self._last_tool_calls = None
-
   if (getattr(self.config, "recon_model", None)
       and not getattr(self, "in_recon_phase", False)
       and self.messages
@@ -1165,15 +1162,6 @@ def run_llm_cycle(self):
     if not tool_calls_accumulated:
       break
         
-    # Generate calls signature for repetition detection
-    current_calls_signature = []
-    for tc in tool_calls_accumulated:
-      func = tc.get("function") or {}
-      current_calls_signature.append((func.get("name"), func.get("arguments")))
-      
-    is_repetition = (getattr(self, "_last_tool_calls", None) == current_calls_signature)
-    self._last_tool_calls = current_calls_signature
-
     # Otherwise, execute requested tools sequentially
     for idx, tc in enumerate(tool_calls_accumulated):
       if idx > 0:
@@ -1182,47 +1170,40 @@ def run_llm_cycle(self):
       t_name = tc["function"]["name"]
       t_args_raw = tc["function"]["arguments"]
       
-      if is_repetition:
-        t_result = (
-          f"Error: You are calling the exact same tool '{t_name}' with the exact same arguments "
-          "as the previous step. This is a repetition loop. Please proceed to answer the user query "
-          "directly or try a different action."
-        )
-      else:
+      try:
+        args_parsed = json.loads(t_args_raw) if t_args_raw else {}
+      except Exception:
         try:
-          args_parsed = json.loads(t_args_raw) if t_args_raw else {}
-        except Exception:
-          try:
-            args_parsed = json.loads(repair_json(t_args_raw)) if t_args_raw else {}
-          except Exception as e:
-            args_parsed = {}
-            t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
-        else:
-          # Execute tool
-          token = active_session_var.set(self)
-          try:
-            if t_name == "ask_question":
-              logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
-              t_result = execute_tool(t_name, args_parsed, self)
-            else:
-              panels = [{
-                "title": "🔧 Executing Tool",
-                "content": Text.from_markup(f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]"),
-                "border_style": "yellow"
-              }]
-              with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
-                self._active_live = live
-                try:
-                  logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
-                  t_result = execute_tool(t_name, args_parsed, self)
-                finally:
-                  self._active_live = None
-                # Remove status bar before exiting Live context
-                live.update(LiveScreenLayout(panels, None))
-          finally:
-            active_session_var.reset(token)
-            self.temp_allowed_ro_paths.clear()
-            self.temp_allowed_rw_paths.clear()
+          args_parsed = json.loads(repair_json(t_args_raw)) if t_args_raw else {}
+        except Exception as e:
+          args_parsed = {}
+          t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
+      else:
+        # Execute tool
+        token = active_session_var.set(self)
+        try:
+          if t_name == "ask_question":
+            logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
+            t_result = execute_tool(t_name, args_parsed, self)
+          else:
+            panels = [{
+              "title": "🔧 Executing Tool",
+              "content": Text.from_markup(f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]"),
+              "border_style": "yellow"
+            }]
+            with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
+              self._active_live = live
+              try:
+                logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
+                t_result = execute_tool(t_name, args_parsed, self)
+              finally:
+                self._active_live = None
+              # Remove status bar before exiting Live context
+              live.update(LiveScreenLayout(panels, None))
+        finally:
+          active_session_var.reset(token)
+          self.temp_allowed_ro_paths.clear()
+          self.temp_allowed_rw_paths.clear()
             
       # Print result summary nicely
       self._print(Panel(
