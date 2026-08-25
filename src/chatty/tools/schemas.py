@@ -649,6 +649,23 @@ TOOLS_SCHEMA = [
         "required": ["path"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "find_symbol",
+      "description": "Search the global project-wide index for any symbol matching the given name (case-insensitive).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The symbol name to search for."
+          }
+        },
+        "required": ["name"]
+      }
+    }
   }
 ]
 

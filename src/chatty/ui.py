@@ -243,6 +243,7 @@ def show_help(session: Any):
     ("/undo [count]", "Undo the last conversation turn(s)"),
     ("/pop <index>", "Truncate history from index (1-based) onwards"),
     ("/tools", "List available sandbox tools and schemas"),
+    ("/find_symbol <name>", "Search the global project-wide index for any symbol"),
     ("/whitelist [add <path> [ro|rw] | remove <path> | clear]", "Manage whitelisted out-of-sandbox paths"),
     ("/skill [NAME...|clear]", "Load skill(s) on-demand or clear explicitly loaded skills"),
     ("/config [key=value]", "List, view, or change configuration parameters live"),

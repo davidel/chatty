@@ -930,6 +930,25 @@ def cmd_show(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_find_symbol(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    console.print("[bold red]Error: Please specify a symbol name to search for.[/bold red]")
+    return True
+  from chatty.tools.code_intel import SymbolExtractor
+  lsp_client = getattr(session, "lsp_client", None)
+  extractor = SymbolExtractor(session.sandbox, lsp_client)
+  matches = extractor.find_symbol(arg)
+  if not matches:
+    console.print(f"[yellow]No matches found for symbol '{arg}'.[/yellow]")
+    return True
+  console.print(f"[bold green]Found {len(matches)} match(es) for symbol '{arg}':[/bold green]")
+  for match in matches:
+    parent_part = f" (in Class {match['parent']})" if match.get("parent") else ""
+    console.print(f"  - [cyan]{match['path']}:{match['line']}[/cyan] ({match['type']}{parent_part})")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -953,6 +972,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/save_session": cmd_save,
   "/load_session": cmd_load_session,
   "/tools": cmd_tools,
+  "/find_symbol": cmd_find_symbol,
   "/skill": cmd_skill,
   "/history": cmd_history,
   "/undo": cmd_undo,

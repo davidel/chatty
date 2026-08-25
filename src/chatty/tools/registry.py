@@ -354,6 +354,23 @@ def handle_get_outline(arguments: Dict[str, Any], session: Any) -> str:
   return "\n".join(lines)
 
 
+def handle_find_symbol(arguments: Dict[str, Any], session: Any) -> str:
+  name = arguments.get("name")
+  if not name:
+    return "Error: Missing parameter 'name'."
+  from chatty.tools.code_intel import SymbolExtractor
+  lsp_client = getattr(session, "lsp_client", None)
+  extractor = SymbolExtractor(session.sandbox, lsp_client)
+  matches = extractor.find_symbol(name)
+  if not matches:
+    return f"No matches found for symbol '{name}'."
+  lines = [f"Found {len(matches)} match(es) for symbol '{name}':"]
+  for match in matches:
+    parent_part = f" (in Class {match['parent']})" if match.get("parent") else ""
+    lines.append(f"  - {match['path']}:{match['line']} ({match['type']}{parent_part})")
+  return "\n".join(lines)
+
+
 def handle_ask_oracle(arguments: Dict[str, Any], session: Any) -> str:
   query = arguments.get("query")
   if not query:
@@ -392,4 +409,5 @@ TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any], Any], str]] = {
   "search_web": handle_search_web,
   "ask_oracle": handle_ask_oracle,
   "get_outline": handle_get_outline,
+  "find_symbol": handle_find_symbol,
 }
