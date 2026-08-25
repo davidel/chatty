@@ -24,6 +24,8 @@ dependencies = [
     "psutil",
     "litellm",
     "pypdf",
+    "tree-sitter",
+    "tree-sitter-languages",
 ]
 
 [project.scripts]
