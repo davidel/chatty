@@ -109,25 +109,6 @@ def cmd_oracle(session: Any, arg: str) -> bool:
   return True
 
 
-def cmd_recon_model(session: Any, arg: str) -> bool:
-  arg = arg.strip()
-  if not arg:
-    recon = getattr(session.config, "recon_model", None)
-    if recon:
-      console.print(f"Current reconnaissance model: [bold cyan]{recon}[/bold cyan]")
-    else:
-      console.print("Current reconnaissance model is not configured (Recon phase is inactive).")
-    return True
-
-  if arg.lower() in ("none", "disable", "disabled", "false"):
-    session.config.recon_model = None
-    console.print("Reconnaissance phase has been [bold red]disabled[/bold red].")
-  else:
-    session.config.recon_model = arg
-    console.print(f"Switched reconnaissance model to: [bold green]{arg}[/bold green]")
-  return True
-
-
 def cmd_models(session: Any, arg: str) -> bool:
   parts = arg.strip().split(maxsplit=1)
   if not parts:
@@ -986,8 +967,6 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/write": cmd_write,
   "/save_code": cmd_write,
   "/show": cmd_show,
-  "/recon": cmd_recon_model,
-  "/recon_model": cmd_recon_model,
 }
 
 

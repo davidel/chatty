@@ -27,15 +27,7 @@ def handle_move_file(arguments: Dict[str, Any], session: Any) -> str:
   dest = arguments.get("dest")
   if not src or not dest:
     return "Error: Missing parameters 'src' and/or 'dest'."
-  res = tool_move_file(session.sandbox, src, dest)
-  if not res.startswith("Error"):
-    if hasattr(session, "loaded_files"):
-      if src in session.loaded_files:
-        session.loaded_files[dest] = session.loaded_files.pop(src)
-      if src in session.active_files:
-        session.active_files.discard(src)
-        session.active_files.add(dest)
-  return res
+  return tool_move_file(session.sandbox, src, dest)
 
 
 def handle_copy_file(arguments: Dict[str, Any], session: Any) -> str:
@@ -43,32 +35,14 @@ def handle_copy_file(arguments: Dict[str, Any], session: Any) -> str:
   dest = arguments.get("dest")
   if not src or not dest:
     return "Error: Missing parameters 'src' and/or 'dest'."
-  res = tool_copy_file(session.sandbox, src, dest)
-  if not res.startswith("Error"):
-    if hasattr(session, "loaded_files"):
-      from chatty.tools.file_ops import get_safe_path
-      try:
-        safe_dest = get_safe_path(session.sandbox, dest)
-        if os.path.exists(safe_dest) and os.path.isfile(safe_dest):
-          with open(safe_dest, 'r', encoding='utf-8', errors='replace') as f:
-            session.loaded_files[dest] = f.read()
-            if src in session.active_files:
-              session.active_files.add(dest)
-      except Exception:
-        pass
-  return res
+  return tool_copy_file(session.sandbox, src, dest)
 
 
 def handle_delete_file(arguments: Dict[str, Any], session: Any) -> str:
   path = arguments.get("path")
   if not path:
     return "Error: Missing parameter 'path'."
-  res = tool_delete_file(session.sandbox, path)
-  if not res.startswith("Error"):
-    if hasattr(session, "loaded_files"):
-      session.loaded_files.pop(path, None)
-      session.active_files.discard(path)
-  return res
+  return tool_delete_file(session.sandbox, path)
 
 
 def handle_delete_directory(arguments: Dict[str, Any], session: Any) -> str:
@@ -104,17 +78,6 @@ def handle_read_file(arguments: Dict[str, Any], session: Any) -> str:
   except (ValueError, TypeError):
     return "Error: start_line and end_line must be valid integers."
   line_numbers = bool(arguments.get("line_numbers")) if arguments.get("line_numbers") is not None else False
-  
-  if hasattr(session, "loaded_files"):
-    from chatty.tools.file_ops import get_safe_path
-    try:
-      safe_p = get_safe_path(session.sandbox, path)
-      if os.path.exists(safe_p) and os.path.isfile(safe_p):
-        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-          session.loaded_files[path] = f.read()
-    except Exception:
-      pass
-
   return tool_read_file(session.sandbox, path, start_line, end_line, max_chars=session.max_read_chars, line_numbers=line_numbers)
 
 
@@ -142,11 +105,7 @@ def handle_write_file(arguments: Dict[str, Any], session: Any) -> str:
   content = arguments.get("content")
   if not path or content is None:
     return "Error: Missing parameters 'path' and 'content'."
-  res = tool_write_file(session.sandbox, path, content)
-  if not res.startswith("Error") and hasattr(session, "loaded_files"):
-    session.loaded_files[path] = content
-    session.active_files.add(path)
-  return res
+  return tool_write_file(session.sandbox, path, content)
 
 
 def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:
@@ -159,24 +118,12 @@ def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:
     return "Error: Missing parameter 'path'."
     
   if patch is not None:
-    res = tool_patch_file(session.sandbox, path, patch)
+    return tool_patch_file(session.sandbox, path, patch)
   elif search is not None and replace is not None:
     synthetic_patch = f"<<<<<<< SEARCH\n{search}\n=======\n{replace}\n>>>>>>> REPLACE"
-    res = tool_patch_file(session.sandbox, path, synthetic_patch)
+    return tool_patch_file(session.sandbox, path, synthetic_patch)
   else:
     return "Error: Must specify either 'patch' or both 'search' and 'replace'."
-    
-  if not res.startswith("Error") and hasattr(session, "loaded_files"):
-    from chatty.tools.file_ops import get_safe_path
-    try:
-      safe_p = get_safe_path(session.sandbox, path)
-      if os.path.exists(safe_p) and os.path.isfile(safe_p):
-        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-          session.loaded_files[path] = f.read()
-          session.active_files.add(path)
-    except Exception:
-      pass
-  return res
 
 
 def handle_multi_patch(arguments: Dict[str, Any], session: Any) -> str:
@@ -207,18 +154,7 @@ def handle_format_file(arguments: Dict[str, Any], session: Any) -> str:
   config_path = arguments.get("config_path")
   if not path:
     return "Error: Missing parameter 'path'."
-  res = tool_format_file(session.sandbox, path, formatter, config_path)
-  if not res.startswith("Error") and hasattr(session, "loaded_files"):
-    from chatty.tools.file_ops import get_safe_path
-    try:
-      safe_p = get_safe_path(session.sandbox, path)
-      if os.path.exists(safe_p) and os.path.isfile(safe_p):
-        with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-          session.loaded_files[path] = f.read()
-          session.active_files.add(path)
-    except Exception:
-      pass
-  return res
+  return tool_format_file(session.sandbox, path, formatter, config_path)
 
 
 def handle_search_grep(arguments: Dict[str, Any], session: Any) -> str:
