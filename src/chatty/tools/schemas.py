@@ -632,6 +632,23 @@ TOOLS_SCHEMA = [
         "required": ["path", "timestamp"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_outline",
+      "description": "Inspect the structural definition outline of a file inside the sandbox. Returns classes, functions, and methods with their line numbers. Uses the best available parser (LSP client -> Tree-Sitter -> AST -> Regex).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The file path relative to the sandbox root."
+          }
+        },
+        "required": ["path"]
+      }
+    }
   }
 ]
 

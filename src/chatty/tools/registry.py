@@ -337,6 +337,23 @@ def handle_search_web(arguments: Dict[str, Any], session: Any) -> str:
   return tool_search_web(query, max_results)
 
 
+def handle_get_outline(arguments: Dict[str, Any], session: Any) -> str:
+  path = arguments.get("path")
+  if not path:
+    return "Error: Missing parameter 'path'."
+  from chatty.tools.code_intel import SymbolExtractor
+  lsp_client = getattr(session, "lsp_client", None)
+  extractor = SymbolExtractor(session.sandbox, lsp_client)
+  symbols = extractor.get_outline(path)
+  if not symbols:
+    return f"No symbols found or file could not be parsed for '{path}'."
+  lines = [f"Outline of '{path}':"]
+  for sym in symbols:
+    parent_part = f" (in Class {sym['parent']})" if sym.get("parent") else ""
+    lines.append(f"  - [{sym['type'].upper()}] {sym['name']}{parent_part} at line {sym['line']}")
+  return "\n".join(lines)
+
+
 def handle_ask_oracle(arguments: Dict[str, Any], session: Any) -> str:
   query = arguments.get("query")
   if not query:
@@ -374,4 +391,5 @@ TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any], Any], str]] = {
   "ask_question": handle_ask_question,
   "search_web": handle_search_web,
   "ask_oracle": handle_ask_oracle,
+  "get_outline": handle_get_outline,
 }
