@@ -767,11 +767,16 @@ class ChatbotSession:
     return tier1 + tier2 + tier3
 
   def get_workspace_files_context(self) -> str:
-    """Formats the sorted loaded files as a markdown block for the system prompt."""
+    """Formats the sorted loaded files as a markdown block for the system prompt, respecting context budget."""
     sorted_paths = self.get_sorted_loaded_files()
     if not sorted_paths:
       return ""
-      
+
+    # Budget: 50% of the context size for files
+    max_file_tokens = self.context_size * 0.5
+    ratio = getattr(self, "token_to_char_ratio", 0.25) or 0.25
+    max_file_chars = int(max_file_tokens / ratio)
+
     blocks = [
       "## Workspace Files Context",
       "These are the contents of the files currently loaded in your workspace context. "
@@ -780,11 +785,23 @@ class ChatbotSession:
       "---"
     ]
     
+    cumulative_chars = 0
     for path in sorted_paths:
       content = self.loaded_files.get(path, "")
-      lines = content.splitlines()
-      numbered_content = "\n".join(f"{i+1}: {line}" for i, line in enumerate(lines))
-      blocks.append(f"### File: {path}\n```\n{numbered_content}\n```\n---")
+      file_size = len(content)
+      is_active = (path in self.active_files)
+      
+      if is_active or (cumulative_chars + file_size <= max_file_chars):
+        if not is_active:
+          cumulative_chars += file_size
+        lines = content.splitlines()
+        numbered_content = "\n".join(f"{i+1}: {line}" for i, line in enumerate(lines))
+        blocks.append(f"### File: {path}\n```\n{numbered_content}\n```\n---")
+      else:
+        blocks.append(
+          f"### File: {path}\n"
+          f"[Content truncated to save context window space. You can call read_file to read it.]\n---"
+        )
       
     return "\n\n".join(blocks)
 
