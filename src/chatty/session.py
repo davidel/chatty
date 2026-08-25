@@ -848,12 +848,12 @@ class ChatbotSession:
       # run_llm_cycle will use our recon_model because self.in_recon_phase is True
       run_llm_cycle(self)
       
-      self.max_loops = old_max_loops
     except Exception as e:
       logger.exception(f"Error during recon phase: {e}")
       self._print(f"[bold yellow]⚠️ Reconnaissance encountered an error: {e}. Proceeding to main execution.[/bold yellow]")
     finally:
       # Restore original session state
+      self.max_loops = old_max_loops
       self.in_recon_phase = False
       self.prompt_caching = old_prompt_caching
       self.messages = CachedList(old_messages, on_change=self._invalidate_token_cache)
