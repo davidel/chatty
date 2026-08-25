@@ -53,3 +53,23 @@ function go() {
     self.assertEqual(symbols[0]["type"], "class")
     self.assertEqual(symbols[1]["name"], "go")
     self.assertEqual(symbols[1]["type"], "function")
+
+  def test_json_caching(self):
+    code = "def check(): pass"
+    file_path = os.path.join(self.temp_dir, "cached_file.py")
+    with open(file_path, "w", encoding="utf-8") as f:
+      f.write(code)
+    symbols = self.extractor.get_outline("cached_file.py")
+    self.assertEqual(len(symbols), 1)
+    cache_file = os.path.join(self.temp_dir, ".chatty", "symbol_cache.json")
+    self.assertTrue(os.path.exists(cache_file))
+
+  def test_find_symbol(self):
+    code = "class SearchTarget:\n  def method(self):\n    pass"
+    file_path = os.path.join(self.temp_dir, "search_file.py")
+    with open(file_path, "w", encoding="utf-8") as f:
+      f.write(code)
+    matches = self.extractor.find_symbol("SearchTarget")
+    self.assertEqual(len(matches), 1)
+    self.assertEqual(matches[0]["path"], "search_file.py")
+    self.assertEqual(matches[0]["type"], "class")

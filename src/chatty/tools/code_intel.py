@@ -1,6 +1,7 @@
 import os
 import re
 import ast
+import json
 from typing import List, Dict, Any, Optional
 
 try:
@@ -45,27 +46,97 @@ class SymbolExtractor:
   def __init__(self, sandbox_dir: str, lsp_client: Optional[Any] = None):
     self.sandbox_dir = sandbox_dir
     self.lsp_client = lsp_client
+    self.cache_path = os.path.join(self.sandbox_dir, ".chatty", "symbol_cache.json")
+    self.cache = self._load_cache()
 
   def get_outline(self, rel_path: str) -> List[Dict[str, Any]]:
-    """Extracts symbols using the best available provider."""
+    """Extracts symbols using the best available provider with caching."""
     abs_path = os.path.abspath(os.path.join(self.sandbox_dir, rel_path))
     if not os.path.exists(abs_path):
       return []
+    try:
+      mtime = os.path.getmtime(abs_path)
+    except OSError:
+      mtime = 0.0
+    cached_entry = self.cache.get(rel_path)
+    if cached_entry and cached_entry.get("mtime") == mtime:
+      return cached_entry.get("symbols", [])
+    symbols = self._extract_symbols_uncached(abs_path)
+    self.cache[rel_path] = {
+      "mtime": mtime,
+      "symbols": symbols
+    }
+    self._save_cache()
+    return symbols
+
+  def build_global_index(self) -> Dict[str, List[Dict[str, Any]]]:
+    """Scans all non-ignored files in sandbox, updates cache, and returns the global index."""
+    from chatty.safety import load_ignore_patterns, is_path_ignored
+    ignore_patterns = load_ignore_patterns(self.sandbox_dir)
+    global_index = {}
+    for root, dirs, files in os.walk(self.sandbox_dir):
+      for d in list(dirs):
+        dir_path = os.path.relpath(os.path.join(root, d), self.sandbox_dir)
+        if is_path_ignored(dir_path, ignore_patterns, is_dir=True):
+          dirs.remove(d)
+      for file in files:
+        file_path = os.path.join(root, file)
+        rel_path = os.path.relpath(file_path, self.sandbox_dir)
+        if is_path_ignored(rel_path, ignore_patterns):
+          continue
+        ext = os.path.splitext(file)[1].lower()
+        if ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".java", ".go", ".rs"):
+          symbols = self.get_outline(rel_path)
+          if symbols:
+            global_index[rel_path] = symbols
+    return global_index
+
+  def find_symbol(self, name: str) -> List[Dict[str, Any]]:
+    """Searches the global index for any symbol matching the given name (case-insensitive)."""
+    self.build_global_index()
+    matches = []
+    name_lower = name.lower()
+    for rel_path, entry in self.cache.items():
+      for sym in entry.get("symbols", []):
+        if sym["name"].lower() == name_lower:
+          matches.append({
+            "name": sym["name"],
+            "type": sym["type"],
+            "line": sym["line"],
+            "path": rel_path,
+            "parent": sym.get("parent")
+          })
+    return matches
+
+  def _load_cache(self) -> Dict[str, Any]:
+    if os.path.exists(self.cache_path):
+      try:
+        with open(self.cache_path, "r", encoding="utf-8") as f:
+          return json.load(f)
+      except Exception:
+        pass
+    return {}
+
+  def _save_cache(self):
+    try:
+      os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
+      with open(self.cache_path, "w", encoding="utf-8") as f:
+        json.dump(self.cache, f, indent=2)
+    except Exception:
+      pass
+
+  def _extract_symbols_uncached(self, abs_path: str) -> List[Dict[str, Any]]:
     ext = os.path.splitext(abs_path)[1].lower()
-    # 1. Try LSP provider if client is active
     if self.lsp_client and hasattr(self.lsp_client, "is_ready_for") and self.lsp_client.is_ready_for(ext):
       symbols = self._get_outline_via_lsp(abs_path)
       if symbols is not None:
         return symbols
-    # 2. Try Tree-Sitter provider if installed
     if HAS_TREE_SITTER:
       symbols = self._get_outline_via_tree_sitter(abs_path, ext)
       if symbols is not None:
         return symbols
-    # 3. Fall back to Python AST for python files
     if ext == ".py":
       return self._get_outline_via_python_ast(abs_path)
-    # 4. Final basic regex parser fallback
     return self._get_outline_via_regex(abs_path, ext)
 
   def _get_outline_via_lsp(self, abs_path: str) -> Optional[List[Dict[str, Any]]]:
@@ -96,11 +167,44 @@ class SymbolExtractor:
           "name": node.text.decode("utf-8", errors="ignore") if hasattr(node, "text") else "",
           "type": tag,
           "line": node.start_point[0] + 1,
-          "parent": None
+          "parent": self._find_parent_class_ts(node)
         })
       return symbols
     except Exception:
       return None
+
+  def _find_parent_class_ts(self, node: Any) -> Optional[str]:
+    curr = node.parent
+    while curr:
+      if curr.type in ("class_definition", "class_declaration", "class_specifier"):
+        name_node = curr.child_by_field_name("name")
+        if name_node:
+          return name_node.text.decode("utf-8", errors="ignore") if hasattr(name_node, "text") else ""
+        for child in curr.children:
+          if child.type in ("identifier", "type_identifier"):
+            return child.text.decode("utf-8", errors="ignore") if hasattr(child, "text") else ""
+      elif curr.type == "impl_item":
+        type_node = curr.child_by_field_name("type")
+        if type_node:
+          return type_node.text.decode("utf-8", errors="ignore") if hasattr(type_node, "type") else ""
+        for child in curr.children:
+          if child.type == "type_identifier":
+            return child.text.decode("utf-8", errors="ignore") if hasattr(child, "type_identifier") else ""
+      curr = curr.parent
+    if node.type == "method_declaration":
+      receiver = node.child_by_field_name("receiver")
+      if receiver:
+        return self._find_type_node_recursive(receiver)
+    return None
+
+  def _find_type_node_recursive(self, node: Any) -> Optional[str]:
+    if node.type in ("type_identifier", "type_name"):
+      return node.text.decode("utf-8", errors="ignore") if hasattr(node, "text") else ""
+    for child in node.children:
+      res = self._find_type_node_recursive(child)
+      if res:
+        return res
+    return None
 
   def _get_outline_via_python_ast(self, abs_path: str) -> List[Dict[str, Any]]:
     try:
@@ -165,5 +269,21 @@ class SymbolExtractor:
         (class_specifier name: (type_identifier) @class)
         (function_definition declarator: (function_declarator declarator: (field_identifier) @method))
         (function_definition declarator: (function_declarator declarator: (identifier) @function))
+      """
+    elif lang_name == "go":
+      return """
+        (type_spec name: (type_identifier) @class)
+        (method_declaration name: (field_identifier) @method)
+        (function_declaration name: (identifier) @function)
+      """
+    elif lang_name == "rust":
+      return """
+        (struct_item name: (type_identifier) @class)
+        (function_item name: (identifier) @function)
+      """
+    elif lang_name == "java":
+      return """
+        (class_declaration name: (identifier) @class)
+        (method_declaration name: (identifier) @method)
       """
     return ""
