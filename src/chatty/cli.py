@@ -216,7 +216,8 @@ def main():
       provider = "ollama"
 
   # Validate custom provider constraints
-  is_standard_provider = provider in ("ollama", "openrouter")
+  from chatty.providers import PROVIDER_KEYS, get_provider
+  is_standard_provider = provider in PROVIDER_KEYS
   if not is_standard_provider:
     if not args.url:
       parser.error(f"Provider '{provider}' requires an API URL. Pass it via --url / -u.")
@@ -233,25 +234,27 @@ def main():
           models.append(part)
 
   if not models:
+    prov_inst = get_provider(provider)
     if provider == "ollama":
       # Attempt to auto-detect model from local Ollama tags
-      ollama_url = args.url or "http://localhost:11434/v1"
+      ollama_url = args.url or prov_inst.get_default_url()
       local_models = get_ollama_models(ollama_url)
       if local_models:
-        # Pick the first matching model
         models = [local_models[0]]
         if not args.headless:
           console.print(f"[bold blue]Info:[/bold blue] Auto-detected local Ollama model: [bold green]{models[0]}[/bold green]")
       else:
-        models = ["qwen2.5-coder:7b"]
+        models = [prov_inst.get_default_model()]
         if not args.headless:
           console.print(f"[bold blue]Info:[/bold blue] No local Ollama models detected. Fallback default: [bold green]{models[0]}[/bold green]")
-    elif provider == "openrouter":
-      models = [get_default_openrouter_model(args.api_key)]
-      if not args.headless:
-        console.print(f"[bold blue]Info:[/bold blue] OpenRouter provider selected. Default model: [bold green]{models[0]}[/bold green]")
     else:
-      parser.error(f"Provider '{provider}' requires a model. Pass it via --model / -m.")
+      default_m = prov_inst.get_default_model(args.api_key)
+      if default_m:
+        models = [default_m]
+        if not args.headless:
+          console.print(f"[bold blue]Info:[/bold blue] {provider.capitalize()} provider selected. Default model: [bold green]{models[0]}[/bold green]")
+      else:
+        parser.error(f"Provider '{provider}' requires a model. Pass it via --model / -m.")
           
   model = models[0]
   

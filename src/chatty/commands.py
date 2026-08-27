@@ -61,7 +61,8 @@ def cmd_provider(session: Any, arg: str) -> bool:
     session.init_client()
     session.update_available_models_async()
     console.print(f"Switched provider to: [bold green]{session.provider}[/bold green]")
-    if arg not in ("ollama", "openrouter"):
+    from chatty.providers import PROVIDER_KEYS
+    if arg not in PROVIDER_KEYS:
       console.print("[bold yellow]Remember:[/bold yellow] Use '/url <api_url>' and '/api_key <key>' to configure your custom endpoint.")
   return True
 
@@ -198,7 +199,7 @@ def cmd_models(session: Any, arg: str) -> bool:
     from rich.table import Table
     table = Table(title=f"Available Models from {session.provider.upper()}", show_header=True, header_style="bold magenta")
     
-    if session.provider == "openrouter":
+    if session.provider == "openrouter" or any("pricing_input" in m for m in session.available_models):
       table.add_column("Model ID", style="cyan")
       table.add_column("Name", style="white")
       table.add_column("Context Length", style="green", justify="right")
@@ -217,7 +218,7 @@ def cmd_models(session: Any, arg: str) -> bool:
       console.print(table)
       console.print("\n[dim]Only displaying the top 15 popular models. Search for other models using '/models search <query>'.[/dim]")
       
-    elif session.provider == "ollama":
+    elif session.provider == "ollama" or any("size" in m for m in session.available_models):
       table.add_column("Model Tag", style="cyan")
       table.add_column("Name", style="white")
       table.add_column("Size", style="green", justify="right")
@@ -227,6 +228,12 @@ def cmd_models(session: Any, arg: str) -> bool:
         size_gb = m.get("size", 0) / (1024**3)
         quant = m.get("details", {}).get("quantization_level", "Unknown")
         table.add_row(m.get("id", ""), m.get("name", ""), f"{size_gb:.2f} GB", quant)
+      console.print(table)
+    else:
+      table.add_column("Model ID", style="cyan")
+      table.add_column("Name", style="white")
+      for m in session.available_models:
+        table.add_row(m.get("id", ""), m.get("name", ""))
       console.print(table)
       
   elif subcmd == "search":
@@ -348,7 +355,7 @@ def cmd_models(session: Any, arg: str) -> bool:
     from rich.table import Table
     table = Table(title=f"Search Results for '{query}'", show_header=True, header_style="bold magenta")
     
-    if session.provider == "openrouter":
+    if session.provider == "openrouter" or any("pricing_input" in m for m in results):
       table.add_column("Model ID", style="cyan")
       table.add_column("Name", style="white")
       table.add_column("Context Length", style="green", justify="right")
@@ -366,7 +373,7 @@ def cmd_models(session: Any, arg: str) -> bool:
       console.print(table)
       if len(results) > 25:
         console.print(f"[dim]... and {len(results) - 25} more results. Refine your query to narrow down.[/dim]")
-    elif session.provider == "ollama":
+    elif session.provider == "ollama" or any("size" in m for m in results):
       table.add_column("Model Tag", style="cyan")
       table.add_column("Name", style="white")
       table.add_column("Size", style="green", justify="right")
@@ -376,6 +383,12 @@ def cmd_models(session: Any, arg: str) -> bool:
         size_gb = m.get("size", 0) / (1024**3)
         quant = m.get("details", {}).get("quantization_level", "Unknown")
         table.add_row(m.get("id", ""), m.get("name", ""), f"{size_gb:.2f} GB", quant)
+      console.print(table)
+    else:
+      table.add_column("Model ID", style="cyan")
+      table.add_column("Name", style="white")
+      for m in results:
+        table.add_row(m.get("id", ""), m.get("name", ""))
       console.print(table)
   elif subcmd == "info":
     if len(parts) < 2:
@@ -434,7 +447,7 @@ def cmd_models(session: Any, arg: str) -> bool:
     table.add_column("Value", style="white")
     table.add_row("Model ID", match.get("id", "Unknown"))
     table.add_row("Model Name", match.get("name", "Unknown"))
-    if session.provider == "openrouter":
+    if "pricing_input" in match or "context" in match or session.provider == "openrouter":
       created_ts = match.get("created")
       created_str = "Unknown"
       if created_ts:
@@ -460,7 +473,7 @@ def cmd_models(session: Any, arg: str) -> bool:
           table.add_row("Instruct Type", arch.get("instruct_type"))
       table.add_row("Estimated Parameters", extract_params(match))
       desc = match.get("description")
-    elif session.provider == "ollama":
+    elif "size" in match or "details" in match or session.provider == "ollama":
       size_bytes = match.get("size", 0)
       size_gb = size_bytes / (1024**3)
       table.add_row("Size", f"{size_gb:.2f} GB ({size_bytes:,} bytes)")

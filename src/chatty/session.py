@@ -578,6 +578,10 @@ class ChatbotSession:
     else:
       super().__setattr__(name, value)
 
+  @property
+  def provider_instance(self) -> Any:
+    from chatty.providers import get_provider
+    return get_provider(self.provider)
 
   def load_skills(self):
     """Scans all configured skills directories and loads/merges valid skill definitions."""

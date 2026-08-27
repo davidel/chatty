@@ -23,14 +23,7 @@ logger = logging.getLogger("chatty")
 console = Console()
 
 
-class LiteLLMClientStub:
-  def __init__(self, base_url, api_key, default_headers=None, timeout=None, max_retries=None):
-    self.base_url = base_url
-    self.api_key = api_key
-    self.default_headers = default_headers or {}
-    self.timeout = timeout
-    self.max_retries = max_retries
-
+from chatty.providers import LiteLLMClientStub
 
 def _invalidate_token_cache(self):
   self._cached_history_tokens = None
@@ -62,39 +55,7 @@ def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
 
 def init_client(self):
   """Initializes or updates the OpenAI client based on active settings."""
-  if self.provider == "ollama":
-    base = self.url or "http://localhost:11434/v1"
-    self.client = LiteLLMClientStub(
-      base_url=base,
-      api_key="ollama"
-    )
-  elif self.provider == "openrouter":
-    base = self.url or "https://openrouter.ai/api/v1"
-    key = self.api_key or os.environ.get("OPENROUTER_API_KEY")
-    if not key:
-      self._print(
-        "[bold red]Warning:[/bold red] OpenRouter API key is not configured. "
-        "Use [cyan]/api_key <key>[/cyan] or set the [cyan]OPENROUTER_API_KEY[/cyan] environment variable."
-      )
-      key = "missing_api_key"
-    self.client = LiteLLMClientStub(
-      base_url=base,
-      api_key=key,
-      default_headers={
-        "HTTP-Referer": "https://github.com/davidel/chatty",
-        "X-Title": "Chatty"
-      }
-    )
-  else:  # Custom/Domain provider
-    base = self.url
-    if not base:
-      self._print(f"[bold red]Error:[/bold red] Provider '{self.provider}' requires an API URL. Use [cyan]/url <url>[/cyan] or configure --url.")
-      base = "http://localhost:8000/v1"
-    key = self.api_key or os.environ.get("CUSTOM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-    self.client = LiteLLMClientStub(
-      base_url=base,
-      api_key=key
-    )
+  self.client = self.provider_instance.init_client(self.url, self.api_key)
 
 
 def _create_completion(self, **kwargs) -> Any:
@@ -113,16 +74,7 @@ def _create_completion(self, **kwargs) -> Any:
   actual_model = kwargs["model"]
   
   # Resolve the correct LiteLLM model prefix based on the provider
-  if self.provider == "ollama":
-    litellm_model = f"ollama/{actual_model}"
-  elif self.provider == "openrouter":
-    litellm_model = f"openrouter/{actual_model}"
-  else:
-    is_custom_openai = "." in self.provider or "localhost" in self.provider or "/" in self.provider or ":" in self.provider
-    if is_custom_openai:
-      litellm_model = f"openai/{actual_model}"
-    else:
-      litellm_model = f"{self.provider}/{actual_model}"
+  litellm_model = self.provider_instance.get_litellm_model_prefix(actual_model)
 
   # Build litellm arguments
   litellm_kwargs = dict(kwargs)
@@ -374,10 +326,7 @@ def consult_oracle(self, query: str) -> str:
 
 def _clean_assistant_message(self, msg: Dict[str, Any]) -> None:
   """Strips verbose thinking/reasoning metadata from the assistant message before sending to the LLM API."""
-  for field in ["reasoning", "reasoning_content", "reasoning_details"]:
-    msg.pop(field, None)
-  if self.provider != "openrouter":
-    msg.pop("thought_signature", None)
+  self.provider_instance.clean_assistant_message(msg)
 
 
 def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
@@ -1265,114 +1214,10 @@ def save_cached_models(models: List[Dict[str, Any]]):
 
 def fetch_available_models(session, force_refresh=False) -> List[Dict[str, Any]]:
   """Fetches available models depending on the active provider."""
-  if session.provider == "openrouter":
-    if not force_refresh:
-      cached = load_cached_models()
-      if cached is not None:
-        return cached
-
-    url = "https://openrouter.ai/api/v1/models?sort=most-popular"
-    headers = {}
-    key = session.api_key or os.environ.get("OPENROUTER_API_KEY")
-    if key and key != "missing_api_key":
-      headers["Authorization"] = f"Bearer {key}"
-
-    try:
-      import urllib.request
-      req = urllib.request.Request(url, headers=headers)
-      with urllib.request.urlopen(req, timeout=10) as response:
-        data = json.loads(response.read().decode())
-        models = [
-          {
-            "id": m["id"],
-            "name": m["name"],
-            "context": m.get("context_length"),
-            "pricing_input": float(m.get("pricing", {}).get("prompt", 0)) * 1e6,
-            "pricing_output": float(m.get("pricing", {}).get("completion", 0)) * 1e6,
-            "description": m.get("description"),
-            "architecture": m.get("architecture"),
-            "created": m.get("created"),
-            "knowledge_cutoff": m.get("knowledge_cutoff"),
-            "hugging_face_id": m.get("hugging_face_id"),
-          }
-          for m in data.get("data", [])
-        ]
-        save_cached_models(models)
-        return models
-    except Exception as e:
-      logger.error(f"Error fetching OpenRouter models: {e}")
-      return []
-
-  elif session.provider == "ollama":
-    base_url = session.url or "http://localhost:11434/v1"
-    if base_url.endswith("/v1"):
-      api_url = base_url[:-3] + "/api/tags"
-    else:
-      api_url = base_url.rstrip("/") + "/api/tags"
-
-    try:
-      import urllib.request
-      req = urllib.request.Request(api_url)
-      with urllib.request.urlopen(req, timeout=5) as response:
-        data = json.loads(response.read().decode())
-        return [
-          {
-            "id": m["name"],
-            "name": m["name"].split(":")[0],
-            "size": m.get("size", 0),
-            "details": m.get("details", {})
-          }
-          for m in data.get("models", [])
-        ]
-    except Exception as e:
-      logger.error(f"Error fetching Ollama models: {e}")
-      return []
-
-  return []
+  return session.provider_instance.fetch_models(session.url, session.api_key, force_refresh=force_refresh)
 
 
 def get_default_openrouter_model(api_key: Optional[str] = None) -> str:
   """Returns the most popular free model currently offered on OpenRouter."""
-  try:
-    cached = load_cached_models()
-    if cached:
-      for m in cached:
-        if m.get("pricing_input") == 0.0 and m.get("pricing_output") == 0.0:
-          return m["id"]
-          
-    url = "https://openrouter.ai/api/v1/models"
-    headers = {}
-    key = api_key or os.environ.get("OPENROUTER_API_KEY")
-    if key and key != "missing_api_key":
-      headers["Authorization"] = f"Bearer {key}"
-      
-    import urllib.request
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=5) as response:
-      data = json.loads(response.read().decode())
-      for m in data.get("data", []):
-        pricing = m.get("pricing", {})
-        prompt_price = float(pricing.get("prompt", 0))
-        completion_price = float(pricing.get("completion", 0))
-        if prompt_price == 0.0 and completion_price == 0.0:
-          models = [
-            {
-              "id": model["id"],
-              "name": model["name"],
-              "context": model.get("context_length"),
-              "pricing_input": float(model.get("pricing", {}).get("prompt", 0)) * 1e6,
-              "pricing_output": float(model.get("pricing", {}).get("completion", 0)) * 1e6,
-              "description": model.get("description"),
-              "architecture": model.get("architecture"),
-              "created": model.get("created"),
-              "knowledge_cutoff": model.get("knowledge_cutoff"),
-              "hugging_face_id": model.get("hugging_face_id"),
-            }
-            for model in data.get("data", [])
-          ]
-          save_cached_models(models)
-          return m["id"]
-  except Exception:
-    pass
-    
-  return "google/gemini-2.5-flash:free"
+  from chatty.providers import OpenRouterProvider
+  return OpenRouterProvider().get_default_model(api_key)
