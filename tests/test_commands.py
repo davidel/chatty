@@ -371,15 +371,29 @@ class TestCompressCommand(unittest.TestCase):
     # Test openrouter search command
     self.assertTrue(cmd_models(self.session, "search gemini"))
     self.assertTrue(cmd_models(self.session, "search non_existent_model"))
+    self.assertTrue(cmd_models(self.session, "search cost<1.0"))
+    self.assertTrue(cmd_models(self.session, "search context>=100k"))
+    self.assertTrue(cmd_models(self.session, "search sort:cost"))
+
+    # Test openrouter info command
+    self.assertTrue(cmd_models(self.session, "info openai/gpt-4o"))
+    self.assertTrue(cmd_models(self.session, "info gpt-4o"))
+    self.assertTrue(cmd_models(self.session, "info non_existent"))
+
+    # Test configured model ID resolution
+    self.session.models = ["openai/gpt-4o"]
+    self.assertTrue(cmd_models(self.session, "info 1"))
 
     # Test ollama available command
     self.session.provider = "ollama"
     self.session.available_models = [
-      {"id": "llama3:latest", "name": "llama3", "size": int(4.7 * (1024**3)), "details": {"quantization_level": "Q4_K_M"}},
+      {"id": "llama3:latest", "name": "llama3", "size": int(4.7 * (1024**3)), "details": {"quantization_level": "Q4_K_M", "parameter_size": "8B"}},
       {"id": "mistral:latest", "name": "mistral", "size": int(4.1 * (1024**3)), "details": {"quantization_level": "Q4_0"}},
     ]
     self.assertTrue(cmd_models(self.session, "available"))
     self.assertTrue(cmd_models(self.session, "search mistral"))
+    self.assertTrue(cmd_models(self.session, "search size<4.5g"))
+    self.assertTrue(cmd_models(self.session, "info llama3:latest"))
 
   def test_fetch_available_models(self):
     from chatty.llm import fetch_available_models

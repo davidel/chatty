@@ -180,8 +180,14 @@ class ChattyCompleter(Completer):
         elif cmd in ('/model', '/models'):
           sub_text = parts[1] if len(parts) > 1 else ""
           is_models_add = (cmd == '/models' and sub_text.startswith('add '))
-          if is_models_add or cmd == '/model':
-            prefix = sub_text[4:] if is_models_add else sub_text
+          is_models_info = (cmd == '/models' and sub_text.startswith('info '))
+          if is_models_add or is_models_info or cmd == '/model':
+            if is_models_add:
+              prefix = sub_text[4:]
+            elif is_models_info:
+              prefix = sub_text[5:]
+            else:
+              prefix = sub_text
             if self.session and getattr(self.session, "available_models", None):
               for m in self.session.available_models:
                 m_id = m.get("id", "")
@@ -229,7 +235,7 @@ def show_help(session: Any):
     ("/tool_stats", "Show statistics on tool and external binary calls"),
     ("/provider [ollama|openrouter]", "View or switch the LLM backend provider"),
     ("/model [ID|name]", "View or switch the current LLM model by ID or name"),
-    ("/models [add <name> | remove <ID/name> | available [--refresh] | search <query>]", "List, add, remove, or search/list available LLM models in the session"),
+    ("/models [add <name> | remove <ID/name> | available [--refresh] | search <query> | info <ID/name>]", "List, add, remove, search, or view details of LLM models"),
     ("/oracle [name]", "View or switch the oracle model used for suggestions"),
     ("/sandbox [path]", "View or change the sandbox directory path"),
     ("/context [tokens]", "View or modify the history token limit"),

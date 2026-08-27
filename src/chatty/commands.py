@@ -134,6 +134,7 @@ def cmd_models(session: Any, arg: str) -> bool:
     console.print("  [cyan]/models remove <ID or model_name>[/cyan] - Remove a model")
     console.print("  [cyan]/models available [--refresh][/cyan] - List available models from active provider")
     console.print("  [cyan]/models search <query>[/cyan] - Search available models from active provider")
+    console.print("  [cyan]/models info <ID or model_name>[/cyan] - Show detailed information about a model")
     return True
 
   subcmd = parts[0].lower()
@@ -233,9 +234,113 @@ def cmd_models(session: Any, arg: str) -> bool:
       console.print("[bold red]Error: Usage: /models search <query>[/bold red]")
       return True
       
-    query = parts[1].strip().lower()
-    results = [m for m in getattr(session, "available_models", []) if query in m.get("id", "").lower() or query in m.get("name", "").lower()]
+    query = parts[1].strip()
     
+    # Parse search parameters
+    text_filters = []
+    max_cost = None
+    min_context = None
+    only_free = False
+    only_vision = False
+    max_size_bytes = None
+    min_size_bytes = None
+    sort_by = None
+    
+    import re
+    for token in query.split():
+      token_lower = token.lower()
+      
+      # 1. Cost/Price Filter (e.g. cost<1.5, price<=0.5)
+      cost_match = re.match(r'(?:cost|price)(<=?|<)(\d+(?:\.\d+)?)', token_lower)
+      if cost_match:
+        max_cost = float(cost_match.group(2))
+        continue
+        
+      # 2. Context Length Filter (e.g. context>=32k, ctx>128k)
+      ctx_match = re.match(r'(?:context|ctx)([>=]{1,2})(\d+)([kk]?)', token_lower)
+      if ctx_match:
+        val = int(ctx_match.group(2))
+        if ctx_match.group(3):
+          val *= 1000
+        min_context = val
+        continue
+
+      # 3. Size Filter (e.g. size<5g, size<=10gb)
+      size_match = re.match(r'size(<=?|<|>=?|>)(\d+(?:\.\d+)?)([gm]b?)', token_lower)
+      if size_match:
+        op = size_match.group(1)
+        val = float(size_match.group(2))
+        unit = size_match.group(3)
+        bytes_val = int(val * (1024**3)) if 'g' in unit else int(val * (1024**2))
+        if '>' in op:
+          min_size_bytes = bytes_val
+        else:
+          max_size_bytes = bytes_val
+        continue
+        
+      # 4. Category Filter (e.g. cat:vision, cat:image, cat:free)
+      if token_lower.startswith('cat:'):
+        cat_val = token_lower[4:]
+        if cat_val in ('vision', 'image', 'multimodal'):
+          only_vision = True
+        elif cat_val == 'free':
+          only_free = True
+        continue
+        
+      # 5. Sorting Option (e.g. sort:cost, sort:context, sort:newest, sort:size)
+      if token_lower.startswith('sort:'):
+        sort_val = token_lower[5:]
+        if sort_val in ('cost', 'price'):
+          sort_by = 'cost'
+        elif sort_val in ('context', 'ctx'):
+          sort_by = 'context'
+        elif sort_val in ('newest', 'date'):
+          sort_by = 'newest'
+        elif sort_val == 'size':
+          sort_by = 'size'
+        continue
+        
+      # 6. Freestanding text filter
+      text_filters.append(token_lower)
+      
+    # Perform filtering
+    results = []
+    for m in getattr(session, "available_models", []):
+      m_id = m.get("id", "").lower()
+      m_name = m.get("name", "").lower()
+      if text_filters and not all(f in m_id or f in m_name for f in text_filters):
+        continue
+      if max_cost is not None and m.get("pricing_input", 0) > max_cost:
+        continue
+      if only_free and (m.get("pricing_input", 0) > 0 or m.get("pricing_output", 0) > 0):
+        continue
+      if min_context is not None and m.get("context", 0) < min_context:
+        continue
+      if max_size_bytes is not None and m.get("size", 0) > max_size_bytes:
+        continue
+      if min_size_bytes is not None and m.get("size", 0) < min_size_bytes:
+        continue
+      if only_vision:
+        has_vision = False
+        input_mods = m.get("architecture", {}).get("input_modalities", []) if isinstance(m.get("architecture"), dict) else []
+        if 'image' in input_mods or 'video' in input_mods:
+          has_vision = True
+        elif 'vision' in m_id or 'vision' in m_name:
+          has_vision = True
+        if not has_vision:
+          continue
+      results.append(m)
+      
+    # Perform sorting
+    if sort_by == 'cost':
+      results.sort(key=lambda x: x.get("pricing_input", 0))
+    elif sort_by == 'context':
+      results.sort(key=lambda x: x.get("context", 0), reverse=True)
+    elif sort_by == 'newest':
+      results.sort(key=lambda x: x.get("created", 0), reverse=True)
+    elif sort_by == 'size':
+      results.sort(key=lambda x: x.get("size", 0), reverse=True)
+      
     if not results:
       console.print(f"[yellow]No models matching '{query}' found.[/yellow]")
       return True
@@ -250,7 +355,7 @@ def cmd_models(session: Any, arg: str) -> bool:
       table.add_column("Input (per 1M)", style="yellow", justify="right")
       table.add_column("Output (per 1M)", style="yellow", justify="right")
       
-      for m in results[:25]: # Limit to top 25 results to avoid terminal spam
+      for m in results[:25]:
         table.add_row(
           m.get("id", ""), 
           m.get("name", ""), 
@@ -272,8 +377,111 @@ def cmd_models(session: Any, arg: str) -> bool:
         quant = m.get("details", {}).get("quantization_level", "Unknown")
         table.add_row(m.get("id", ""), m.get("name", ""), f"{size_gb:.2f} GB", quant)
       console.print(table)
+  elif subcmd == "info":
+    if len(parts) < 2:
+      console.print("[bold red]Error: Usage: /models info <ID or model_name>[/bold red]")
+      return True
+    target = parts[1].strip()
+    resolved_name = target
+    try:
+      idx = int(target)
+      if 1 <= idx <= len(session.models):
+        resolved_name = session.models[idx - 1]
+    except ValueError:
+      pass
+    if not getattr(session, "available_models", None):
+      console.print("[yellow]Loading available models list...[/yellow]")
+      from chatty.llm import fetch_available_models
+      session.available_models = fetch_available_models(session)
+    if not getattr(session, "available_models", None):
+      console.print("[bold red]Error: No available models list found.[/bold red]")
+      return True
+    match = None
+    for m in session.available_models:
+      if m.get("id") == resolved_name:
+        match = m
+        break
+    if not match:
+      for m in session.available_models:
+        if resolved_name.lower() in m.get("id", "").lower() or resolved_name.lower() in m.get("name", "").lower():
+          match = m
+          break
+    if not match:
+      console.print(f"[bold red]Error: Model '{target}' not found in available models list.[/bold red]")
+      return True
+    from rich.table import Table
+    from rich.panel import Panel
+    from datetime import datetime
+    import re
+    def extract_params(m):
+      details = m.get("details")
+      if details and isinstance(details, dict) and details.get("parameter_size"):
+        return details["parameter_size"]
+      text = (m.get('name', '') + ' ' + m.get('id', '') + ' ' + m.get('description', '')).lower()
+      m1 = re.search(r'\b(\d+(?:\.\d+)?)\s*b\s*-\s*parameter', text)
+      if m1: return m1.group(1) + 'B'
+      m2 = re.search(r'\b(\d+(?:\.\d+)?)\s*b\s*active', text)
+      if m2: return m2.group(1) + 'B'
+      m3 = re.search(r'\b(\d+(?:\.\d+)?)\s*billion\b', text)
+      if m3: return m3.group(1) + 'B'
+      m4 = re.findall(r'\b(\d+(?:\.\d+)?)\s*b\b', text)
+      for val in m4:
+        if val not in ('4', '3', '2', '1'):
+          return val + 'B'
+      return "Unknown"
+    table = Table(show_header=False, box=None, expand=True)
+    table.add_column("Key", style="cyan", width=22)
+    table.add_column("Value", style="white")
+    table.add_row("Model ID", match.get("id", "Unknown"))
+    table.add_row("Model Name", match.get("name", "Unknown"))
+    if session.provider == "openrouter":
+      created_ts = match.get("created")
+      created_str = "Unknown"
+      if created_ts:
+        try:
+          created_str = datetime.fromtimestamp(created_ts).strftime("%Y-%m-%d")
+        except Exception:
+          pass
+      table.add_row("Created Date", created_str)
+      table.add_row("Knowledge Cutoff", match.get("knowledge_cutoff") or "Unknown")
+      ctx = match.get("context")
+      table.add_row("Context Length", f"{ctx:,} tokens" if ctx else "Unknown")
+      in_cost = match.get("pricing_input", 0)
+      out_cost = match.get("pricing_output", 0)
+      table.add_row("Pricing (Input/1M)", f"${in_cost:.2f}")
+      table.add_row("Pricing (Output/1M)", f"${out_cost:.2f}")
+      if match.get("hugging_face_id"):
+        table.add_row("Hugging Face ID", match.get("hugging_face_id"))
+      arch = match.get("architecture")
+      if arch and isinstance(arch, dict):
+        table.add_row("Architecture Modality", arch.get("modality") or "Unknown")
+        table.add_row("Tokenizer", arch.get("tokenizer") or "Unknown")
+        if arch.get("instruct_type"):
+          table.add_row("Instruct Type", arch.get("instruct_type"))
+      table.add_row("Estimated Parameters", extract_params(match))
+      desc = match.get("description")
+    elif session.provider == "ollama":
+      size_bytes = match.get("size", 0)
+      size_gb = size_bytes / (1024**3)
+      table.add_row("Size", f"{size_gb:.2f} GB ({size_bytes:,} bytes)")
+      details = match.get("details", {})
+      if details and isinstance(details, dict):
+        table.add_row("Format", details.get("format") or "Unknown")
+        table.add_row("Family", details.get("family") or "Unknown")
+        if details.get("families"):
+          table.add_row("Families", ", ".join(details["families"]))
+        table.add_row("Parameter Size", details.get("parameter_size") or "Unknown")
+        table.add_row("Quantization Level", details.get("quantization_level") or "Unknown")
+      desc = None
+    else:
+      desc = None
+    from rich.console import Group
+    elements = [table]
+    if desc:
+      elements.append(Panel(desc, title="Description", border_style="dim white", expand=True))
+    console.print(Panel(Group(*elements), title=f"Model Information: {match.get('name', 'Unknown')}", border_style="magenta", expand=True))
   else:
-    console.print(f"[bold red]Unknown models command '{subcmd}'. Use '/models' to list, '/models add <name>', '/models remove <id/name>', '/models available', or '/models search <query>'.[/bold red]")
+    console.print(f"[bold red]Unknown models command '{subcmd}'. Use '/models' to list, '/models add <name>', '/models remove <id/name>', '/models available', '/models search <query>', or '/models info <id/name>'.[/bold red]")
   return True
 
 

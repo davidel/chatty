@@ -1289,6 +1289,11 @@ def fetch_available_models(session, force_refresh=False) -> List[Dict[str, Any]]
             "context": m.get("context_length"),
             "pricing_input": float(m.get("pricing", {}).get("prompt", 0)) * 1e6,
             "pricing_output": float(m.get("pricing", {}).get("completion", 0)) * 1e6,
+            "description": m.get("description"),
+            "architecture": m.get("architecture"),
+            "created": m.get("created"),
+            "knowledge_cutoff": m.get("knowledge_cutoff"),
+            "hugging_face_id": m.get("hugging_face_id"),
           }
           for m in data.get("data", [])
         ]
@@ -1357,6 +1362,11 @@ def get_default_openrouter_model(api_key: Optional[str] = None) -> str:
               "context": model.get("context_length"),
               "pricing_input": float(model.get("pricing", {}).get("prompt", 0)) * 1e6,
               "pricing_output": float(model.get("pricing", {}).get("completion", 0)) * 1e6,
+              "description": model.get("description"),
+              "architecture": model.get("architecture"),
+              "created": model.get("created"),
+              "knowledge_cutoff": model.get("knowledge_cutoff"),
+              "hugging_face_id": model.get("hugging_face_id"),
             }
             for model in data.get("data", [])
           ]
