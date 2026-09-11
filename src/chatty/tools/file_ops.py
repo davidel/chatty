@@ -3,6 +3,8 @@ import time
 import shutil
 import json
 import subprocess
+import re
+import difflib
 from typing import List, Dict, Any, Tuple, Optional, Union
 
 from chatty.safety import (
@@ -276,97 +278,204 @@ def apply_shift(line: str, shift: int, indent_char: str) -> str:
     return line
 
 
-def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Optional[Tuple[int, int, int]]]:
-  """Finds the search block in the file content using exact and fuzzy matching.
+def compute_shift(file_slice_lines: List[str], search_slice_lines: List[str]) -> Tuple[int, str]:
+  """Computes indentation shift between file lines and search lines."""
+  for f_line, s_line in zip(file_slice_lines, search_slice_lines):
+    if f_line.strip() and s_line.strip():
+      char_f, count_f = get_indent_info(f_line)
+      _, count_s = get_indent_info(s_line)
+      if count_f > 0 or count_s > 0:
+        return count_f - count_s, char_f
+  f_line = next((l for l in file_slice_lines if l.strip()), "")
+  s_line = next((l for l in search_slice_lines if l.strip()), "")
+  if f_line and s_line:
+    char_f, count_f = get_indent_info(f_line)
+    _, count_s = get_indent_info(s_line)
+    return count_f - count_s, char_f
+  return 0, " "
 
-  Returns (status, (start_char, end_char, indent_shift)).
+
+def normalize_code_line(line: str) -> str:
+  """Collapses multiple whitespace characters to a single space and strips ends."""
+  return re.sub(r'\s+', ' ', line).strip()
+
+
+def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
+  """Finds the search block in the file content using cascading exact and fuzzy matching.
+
+  Returns (status, match_info):
+  - If found: ("found", (start_char, end_char, shift, indent_char))
+  - If not unique: ("not_unique", list_of_matching_line_numbers)
+  - If not found: ("not_found", closest_match_dict_or_None)
+  - If empty: ("empty_search", None)
   """
   file_content_norm = file_content.replace("\r\n", "\n")
   search_block_norm = search_block.replace("\r\n", "\n")
-  
+
   file_lines = file_content_norm.split("\n")
   search_lines = search_block_norm.split("\n")
-  
-  import re
+
   file_lines_rstripped = [re.sub(r'\\+', r'\\', line.rstrip()) for line in file_lines]
   search_lines_rstripped = [re.sub(r'\\+', r'\\', line.rstrip()) for line in search_lines]
-  
+
   line_start_chars = []
   curr = 0
   for line in file_lines:
     line_start_chars.append(curr)
     curr += len(line) + 1
-    
+
   num_file_lines = len(file_lines)
   num_search_lines = len(search_lines)
-  
+
   if num_search_lines == 0 or (num_search_lines == 1 and search_lines[0] == ""):
     return "empty_search", None
 
-  # --- Attempt 1: Exact Match (modulo trailing whitespace) ---
+  def get_end_char(end_idx: int) -> int:
+    if end_idx >= num_file_lines - 1:
+      return len(file_content_norm)
+    return line_start_chars[end_idx + 1]
+
+  # --- Tier 1: Exact Match (modulo trailing whitespace) ---
   exact_matches = []
   for i in range(num_file_lines - num_search_lines + 1):
-    match = True
-    for j in range(num_search_lines):
-      if file_lines_rstripped[i + j] != search_lines_rstripped[j]:
-        match = False
-        break
-    if match:
+    if file_lines_rstripped[i:i + num_search_lines] == search_lines_rstripped:
       exact_matches.append(i)
-      
+
   if len(exact_matches) == 1:
     start_line = exact_matches[0]
     end_line = start_line + num_search_lines - 1
-    start_char = line_start_chars[start_line]
-    if end_line == num_file_lines - 1:
-      end_char = len(file_content_norm)
-    else:
-      end_char = line_start_chars[end_line + 1]
-    return "found", (start_char, end_char, 0)
+    return "found", (line_start_chars[start_line], get_end_char(end_line), 0, " ")
   elif len(exact_matches) > 1:
-    return "not_unique", None
+    return "not_unique", exact_matches
 
-  # --- Attempt 2: Fuzzy Match (ignoring leading/trailing whitespace) ---
+  # --- Tier 2: Normalized Indentation (line-by-line stripped equality) ---
   file_lines_stripped = [line.strip() for line in file_lines_rstripped]
   search_lines_stripped = [line.strip() for line in search_lines_rstripped]
-  
+
   fuzzy_matches = []
   for i in range(num_file_lines - num_search_lines + 1):
-    match = True
-    for j in range(num_search_lines):
-      if search_lines_stripped[j] == "":
-        if file_lines_stripped[i + j] != "":
-          match = False
-          break
-      else:
-        if file_lines_stripped[i + j] != search_lines_stripped[j]:
-          match = False
-          break
-    if match:
+    if file_lines_stripped[i:i + num_search_lines] == search_lines_stripped:
       fuzzy_matches.append(i)
-      
+
   if len(fuzzy_matches) == 1:
     start_line = fuzzy_matches[0]
     end_line = start_line + num_search_lines - 1
-    
-    first_file_line = file_lines[start_line]
-    first_search_line = search_lines[0]
-    
-    char_file, count_file = get_indent_info(first_file_line)
-    _, count_search = get_indent_info(first_search_line)
-    shift = count_file - count_search
-    
-    start_char = line_start_chars[start_line]
-    if end_line == num_file_lines - 1:
-      end_char = len(file_content_norm)
-    else:
-      end_char = line_start_chars[end_line + 1]
-      
-    return "found", (start_char, end_char, shift)
+    shift, indent_char = compute_shift(file_lines[start_line:end_line + 1], search_lines)
+    return "found", (line_start_chars[start_line], get_end_char(end_line), shift, indent_char)
   elif len(fuzzy_matches) > 1:
-    return "not_unique", None
-    
-  return "not_found", None
+    return "not_unique", fuzzy_matches
+
+  # --- Tier 3: Whitespace & Blank-Line Collapsed Sublist Match ---
+  search_non_empty = [(idx, normalize_code_line(l)) for idx, l in enumerate(search_lines) if normalize_code_line(l)]
+  if search_non_empty:
+    file_non_empty = [(idx, normalize_code_line(l)) for idx, l in enumerate(file_lines) if normalize_code_line(l)]
+    search_tokens = [tok for _, tok in search_non_empty]
+    file_tokens = [tok for _, tok in file_non_empty]
+
+    tier3_matches = []
+    n_tokens = len(search_tokens)
+    for j in range(len(file_tokens) - n_tokens + 1):
+      if file_tokens[j:j + n_tokens] == search_tokens:
+        f_start = file_non_empty[j][0]
+        f_end = file_non_empty[j + n_tokens - 1][0]
+        # Include leading blank lines if search_lines had them
+        s_lead_blanks = 0
+        for l in search_lines:
+          if not l.strip():
+            s_lead_blanks += 1
+          else:
+            break
+        while s_lead_blanks > 0 and f_start > 0 and not file_lines[f_start - 1].strip():
+          f_start -= 1
+          s_lead_blanks -= 1
+        # Include trailing blank lines if search_lines had them
+        s_trail_blanks = 0
+        for l in reversed(search_lines):
+          if not l.strip():
+            s_trail_blanks += 1
+          else:
+            break
+        while s_trail_blanks > 0 and f_end < num_file_lines - 1 and not file_lines[f_end + 1].strip():
+          f_end += 1
+          s_trail_blanks -= 1
+        tier3_matches.append((f_start, f_end))
+
+    if len(tier3_matches) == 1:
+      start_line, end_line = tier3_matches[0]
+      shift, indent_char = compute_shift(file_lines[start_line:end_line + 1], search_lines)
+      return "found", (line_start_chars[start_line], get_end_char(end_line), shift, indent_char)
+    elif len(tier3_matches) > 1:
+      return "not_unique", [m[0] for m in tier3_matches]
+
+  # --- Tier 4: Windowed Fuzzy Match (SequenceMatcher) ---
+  candidates = []
+  if len(search_non_empty) >= 2:
+    def norm_block(text: str) -> str:
+      lines = text.splitlines()
+      return "\n".join(normalize_code_line(l) for l in lines if l.strip())
+
+    norm_search = norm_block(search_block_norm)
+    M = len(search_lines)
+    min_w = max(2, M - 3)
+    max_w = min(num_file_lines, M + 4)
+
+    for W in range(min_w, max_w + 1):
+      for i in range(num_file_lines - W + 1):
+        cand_lines = file_lines[i:i + W]
+        cand_norm = norm_block("\n".join(cand_lines))
+        if not cand_norm:
+          continue
+        sm = difflib.SequenceMatcher(None, norm_search, cand_norm)
+        if sm.quick_ratio() >= 0.70:
+          r = sm.ratio()
+          if r >= 0.50:
+            candidates.append((r, i, i + W - 1))
+
+  if candidates:
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    best_score, best_start, best_end = candidates[0]
+
+    # Find competing non-overlapping candidates
+    competing = []
+    for c in candidates:
+      score, c_start, c_end = c
+      overlap = max(0, min(best_end, c_end) - max(best_start, c_start) + 1)
+      if overlap <= 1 and score >= 0.70:
+        competing.append(c)
+
+    second_best_score = competing[0][0] if competing else 0.0
+
+    SIMILARITY_THRESHOLD = 0.85
+    MARGIN_THRESHOLD = 0.15
+
+    if best_score >= SIMILARITY_THRESHOLD:
+      if (best_score - second_best_score) >= MARGIN_THRESHOLD:
+        # Trim unmatched edge blank lines
+        while best_start < best_end and not file_lines[best_start].strip() and search_lines and search_lines[0].strip():
+          best_start += 1
+        while best_end > best_start and not file_lines[best_end].strip() and search_lines and search_lines[-1].strip():
+          best_end -= 1
+
+        shift, indent_char = compute_shift(file_lines[best_start:best_end + 1], search_lines)
+        return "found", (line_start_chars[best_start], get_end_char(best_end), shift, indent_char)
+      else:
+        return "not_unique", [best_start, competing[0][1]]
+
+  closest_info = None
+  if candidates:
+    best_c = max(candidates, key=lambda c: c[0])
+    if best_c[0] >= 0.50:
+      s_l = best_c[1] + 1
+      e_l = best_c[2] + 1
+      snippet = "".join(f"{s_l + idx}: {file_lines[s_l - 1 + idx]}\n" for idx in range(e_l - s_l + 1))
+      closest_info = {
+        "start_line": s_l,
+        "end_line": e_l,
+        "similarity": best_c[0],
+        "text": snippet
+      }
+
+  return "not_found", closest_info
 
 
 def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
@@ -377,10 +486,10 @@ def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
       return f"Error: File '{path}' does not exist. Use write_file to create new files."
     if not os.path.isfile(safe_p):
       return f"Error: Path '{path}' is not a file."
-      
+
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     backup_file(sandbox_dir, rel_path)
-      
+
     try:
       patches = parse_aider_patches(patch)
     except Exception as e:
@@ -393,63 +502,74 @@ def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
         "...\n"
         ">>>>>>> REPLACE"
       )
-      
+
     if not patches:
       return "Error: No SEARCH/REPLACE blocks found in the patch parameter."
-      
+
     with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
       content = f.read()
-      
+
     original_content = content
     highlight_ranges = []
-    
+
     for idx, (search_block, replace_block) in enumerate(patches):
       status, match_info = find_block_in_file(content, search_block)
-      
+
       if status == "empty_search":
         return f"Error in patch block {idx+1}: SEARCH block is empty."
       elif status == "not_unique":
-        return f"Error in patch block {idx+1}: SEARCH block is not unique. Please provide more context lines."
+        line_info = ""
+        if isinstance(match_info, (list, tuple)) and match_info:
+          line_info = f" (similar matches near line(s): {', '.join(str(m + 1) for m in match_info[:5])})"
+        return f"Error in patch block {idx+1}: SEARCH block is not unique. Please provide more context lines.{line_info}"
       elif status == "not_found":
-        return f"Error in patch block {idx+1}: SEARCH block not found in file. Make sure it matches the file content."
-        
-      start_char, end_char, shift = match_info
-      
+        msg = f"Error in patch block {idx+1}: SEARCH block not found in file. Make sure it matches the file content."
+        if isinstance(match_info, dict) and match_info.get("text"):
+          pct = int(match_info["similarity"] * 100)
+          msg += (
+            f"\nClosest match found at lines {match_info['start_line']}-{match_info['end_line']} "
+            f"(similarity {pct}%):\n```\n{match_info['text']}```\n"
+            f"You can use the exact lines above for your SEARCH block."
+          )
+        return msg
+
+      start_char, end_char, shift = match_info[:3]
+      indent_char = match_info[3] if len(match_info) > 3 else " "
+
       replace_lines = replace_block.replace("\r\n", "\n").split("\n")
       if shift != 0:
-        first_file_line = content.replace("\r\n", "\n").split("\n")[content.replace("\r\n", "\n")[:start_char].count('\n')]
-        char_file, _ = get_indent_info(first_file_line)
-        shifted_replace_lines = [apply_shift(line, shift, char_file) for line in replace_lines]
+        shifted_replace_lines = [apply_shift(line, shift, indent_char) for line in replace_lines]
         replace_block_shifted = "\n".join(shifted_replace_lines)
       else:
         replace_block_shifted = "\n".join(replace_lines)
-        
+
       # Preserve trailing newline of the matched block
       if end_char > start_char and content[end_char - 1] in ('\n', '\r'):
-        replace_block_shifted += "\n"
-        
+        if not replace_block_shifted.endswith("\n"):
+          replace_block_shifted += "\n"
+
       has_crlf = "\r\n" in content
       if has_crlf:
         replace_block_final = replace_block_shifted.replace("\n", "\r\n")
       else:
         replace_block_final = replace_block_shifted
-        
+
       content = content[:start_char] + replace_block_final + content[end_char:]
-      
+
       replaced_lines_count = len(replace_lines)
       start_line_num = content[:start_char].count('\n') + 1
       end_line_num = start_line_num + max(0, replaced_lines_count - 1)
       highlight_ranges.append((start_line_num, end_line_num))
-      
+
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.write(content)
-      
+
     rel_path = os.path.relpath(safe_p, sandbox_dir)
     print_diff(rel_path, original_content, content)
-    
+
     preview = make_file_preview(safe_p, highlight_ranges)
     return f"Successfully updated file '{rel_path}' by applying {len(patches)} patch block(s).\n\n{preview}"
-    
+
   except Exception as e:
     return f"Error patching file: {str(e)}"
 

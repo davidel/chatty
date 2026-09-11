@@ -416,6 +416,94 @@ class TestSandboxOps(unittest.TestCase):
     res = tool_patch_file(self.sandbox_dir, test_file, dup_patch)
     self.assertIn("SEARCH block is not unique", res)
 
+  def test_tool_patch_file_whitespace_and_blank_lines(self):
+    test_file = "test_whitespace.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write(
+        "def compute_score(items):\n"
+        "\n"
+        "    total = sum(items)\n"
+        "\n"
+        "    return total * 2\n"
+      )
+
+    # Search block omits blank lines and has internal whitespace differences
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "  total  =  sum(items)\n"
+      "  return total * 2\n"
+      "=======\n"
+      "  total = sum(items)\n"
+      "  return total * 10\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
+    self.assertIn("Successfully updated file", res)
+    with open(file_path, "r") as f:
+      content = f.read()
+    self.assertIn("return total * 10", content)
+    self.assertIn("    return total * 10", content)
+
+  def test_tool_patch_file_fuzzy_matcher(self):
+    test_file = "test_fuzzy.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write(
+        "def execute_task(task_id, timeout_sec):\n"
+        "    print(f'Starting task {task_id}')\n"
+        "    status = run_backend_operation(task_id)\n"
+        "    return status == 'SUCCESS'\n"
+      )
+
+    # Search block has extra comment line and different indent
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "def execute_task(task_id, timeout_sec):\n"
+      "  # Task execution\n"
+      "  print(f'Starting task {task_id}')\n"
+      "  status = run_backend_operation(task_id)\n"
+      "  return status == 'SUCCESS'\n"
+      "=======\n"
+      "def execute_task(task_id, timeout_sec):\n"
+      "  print(f'Starting task {task_id} with timeout {timeout_sec}')\n"
+      "  status = run_backend_operation(task_id)\n"
+      "  return status == 'SUCCESS'\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
+    self.assertIn("Successfully updated file", res)
+    with open(file_path, "r") as f:
+      content = f.read()
+    self.assertIn("with timeout", content)
+
+  def test_tool_patch_file_near_miss_diagnostics(self):
+    test_file = "test_diag.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write(
+        "def process_order(order_id, user_id):\n"
+        "    order = fetch_order(order_id)\n"
+        "    validate(order)\n"
+        "    return finalize(order)\n"
+      )
+
+    # Search block that fails to match but has near-miss
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "def process_order(order_id, user_id):\n"
+      "  completely_wrong_line()\n"
+      "  return finalize(order)\n"
+      "=======\n"
+      "def process_order(order_id, user_id):\n"
+      "  return None\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
+    self.assertIn("SEARCH block not found in file", res)
+    self.assertIn("Closest match found at lines", res)
+    self.assertIn("def process_order", res)
+
   def test_make_file_preview_small(self):
     from chatty.tools import make_file_preview
     test_file = "preview_small.txt"
