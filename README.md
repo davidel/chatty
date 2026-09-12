@@ -32,7 +32,14 @@ Chatty provides a local terminal loop that allows an LLM agent to interact with 
 - An OpenRouter API Key (optional, for remote models).
 
 ### Installation
-Install the package and all dependencies (defined in [pyproject.toml](file:///tmp/chatty/pyproject.toml)) from the root folder:
+
+Install directly from PyPI:
+
+```bash
+pip install chatty-agent
+```
+
+Alternatively, install from the local repository directory:
 
 ```bash
 pip install .
