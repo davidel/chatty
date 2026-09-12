@@ -113,15 +113,16 @@ def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:
   patch = arguments.get("patch")
   search = arguments.get("search")
   replace = arguments.get("replace")
+  dry_run = bool(arguments.get("dry_run", False))
   
   if not path:
     return "Error: Missing parameter 'path'."
     
   if patch is not None:
-    return tool_patch_file(session.sandbox, path, patch)
+    return tool_patch_file(session.sandbox, path, patch, dry_run=dry_run)
   elif search is not None and replace is not None:
     synthetic_patch = f"<<<<<<< SEARCH\n{search}\n=======\n{replace}\n>>>>>>> REPLACE"
-    return tool_patch_file(session.sandbox, path, synthetic_patch)
+    return tool_patch_file(session.sandbox, path, synthetic_patch, dry_run=dry_run)
   else:
     return "Error: Must specify either 'patch' or both 'search' and 'replace'."
 

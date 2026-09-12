@@ -101,6 +101,31 @@ scdiag-pretrain --model convvit \\
       content = f.read()
     self.assertIn("scdiag-pretrain --model convvit \\", content)
 
+  def test_patch_file_dry_run_via_registry(self):
+    class MockSession:
+      def __init__(self, sandbox):
+        self.sandbox = sandbox
+    session = MockSession(self.sandbox_dir)
+
+    test_file = "test_reg_dry.txt"
+    with open(os.path.join(self.sandbox_dir, test_file), "w") as f:
+      f.write("Line A\nLine B\n")
+
+    res = execute_tool(
+      "patch_file",
+      {
+        "path": test_file,
+        "search": "Line B",
+        "replace": "Line B Replaced",
+        "dry_run": True
+      },
+      session
+    )
+    self.assertIn("[DRY RUN]", res)
+    self.assertIn("would apply successfully", res)
+    with open(os.path.join(self.sandbox_dir, test_file), "r") as f:
+      self.assertEqual(f.read(), "Line A\nLine B\n")
+
 
 
 if __name__ == "__main__":

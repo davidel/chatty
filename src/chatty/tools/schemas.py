@@ -164,7 +164,7 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "patch_file",
-      "description": "Apply search-and-replace edits to a file. You can either use the single 'patch' parameter (for one or more Aider-style SEARCH/REPLACE blocks) or use the direct 'search' and 'replace' parameters for a single edit. This tool is robust to minor whitespace/indentation differences.",
+      "description": "Apply search-and-replace edits to a file. You can either use the single 'patch' parameter (for one or more Aider-style SEARCH/REPLACE blocks) or use the direct 'search' and 'replace' parameters for a single edit. Supports full-line edits as well as unique sub-line (intra-line) replacements, and returns the applied unified diff.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -174,15 +174,19 @@ TOOLS_SCHEMA = [
           },
           "patch": {
             "type": "string",
-            "description": "One or more SEARCH/REPLACE blocks. Each block must use the exact format:\n<<<<<<< SEARCH\n[exact lines of code to replace]\n=======\n[new code replacement]\n>>>>>>> REPLACE\n\nCRITICAL RULES:\n1. The SEARCH block must match a unique consecutive sequence of lines in the target file (including spacing, comments, and empty lines) exactly.\n2. The SEARCH block must contain enough context lines to uniquely identify the location. If not unique, the patch will fail.\n3. Do not include line numbers or file paths inside the block boundaries.\n4. Chaining multiple SEARCH/REPLACE blocks sequentially in this single parameter is supported for editing multiple locations in the file."
+            "description": "One or more SEARCH/REPLACE blocks. Each block must use the exact format:\n<<<<<<< SEARCH\n[exact lines of code or unique substring to replace]\n=======\n[new code replacement]\n>>>>>>> REPLACE\n\nCRITICAL RULES:\n1. The SEARCH block must match a unique sequence of consecutive lines (or a unique intra-line substring) in the target file.\n2. The SEARCH block must contain enough context to uniquely identify the location. If not unique, the patch will fail.\n3. Do not include line numbers or file paths inside the block boundaries.\n4. Chaining multiple SEARCH/REPLACE blocks sequentially in this single parameter is supported for editing multiple locations in the file."
           },
           "search": {
             "type": "string",
-            "description": "The exact sequence of consecutive lines in the file to search for (including spacing/comments). Use this along with 'replace' as an alternative to 'patch' for a single edit."
+            "description": "The exact sequence of consecutive lines (or unique intra-line substring) to search for. Use this along with 'replace' as an alternative to 'patch' for a single edit."
           },
           "replace": {
             "type": "string",
             "description": "The new code/text to replace the search block with. Use this along with 'search'."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, simulates applying the patch and returns per-block status and diff without modifying the file or creating backups. Defaults to false."
           }
         },
         "required": ["path"]

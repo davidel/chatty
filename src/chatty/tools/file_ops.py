@@ -218,32 +218,43 @@ def parse_aider_patches(patch_text: str) -> List[Tuple[str, str]]:
   in_replace = False
   search_lines = []
   replace_lines = []
+  search_start_line = 0
+  replace_start_line = 0
   
   for idx, line in enumerate(lines):
+    line_num = idx + 1
     if line.startswith("<<<<<<< SEARCH"):
       if in_search or in_replace:
-        raise ValueError(f"Nested or malformed SEARCH block at line {idx+1}")
+        raise ValueError(f"Nested or malformed SEARCH block at line {line_num}")
       in_search = True
+      search_start_line = line_num
       search_lines = []
+    elif line.startswith("<<<<<<<"):
+      raise ValueError(f"Malformed marker at line {line_num}: '{line}'. Expected '<<<<<<< SEARCH'.")
     elif line.startswith("======="):
       if not in_search:
-        raise ValueError(f"Unexpected ======= marker without SEARCH block at line {idx+1}")
+        raise ValueError(f"Unexpected '=======' marker at line {line_num} without an opening '<<<<<<< SEARCH'.")
       in_search = False
       in_replace = True
+      replace_start_line = line_num
       replace_lines = []
     elif line.startswith(">>>>>>> REPLACE"):
       if not in_replace:
-        raise ValueError(f"Unexpected >>>>>>> REPLACE marker without SEARCH/REPLACE block at line {idx+1}")
+        raise ValueError(f"Unexpected '>>>>>>> REPLACE' marker at line {line_num} without SEARCH/REPLACE block.")
       in_replace = False
       patches.append(("\n".join(search_lines), "\n".join(replace_lines)))
+    elif line.startswith(">>>>>>>"):
+      raise ValueError(f"Malformed marker at line {line_num}: '{line}'. Expected '>>>>>>> REPLACE'.")
     else:
       if in_search:
         search_lines.append(line)
       elif in_replace:
         replace_lines.append(line)
         
-  if in_search or in_replace:
-    raise ValueError("Unclosed SEARCH or REPLACE block in patch text")
+  if in_search:
+    raise ValueError(f"Unclosed SEARCH block starting at line {search_start_line}. Missing '=======' delimiter.")
+  if in_replace:
+    raise ValueError(f"Unclosed REPLACE block starting at line {replace_start_line}. Missing '>>>>>>> REPLACE' marker.")
     
   return patches
 
@@ -457,14 +468,83 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
           best_end -= 1
 
         shift, indent_char = compute_shift(file_lines[best_start:best_end + 1], search_lines)
-        return "found", (line_start_chars[best_start], get_end_char(best_end), shift, indent_char)
+        return "found", (line_start_chars[best_start], get_end_char(best_end), shift, indent_char, False)
       else:
         return "not_unique", [best_start, competing[0][1]]
+
+  # --- Tier 5: Single-line Substring (Intra-line) Match ---
+  if num_search_lines == 1 and search_block_norm:
+    occurrences = file_content_norm.count(search_block_norm)
+    if occurrences == 1:
+      if search_block in file_content:
+        start_char = file_content.find(search_block)
+        end_char = start_char + len(search_block)
+      else:
+        start_char = file_content_norm.find(search_block_norm)
+        end_char = start_char + len(search_block_norm)
+      return "found", (start_char, end_char, 0, " ", True)
+    elif occurrences > 1:
+      matching_lines = [idx for idx, line in enumerate(file_lines) if search_block_norm in line]
+      return "not_unique", matching_lines
+
+  # Failure Diagnostics
+  diagnostic_msg = ""
+
+  # Case 1: Multi-line search block divergence
+  if num_search_lines > 1:
+    best_start = None
+    max_matched = 0
+    divergence_line = 0
+    divergence_expected = ""
+    divergence_actual = ""
+    s0_stripped = search_lines[0].strip()
+    s0_norm = normalize_code_line(search_lines[0])
+
+    for i, f_line in enumerate(file_lines):
+      if s0_stripped and (f_line.strip() == s0_stripped or normalize_code_line(f_line) == s0_norm):
+        matched = 1
+        while (i + matched < num_file_lines and
+               matched < num_search_lines and
+               normalize_code_line(file_lines[i + matched]) == normalize_code_line(search_lines[matched])):
+          matched += 1
+
+        if matched > max_matched and matched < num_search_lines and (i + matched < num_file_lines):
+          max_matched = matched
+          best_start = i + 1
+          divergence_line = i + matched + 1
+          divergence_expected = search_lines[matched]
+          divergence_actual = file_lines[i + matched]
+
+    if max_matched >= 1 and best_start is not None:
+      diagnostic_msg = (
+        f"Line {best_start} matched start of SEARCH ({max_matched}/{num_search_lines} line(s) matched), "
+        f"but diverged at line {divergence_line}:\n"
+        f"  Expected: {repr(divergence_expected)}\n"
+        f"  Actual:   {repr(divergence_actual)}"
+      )
+
+  # Case 2: Multi-line search block text exists as partial substring in the file
+  if not diagnostic_msg and num_search_lines > 1:
+    if search_block_norm in file_content_norm:
+      diagnostic_msg = "SEARCH block text exists in file but spans partial lines. Multi-line SEARCH blocks must match full lines."
+
+  # Case 3: Single-line search block whitespace mismatch
+  if not diagnostic_msg and num_search_lines == 1:
+    s_clean = normalize_code_line(search_lines[0])
+    if s_clean:
+      for i, f_line in enumerate(file_lines):
+        if normalize_code_line(f_line) == s_clean:
+          diagnostic_msg = (
+            f"Line {i+1} matches SEARCH text but differs in whitespace or indentation:\n"
+            f"  File:   {repr(f_line)}\n"
+            f"  SEARCH: {repr(search_lines[0])}"
+          )
+          break
 
   closest_info = None
   if candidates:
     best_c = max(candidates, key=lambda c: c[0])
-    if best_c[0] >= 0.50:
+    if best_c[0] >= 0.40:
       s_l = best_c[1] + 1
       e_l = best_c[2] + 1
       snippet = "".join(f"{s_l + idx}: {file_lines[s_l - 1 + idx]}\n" for idx in range(e_l - s_l + 1))
@@ -475,10 +555,16 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
         "text": snippet
       }
 
+  if diagnostic_msg:
+    if closest_info is None:
+      closest_info = {"diagnostic": diagnostic_msg}
+    else:
+      closest_info["diagnostic"] = diagnostic_msg
+
   return "not_found", closest_info
 
 
-def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
+def tool_patch_file(sandbox_dir: str, path: str, patch: str, dry_run: bool = False) -> str:
   """Replace one or more unique blocks of text in a file using Aider-style SEARCH/REPLACE blocks."""
   try:
     safe_p = get_safe_path(sandbox_dir, path, write=True)
@@ -488,7 +574,6 @@ def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
       return f"Error: Path '{path}' is not a file."
 
     rel_path = os.path.relpath(safe_p, sandbox_dir)
-    backup_file(sandbox_dir, rel_path)
 
     try:
       patches = parse_aider_patches(patch)
@@ -510,7 +595,92 @@ def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
       content = f.read()
 
     original_content = content
-    highlight_ranges = []
+
+    if dry_run:
+      block_reports = []
+      has_error = False
+      simulated_content = content
+
+      for idx, (search_block, replace_block) in enumerate(patches):
+        status, match_info = find_block_in_file(simulated_content, search_block)
+        if status == "empty_search":
+          has_error = True
+          block_reports.append(f"- Block {idx+1}: ERROR - SEARCH block is empty")
+        elif status == "not_unique":
+          has_error = True
+          line_info = ""
+          if isinstance(match_info, (list, tuple)) and match_info:
+            line_info = f" (matches near line(s): {', '.join(str(m + 1) for m in match_info[:5])})"
+          block_reports.append(f"- Block {idx+1}: ERROR - SEARCH block is not unique{line_info}")
+        elif status == "not_found":
+          has_error = True
+          err_detail = "SEARCH block not found"
+          if isinstance(match_info, dict):
+            if match_info.get("diagnostic"):
+              err_detail += f" ({match_info['diagnostic']})"
+            elif match_info.get("text"):
+              pct = int(match_info["similarity"] * 100)
+              err_detail += f" (closest match at lines {match_info['start_line']}-{match_info['end_line']} with {pct}% similarity)"
+          block_reports.append(f"- Block {idx+1}: FAILED - {err_detail}")
+        elif status == "found":
+          start_char, end_char, shift = match_info[:3]
+          indent_char = match_info[3] if len(match_info) > 3 else " "
+          is_subline = match_info[4] if len(match_info) > 4 else False
+
+          line_num = simulated_content[:start_char].count('\n') + 1
+          mode_str = " (sub-line match)" if is_subline else ""
+          block_reports.append(f"- Block {idx+1}: WOULD APPLY at line {line_num}{mode_str}")
+
+          replace_lines = replace_block.replace("\r\n", "\n").split("\n")
+          has_crlf = "\r\n" in simulated_content
+          if is_subline:
+            replace_block_final = replace_block
+            if has_crlf:
+              replace_block_final = replace_block.replace("\n", "\r\n")
+          else:
+            if shift != 0:
+              shifted_replace_lines = [apply_shift(line, shift, indent_char) for line in replace_lines]
+              replace_block_shifted = "\n".join(shifted_replace_lines)
+            else:
+              replace_block_shifted = "\n".join(replace_lines)
+
+            if end_char > start_char and simulated_content[end_char - 1] in ('\n', '\r'):
+              if not replace_block_shifted.endswith("\n"):
+                replace_block_shifted += "\n"
+
+            if has_crlf:
+              replace_block_final = replace_block_shifted.replace("\n", "\r\n")
+            else:
+              replace_block_final = replace_block_shifted
+
+          simulated_content = simulated_content[:start_char] + replace_block_final + simulated_content[end_char:]
+
+      if has_error:
+        return (
+          f"[DRY RUN] Patch validation FAILED for file '{rel_path}'.\n\n"
+          f"Per-block status:\n" + "\n".join(block_reports) + "\n\n"
+          "No changes were written to disk."
+        )
+
+      orig_lines = original_content.splitlines(keepends=True)
+      sim_lines = simulated_content.splitlines(keepends=True)
+      diff_lines = list(difflib.unified_diff(
+        orig_lines,
+        sim_lines,
+        fromfile=f"a/{rel_path}",
+        tofile=f"b/{rel_path}",
+        n=3
+      ))
+      diff_str = "".join(diff_lines) or "(No net changes)\n"
+      return (
+        f"[DRY RUN] All {len(patches)} patch block(s) would apply successfully to '{rel_path}'.\n\n"
+        f"Per-block status:\n" + "\n".join(block_reports) + "\n\n"
+        f"Simulated diff:\n```diff\n{diff_str}```\n\n"
+        "No changes were written to disk."
+      )
+
+    # Real application
+    backup_file(sandbox_dir, rel_path)
 
     for idx, (search_block, replace_block) in enumerate(patches):
       status, match_info = find_block_in_file(content, search_block)
@@ -524,51 +694,64 @@ def tool_patch_file(sandbox_dir: str, path: str, patch: str) -> str:
         return f"Error in patch block {idx+1}: SEARCH block is not unique. Please provide more context lines.{line_info}"
       elif status == "not_found":
         msg = f"Error in patch block {idx+1}: SEARCH block not found in file. Make sure it matches the file content."
-        if isinstance(match_info, dict) and match_info.get("text"):
-          pct = int(match_info["similarity"] * 100)
-          msg += (
-            f"\nClosest match found at lines {match_info['start_line']}-{match_info['end_line']} "
-            f"(similarity {pct}%):\n```\n{match_info['text']}```\n"
-            f"You can use the exact lines above for your SEARCH block."
-          )
+        if isinstance(match_info, dict):
+          if match_info.get("diagnostic"):
+            msg += f"\nDiagnostic: {match_info['diagnostic']}"
+          if match_info.get("text"):
+            pct = int(match_info["similarity"] * 100)
+            msg += (
+              f"\nClosest match found at lines {match_info['start_line']}-{match_info['end_line']} "
+              f"(similarity {pct}%):\n```\n{match_info['text']}```\n"
+              f"You can use the exact lines above for your SEARCH block."
+            )
         return msg
 
       start_char, end_char, shift = match_info[:3]
       indent_char = match_info[3] if len(match_info) > 3 else " "
+      is_subline = match_info[4] if len(match_info) > 4 else False
 
       replace_lines = replace_block.replace("\r\n", "\n").split("\n")
-      if shift != 0:
-        shifted_replace_lines = [apply_shift(line, shift, indent_char) for line in replace_lines]
-        replace_block_shifted = "\n".join(shifted_replace_lines)
-      else:
-        replace_block_shifted = "\n".join(replace_lines)
-
-      # Preserve trailing newline of the matched block
-      if end_char > start_char and content[end_char - 1] in ('\n', '\r'):
-        if not replace_block_shifted.endswith("\n"):
-          replace_block_shifted += "\n"
-
       has_crlf = "\r\n" in content
-      if has_crlf:
-        replace_block_final = replace_block_shifted.replace("\n", "\r\n")
+
+      if is_subline:
+        replace_block_final = replace_block
+        if has_crlf:
+          replace_block_final = replace_block.replace("\n", "\r\n")
       else:
-        replace_block_final = replace_block_shifted
+        if shift != 0:
+          shifted_replace_lines = [apply_shift(line, shift, indent_char) for line in replace_lines]
+          replace_block_shifted = "\n".join(shifted_replace_lines)
+        else:
+          replace_block_shifted = "\n".join(replace_lines)
+
+        # Preserve trailing newline of the matched block
+        if end_char > start_char and content[end_char - 1] in ('\n', '\r'):
+          if not replace_block_shifted.endswith("\n"):
+            replace_block_shifted += "\n"
+
+        if has_crlf:
+          replace_block_final = replace_block_shifted.replace("\n", "\r\n")
+        else:
+          replace_block_final = replace_block_shifted
 
       content = content[:start_char] + replace_block_final + content[end_char:]
-
-      replaced_lines_count = len(replace_lines)
-      start_line_num = content[:start_char].count('\n') + 1
-      end_line_num = start_line_num + max(0, replaced_lines_count - 1)
-      highlight_ranges.append((start_line_num, end_line_num))
 
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.write(content)
 
-    rel_path = os.path.relpath(safe_p, sandbox_dir)
     print_diff(rel_path, original_content, content)
 
-    preview = make_file_preview(safe_p, highlight_ranges)
-    return f"Successfully updated file '{rel_path}' by applying {len(patches)} patch block(s).\n\n{preview}"
+    orig_lines = original_content.splitlines(keepends=True)
+    new_lines = content.splitlines(keepends=True)
+    diff_lines = list(difflib.unified_diff(
+      orig_lines,
+      new_lines,
+      fromfile=f"a/{rel_path}",
+      tofile=f"b/{rel_path}",
+      n=3
+    ))
+    diff_str = "".join(diff_lines) or "(No net changes)\n"
+    return f"Successfully updated file '{rel_path}' by applying {len(patches)} patch block(s).\n\n```diff\n{diff_str}```"
 
   except Exception as e:
     return f"Error patching file: {str(e)}"

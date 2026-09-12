@@ -504,6 +504,149 @@ class TestSandboxOps(unittest.TestCase):
     self.assertIn("Closest match found at lines", res)
     self.assertIn("def process_order", res)
 
+  def test_tool_patch_file_subline_replacement(self):
+    test_file = "test_subline.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    long_line = "HEADER: v0.5: new §12.6 added by release_team -- auto-generated on 2026-09-12\n"
+    with open(file_path, "w") as f:
+      f.write(long_line)
+
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "v0.5: new §12.6\n"
+      "=======\n"
+      "v0.6: new §12.6\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
+    self.assertIn("Successfully updated file", res)
+    self.assertIn("```diff", res)
+    with open(file_path, "r") as f:
+      content = f.read()
+    expected = "HEADER: v0.6: new §12.6 added by release_team -- auto-generated on 2026-09-12\n"
+    self.assertEqual(content, expected)
+
+  def test_tool_patch_file_subline_ambiguous(self):
+    test_file = "test_subline_ambig.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    content = "Line 1: token here\nLine 2: another token here\n"
+    with open(file_path, "w") as f:
+      f.write(content)
+
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "token here\n"
+      "=======\n"
+      "token replaced\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
+    self.assertIn("SEARCH block is not unique", res)
+
+  def test_tool_patch_file_divergence_diagnostics(self):
+    test_file = "test_diverge.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write("line 1: start\nline 2: actual second line\nline 3: end\n")
+
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "line 1: start\n"
+      "line 2: hallucinated second line\n"
+      "=======\n"
+      "line 1: start\n"
+      "line 2: replaced\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
+    self.assertIn("Diagnostic: Line 1 matched start of SEARCH", res)
+    self.assertIn("diverged at line 2", res)
+    self.assertIn("hallucinated second line", res)
+
+  def test_tool_patch_file_returns_diff(self):
+    test_file = "test_diff_out.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write("a = 1\nb = 2\nc = 3\n")
+
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "b = 2\n"
+      "=======\n"
+      "b = 200\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
+    self.assertIn("```diff\n", res)
+    self.assertIn("-b = 2\n", res)
+    self.assertIn("+b = 200\n", res)
+
+  def test_tool_patch_file_dry_run_success(self):
+    test_file = "test_dry_run.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    initial_content = "def test_fn():\n  return 42\n"
+    with open(file_path, "w") as f:
+      f.write(initial_content)
+
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "  return 42\n"
+      "=======\n"
+      "  return 99\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch, dry_run=True)
+    self.assertIn("[DRY RUN] All 1 patch block(s) would apply successfully", res)
+    self.assertIn("WOULD APPLY at line 2", res)
+    self.assertIn("```diff", res)
+    self.assertIn("No changes were written to disk.", res)
+    with open(file_path, "r") as f:
+      self.assertEqual(f.read(), initial_content)
+
+  def test_tool_patch_file_dry_run_failure(self):
+    test_file = "test_dry_fail.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    initial_content = "def test_fn():\n  return 42\n"
+    with open(file_path, "w") as f:
+      f.write(initial_content)
+
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "  return 42\n"
+      "=======\n"
+      "  return 99\n"
+      ">>>>>>> REPLACE\n"
+      "<<<<<<< SEARCH\n"
+      "  missing line\n"
+      "=======\n"
+      "  replaced\n"
+      ">>>>>>> REPLACE\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, patch, dry_run=True)
+    self.assertIn("[DRY RUN] Patch validation FAILED", res)
+    self.assertIn("Block 1: WOULD APPLY", res)
+    self.assertIn("Block 2: FAILED - SEARCH block not found", res)
+    with open(file_path, "r") as f:
+      self.assertEqual(f.read(), initial_content)
+
+  def test_tool_patch_file_marker_syntax_errors(self):
+    test_file = "test_marker_err.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    with open(file_path, "w") as f:
+      f.write("content\n")
+
+    # Marker missing REPLACE
+    bad_patch = (
+      "<<<<<<< SEARCH\n"
+      "content\n"
+      "=======\n"
+      "new content\n"
+      ">>>>>>>\n"
+    )
+    res = tool_patch_file(self.sandbox_dir, test_file, bad_patch)
+    self.assertIn("Malformed marker at line 5", res)
+    self.assertIn("Expected '>>>>>>> REPLACE'", res)
+
   def test_make_file_preview_small(self):
     from chatty.tools import make_file_preview
     test_file = "preview_small.txt"
