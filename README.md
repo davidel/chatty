@@ -164,8 +164,9 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/config` | `[key=value]` | List, view, or change configuration parameters live. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
 | `/compress` | `[N]` | Directs the model to summarize current conversational state using a structured format, resets older history, and keeps N (default 4) recent messages intact. |
-| `/copy` / `/clip` | `[index]` | Copy a code block from the last AI response to the clipboard. |
-| `/write` / `/save_code` | `<path> [index]` | Write a code block from the last AI response to a file. |
+| `/copy` / `/clip` | `[index|all]` | Copy a code block or the full AI response to the clipboard. |
+| `/write` / `/save_code` | `<path> [index|all]` | Write a code block or the full AI response to a file. |
+| `/save_response` / `/save_reply` | `<path>` | Save the entire last AI response to a file. |
 | `/exit` / `/quit` | None | Cleanly terminates background processes and exits Chatty. |
 
 ---
@@ -178,7 +179,7 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`list_dir`**: Explores directories inside the sandbox. Truncates output above `--max-dir-items` to prevent token flooding.
 - **`read_file`**: Reads text files. Accepts optional `start_line` and `end_line` parameters (1-indexed), supports displaying line numbers, and honors `--max-read-chars`.
 - **`write_file`**: Writes full text contents to a file.
-- **`patch_file`**: Replaces one or more unique blocks of code inside a file using Aider-style SEARCH/REPLACE blocks. Highly robust to whitespace and indentation differences (automatically adjusts output indentation to match the file). Supports chaining multiple blocks sequentially in one patch parameter to perform multiple edits in a single call.
+- **`patch_file`**: Replaces one or more unique blocks of code inside a file using Aider-style SEARCH/REPLACE blocks (or direct `search`/`replace` parameters). Highly robust to whitespace and indentation differences (automatically adjusts output indentation to match the file). Supports unique sub-line (intra-line) replacements, chaining multiple blocks sequentially in one patch parameter, detailed mismatch diagnostics, a `dry_run` simulation mode, and returns applied unified diffs.
 - **`format_file`**: Styles source files using formatters: `black`/`ruff` for Python, `clang-format` for C/C++, `prettier` for frontend, or custom JSON/YAML encoders. Displays diff results.
 - **`move_file`**: Renames or moves files and directories safely inside the sandbox boundaries.
 - **`copy_file`**: Recursively copies file system structures.

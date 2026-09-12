@@ -986,31 +986,41 @@ def cmd_restore(session: Any, arg: str) -> bool:
 
 
 def cmd_copy(session: Any, arg: str) -> bool:
-  """Extracts code blocks from the last assistant message and copies to clipboard."""
+  """Extracts code blocks or the full markdown response from the last assistant message and copies to clipboard."""
   assistant_msgs = [m for m in session.messages if m.get("role") == "assistant" and m.get("content")]
   if not assistant_msgs:
     console.print("[bold red]No assistant response found in this session yet.[/bold red]")
     return True
 
   last_content = assistant_msgs[-1]["content"]
+  arg = arg.strip().lower()
 
   import re
   blocks = re.findall(r"```(\w*)\r?\n(.*?)\r?\n```", last_content, re.DOTALL)
-  if not blocks:
-    console.print("[bold red]No code blocks found in the last assistant response.[/bold red]")
+
+  if arg in ("all", "full", "raw", "response", "0"):
+    from chatty.utils import copy_to_clipboard
+    if copy_to_clipboard(last_content):
+      console.print("[bold green]Copied full assistant response to clipboard.[/bold green]")
+    else:
+      console.print("[bold red]Failed to copy to clipboard. Please install a clipboard utility (e.g. xclip, xsel, or wl-copy).[/bold red]")
     return True
 
-  arg = arg.strip()
+  if not blocks:
+    console.print("[bold red]No code blocks found in the last assistant response.[/bold red]")
+    console.print("[dim]Tip: Use '/copy all' to copy the entire assistant response.[/dim]")
+    return True
+
   if arg:
     try:
       idx = int(arg)
       if not (1 <= idx <= len(blocks)):
-        console.print(f"[bold red]Error: Invalid code block index {idx}. Choose between 1 and {len(blocks)}.[/bold red]")
+        console.print(f"[bold red]Error: Invalid code block index {idx}. Choose between 1 and {len(blocks)} (or 'all').[/bold red]")
         return True
       selected_block = blocks[idx - 1]
       selected_index = idx
     except ValueError:
-      console.print("[bold red]Error: Block index must be a number.[/bold red]")
+      console.print("[bold red]Error: Block index must be a number or 'all'.[/bold red]")
       return True
   else:
     if len(blocks) == 1:
@@ -1019,6 +1029,8 @@ def cmd_copy(session: Any, arg: str) -> bool:
     else:
       # Multiple blocks, show list
       console.print("[bold yellow]Multiple code blocks found in the last response:[/bold yellow]")
+      total_lines = len(last_content.splitlines())
+      console.print(f"  [cyan]0.[/cyan] [bold]all[/bold] ({total_lines} lines) -> [dim]Full assistant response[/dim]")
       for i, (lang, content) in enumerate(blocks, 1):
         line_count = len(content.splitlines())
         lang_str = lang if lang else "text"
@@ -1026,7 +1038,7 @@ def cmd_copy(session: Any, arg: str) -> bool:
         if len(preview) > 50:
           preview = preview[:47] + "..."
         console.print(f"  [cyan]{i}.[/cyan] {lang_str} ({line_count} lines) -> [dim]{preview}[/dim]")
-      console.print("Usage: /copy <block_index>")
+      console.print("Usage: /copy <block_index> (or /copy all)")
       return True
 
   code_content = selected_block[1]
@@ -1039,18 +1051,25 @@ def cmd_copy(session: Any, arg: str) -> bool:
 
 
 def cmd_write(session: Any, arg: str) -> bool:
-  """Writes a code block from the last assistant message to a file."""
+  """Writes a code block or the full assistant response to a file."""
   arg = arg.strip()
   if not arg:
-    console.print("[bold red]Error: Usage: /write <file_path> [block_index][/bold red]")
+    console.print("[bold red]Error: Usage: /write <file_path> [block_index|all][/bold red]")
     return True
 
   parts = arg.split()
-  block_index = None
+  target = None
 
-  if len(parts) > 1 and parts[-1].isdigit():
-    block_index = int(parts[-1])
-    file_path = " ".join(parts[:-1])
+  if len(parts) > 1:
+    last_part = parts[-1].lower()
+    if last_part in ("all", "full", "raw", "response", "0"):
+      target = "all"
+      file_path = " ".join(parts[:-1])
+    elif last_part.isdigit():
+      target = int(last_part)
+      file_path = " ".join(parts[:-1])
+    else:
+      file_path = " ".join(parts)
   else:
     file_path = " ".join(parts)
 
@@ -1063,23 +1082,32 @@ def cmd_write(session: Any, arg: str) -> bool:
 
   import re
   blocks = re.findall(r"```(\w*)\r?\n(.*?)\r?\n```", last_content, re.DOTALL)
-  if not blocks:
-    console.print("[bold red]No code blocks found in the last assistant response.[/bold red]")
-    return True
 
-  if block_index is not None:
-    if not (1 <= block_index <= len(blocks)):
-      console.print(f"[bold red]Error: Invalid code block index {block_index}. Choose between 1 and {len(blocks)}.[/bold red]")
+  if target == "all":
+    save_content = last_content
+    save_desc = "full assistant response"
+  elif not blocks:
+    save_content = last_content
+    save_desc = "full assistant response (no code blocks found)"
+  elif isinstance(target, int):
+    if target == 0:
+      save_content = last_content
+      save_desc = "full assistant response"
+    elif 1 <= target <= len(blocks):
+      save_content = blocks[target - 1][1]
+      save_desc = f"code block {target}"
+    else:
+      console.print(f"[bold red]Error: Invalid code block index {target}. Choose between 1 and {len(blocks)} (or 'all').[/bold red]")
       return True
-    selected_block = blocks[block_index - 1]
-    selected_index = block_index
   else:
     if len(blocks) == 1:
-      selected_block = blocks[0]
-      selected_index = 1
+      save_content = blocks[0][1]
+      save_desc = "code block 1"
     else:
       # Multiple blocks, show list
       console.print("[bold yellow]Multiple code blocks found. Please specify which block to write:[/bold yellow]")
+      total_lines = len(last_content.splitlines())
+      console.print(f"  [cyan]0.[/cyan] [bold]all[/bold] ({total_lines} lines) -> [dim]Full assistant response[/dim]")
       for i, (lang, content) in enumerate(blocks, 1):
         line_count = len(content.splitlines())
         lang_str = lang if lang else "text"
@@ -1087,10 +1115,9 @@ def cmd_write(session: Any, arg: str) -> bool:
         if len(preview) > 50:
           preview = preview[:47] + "..."
         console.print(f"  [cyan]{i}.[/cyan] {lang_str} ({line_count} lines) -> [dim]{preview}[/dim]")
-      console.print(f"Usage: /write {file_path} <block_index>")
+      console.print(f"Usage: /write {file_path} <block_index> (or /write {file_path} all)")
       return True
 
-  code_content = selected_block[1]
   import os
 
   file_path = os.path.expanduser(file_path)
@@ -1102,11 +1129,20 @@ def cmd_write(session: Any, arg: str) -> bool:
     if dir_name:
       os.makedirs(dir_name, exist_ok=True)
     with open(file_path, "w", encoding="utf-8") as f:
-      f.write(code_content)
-    console.print(f"[bold green]Saved code block {selected_index} to '{file_path}'.[/bold green]")
+      f.write(save_content)
+    console.print(f"[bold green]Saved {save_desc} to '{file_path}'.[/bold green]")
   except Exception as e:
     console.print(f"[bold red]Error saving code block: {str(e)}[/bold red]")
   return True
+
+
+def cmd_save_response(session: Any, arg: str) -> bool:
+  """Saves the entire last assistant response (markdown) to a file."""
+  arg = arg.strip()
+  if not arg:
+    console.print("[bold red]Error: Usage: /save_response <file_path>[/bold red]")
+    return True
+  return cmd_write(session, f"{arg} all")
 
 
 def cmd_show(session: Any, arg: str) -> bool:
@@ -1207,6 +1243,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/clip": cmd_copy,
   "/write": cmd_write,
   "/save_code": cmd_write,
+  "/save_response": cmd_save_response,
+  "/save_reply": cmd_save_response,
   "/show": cmd_show,
 }
 

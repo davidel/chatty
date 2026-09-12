@@ -508,6 +508,58 @@ class TestCompressCommand(unittest.TestCase):
         with open(external_file, "r", encoding="utf-8") as f:
           self.assertEqual(f.read(), "print('one')")
 
+    # 5. Test /copy all (full response) with code blocks
+    with patch("chatty.commands.console.print") as mock_print, \
+         patch("chatty.utils.copy_to_clipboard") as mock_copy:
+      mock_copy.return_value = True
+      res = COMMANDS["/copy"](self.session, "all")
+      self.assertTrue(res)
+      mock_copy.assert_called_once_with(self.session.messages[-1]["content"])
+      mock_print.assert_any_call("[bold green]Copied full assistant response to clipboard.[/bold green]")
+
+    # 6. Test /write all (full response) with code blocks
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/write"](self.session, "full_response.md all")
+      self.assertTrue(res)
+      full_file = os.path.join(self.sandbox_dir, "full_response.md")
+      self.assertTrue(os.path.exists(full_file))
+      with open(full_file, "r", encoding="utf-8") as f:
+        self.assertEqual(f.read(), self.session.messages[-1]["content"])
+
+    # 7. Add assistant message with NO code blocks (plain markdown)
+    plain_markdown = "# Analysis Report\n\nThis is a pure markdown response with no code blocks.\n"
+    self.session.messages.append({
+      "role": "assistant",
+      "content": plain_markdown
+    })
+
+    # Test /copy all on plain markdown
+    with patch("chatty.commands.console.print") as mock_print, \
+         patch("chatty.utils.copy_to_clipboard") as mock_copy:
+      mock_copy.return_value = True
+      res = COMMANDS["/copy"](self.session, "all")
+      self.assertTrue(res)
+      mock_copy.assert_called_once_with(plain_markdown)
+      mock_print.assert_any_call("[bold green]Copied full assistant response to clipboard.[/bold green]")
+
+    # Test /write auto-saving full response when no code blocks exist
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/write"](self.session, "report.md")
+      self.assertTrue(res)
+      report_file = os.path.join(self.sandbox_dir, "report.md")
+      self.assertTrue(os.path.exists(report_file))
+      with open(report_file, "r", encoding="utf-8") as f:
+        self.assertEqual(f.read(), plain_markdown)
+
+    # Test /save_response command
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/save_response"](self.session, "saved_reply.md")
+      self.assertTrue(res)
+      saved_file = os.path.join(self.sandbox_dir, "saved_reply.md")
+      self.assertTrue(os.path.exists(saved_file))
+      with open(saved_file, "r", encoding="utf-8") as f:
+        self.assertEqual(f.read(), plain_markdown)
+
   def test_cmd_show(self):
     from unittest.mock import patch
     from rich.markdown import Markdown

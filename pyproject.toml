@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chatty-agent"
-version = "0.2.0"
+version = "0.3.0"
 description = "AI Chatbot CLI with advanced sandboxed text and file system interaction"
 readme = "README.md"
 license = {file = "LICENSE"}

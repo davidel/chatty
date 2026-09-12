@@ -255,8 +255,9 @@ def show_help(session: Any):
     ("/config [key=value]", "List, view, or change configuration parameters live"),
     ("/clear / /reset", "Clear conversation memory"),
     ("/compress [N]", "Summarize history, clear context, reload summary, keeping N (default 4) recent messages"),
-    ("/copy [index] / /clip", "Copy a code block from the last AI response to the clipboard"),
-    ("/write <path> [index] / /save_code", "Write a code block from the last AI response to a file"),
+    ("/copy [index|all] / /clip", "Copy a code block or full response to clipboard"),
+    ("/write <path> [idx|all] / /save_code", "Write a code block or full response to a file"),
+    ("/save_response <path> / /save_reply", "Save the entire last AI response to a file"),
     ("/show <path>", "Read and render a Markdown file beautifully in the terminal"),
     ("/exit / /quit", "Exit the application"),
   ]
