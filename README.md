@@ -169,6 +169,30 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/save_response` / `/save_reply` | `<path>` | Save the entire last AI response to a file. |
 | `/exit` / `/quit` | None | Cleanly terminates background processes and exits Chatty. |
 
+### Model Discovery & Search Filters
+
+When using OpenRouter or Ollama, you can discover, inspect, and filter available models:
+
+```bash
+# List available models
+/models available [--refresh]
+
+# Inspect detailed model specs
+/models info <model_id_or_name>
+
+# Multi-constraint search with AND logic
+/models search cost<0.1 context>=1M ... qwen
+```
+
+The `/models search` command supports combining multiple conditions (all AND-ed together):
+- **Cost / Pricing Filters**: `cost<0.1`, `cost<=0.5`, `cost>0.01`, `cost=0` (per 1M input tokens), `out_cost<0.5` (output tokens).
+- **Context Length Filters**: `context>=1M`, `context>=128k`, `ctx>32k`, `context<=2M` (supports `k` and `m` multipliers).
+- **Size Filters (Ollama)**: `size<5g`, `size<=10gb`, `size>1g` (supports `g`, `m`, `k` units).
+- **Capabilities & Flags**: `cat:vision` / `is:vision`, `cat:free` / `is:free`.
+- **Sorting Options**: `sort:cost`, `sort:context`, `sort:newest`, `sort:size`.
+- **Text Keywords**: Model name/ID keywords (e.g. `qwen`, `coder`, `llama`).
+- **Flexible Syntax**: Supports spaces around comparison operators (e.g. `cost < 0.1 context >= 1M`), optional commas, and chained conditions.
+
 ---
 
 ## Sandboxed File System Tools

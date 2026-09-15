@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from chatty.session import ChatbotSession
-from chatty.commands import COMMANDS, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress, cmd_skill
+from chatty.commands import COMMANDS, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress, cmd_skill, filter_models
 from chatty.utils import repair_json
 
 
@@ -357,12 +357,19 @@ class TestCompressCommand(unittest.TestCase):
     self.assertTrue(res)
 
   def test_cmd_models_available_and_search(self):
+    import time
+    for _ in range(50):
+      if not getattr(self.session, "_models_loading", False):
+        break
+      time.sleep(0.01)
+
     # Setup test models in session
     self.session.provider = "openrouter"
     self.session.available_models = [
       {"id": "openai/gpt-4o", "name": "GPT-4o", "context": 128000, "pricing_input": 5.0, "pricing_output": 15.0},
       {"id": "google/gemini-flash-1.5", "name": "Gemini Flash 1.5", "context": 1000000, "pricing_input": 0.075, "pricing_output": 0.3},
       {"id": "meta-llama/llama-3-8b", "name": "Llama 3 8b", "context": 8192, "pricing_input": 0.15, "pricing_output": 0.15},
+      {"id": "qwen/qwen-2.5-coder-32b", "name": "Qwen 2.5 Coder 32B", "context": 1000000, "pricing_input": 0.08, "pricing_output": 0.16},
     ]
 
     # Test openrouter available command
@@ -374,6 +381,35 @@ class TestCompressCommand(unittest.TestCase):
     self.assertTrue(cmd_models(self.session, "search cost<1.0"))
     self.assertTrue(cmd_models(self.session, "search context>=100k"))
     self.assertTrue(cmd_models(self.session, "search sort:cost"))
+
+    # Test multi-constraint search with AND conditions
+    self.assertTrue(cmd_models(self.session, "search cost<0.1 context>=1M ... qwen"))
+    self.assertTrue(cmd_models(self.session, "search cost < 0.1 context >= 1M"))
+    self.assertTrue(cmd_models(self.session, "search cost<0.1, context>=1M, qwen"))
+
+    # Verify filtering accuracy directly
+    res_qwen = filter_models(self.session.available_models, "cost<0.1 context>=1M ... qwen")
+    self.assertEqual(len(res_qwen), 1)
+    self.assertEqual(res_qwen[0]["id"], "qwen/qwen-2.5-coder-32b")
+
+    res_multi = filter_models(self.session.available_models, "cost<0.1 context>=1M")
+    self.assertEqual(len(res_multi), 2)
+    self.assertEqual({m["id"] for m in res_multi}, {"google/gemini-flash-1.5", "qwen/qwen-2.5-coder-32b"})
+
+    res_none = filter_models(self.session.available_models, "cost<0.1 context>=1M llama")
+    self.assertEqual(len(res_none), 0)
+
+    res_range = filter_models(self.session.available_models, "context>=100k context<=128k")
+    self.assertEqual(len(res_range), 1)
+    self.assertEqual(res_range[0]["id"], "openai/gpt-4o")
+
+    res_cost_range = filter_models(self.session.available_models, "cost>=0.07 cost<=0.1")
+    self.assertEqual(len(res_cost_range), 2)
+    self.assertEqual({m["id"] for m in res_cost_range}, {"google/gemini-flash-1.5", "qwen/qwen-2.5-coder-32b"})
+
+    res_spaces = filter_models(self.session.available_models, "cost < 0.1 context >= 1M and qwen")
+    self.assertEqual(len(res_spaces), 1)
+    self.assertEqual(res_spaces[0]["id"], "qwen/qwen-2.5-coder-32b")
 
     # Test openrouter info command
     self.assertTrue(cmd_models(self.session, "info openai/gpt-4o"))

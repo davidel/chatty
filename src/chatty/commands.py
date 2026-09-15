@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, Callable, Any
+from typing import Dict, Callable, Any, List, Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -108,6 +108,218 @@ def cmd_oracle(session: Any, arg: str) -> bool:
   session.oracle_model = arg
   console.print(f"Switched oracle model to: [bold green]{arg}[/bold green]")
   return True
+
+
+def filter_models(available_models: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+  """Filters and sorts available models based on user query conditions.
+
+  Supports combining multiple conditions with AND logic:
+  - Cost/Price: cost<0.1, price<=0.5, cost>0.01, cost=0, out_cost<0.5
+  - Context: context>=1M, context>=128k, ctx>32k, context<=2M (k and m multipliers)
+  - Size: size<5g, size<=10gb, size>1g (supports g, m, k units)
+  - Category / Flags: cat:vision, is:vision, cat:free, is:free
+  - Sorting: sort:cost, sort:context, sort:newest, sort:size
+  - Free text: keywords matching model id or name (e.g. qwen, coder)
+  """
+  if not available_models:
+    return []
+
+  import re
+  import shlex
+
+  # Normalize spaces around comparison operators: e.g. "cost < 0.1" -> "cost<0.1"
+  normalized_query = re.sub(
+    r'(?i)\b(cost|price|in_cost|out_cost|output_cost|pricing_output|context|ctx|size)\s*([<>=!]+)\s*',
+    r'\1\2',
+    query
+  )
+  # Replace commas with spaces
+  normalized_query = normalized_query.replace(",", " ")
+
+  try:
+    tokens = shlex.split(normalized_query)
+  except ValueError:
+    tokens = normalized_query.split()
+
+  predicates = []
+  text_filters = []
+  sort_by = None
+
+  for token in tokens:
+    token_lower = token.lower()
+
+    # Skip ellipsis, punctuation, and conjunctions
+    if token in ("...", "..", ".") or token_lower in ("and", "&&"):
+      continue
+
+    # 1. Input Cost/Price Filter (e.g. cost<0.1, price<=0.5, cost>0.01, cost=0)
+    cost_match = re.match(r'^(?:cost|price|in_cost)(<=|>=|<|>|==|=|!=)\$?(\d+(?:\.\d+)?)$', token_lower)
+    if cost_match:
+      op = cost_match.group(1)
+      val = float(cost_match.group(2))
+      if op == "<":
+        predicates.append(lambda m, v=val: float(m.get("pricing_input") or 0) < v)
+      elif op == "<=":
+        predicates.append(lambda m, v=val: float(m.get("pricing_input") or 0) <= v)
+      elif op == ">":
+        predicates.append(lambda m, v=val: float(m.get("pricing_input") or 0) > v)
+      elif op == ">=":
+        predicates.append(lambda m, v=val: float(m.get("pricing_input") or 0) >= v)
+      elif op in ("=", "=="):
+        predicates.append(lambda m, v=val: abs(float(m.get("pricing_input") or 0) - v) < 1e-9)
+      elif op == "!=":
+        predicates.append(lambda m, v=val: abs(float(m.get("pricing_input") or 0) - v) >= 1e-9)
+      continue
+
+    # Output cost filter (e.g. out_cost<0.5)
+    out_cost_match = re.match(r'^(?:out_cost|output_cost|pricing_output)(<=|>=|<|>|==|=|!=)\$?(\d+(?:\.\d+)?)$', token_lower)
+    if out_cost_match:
+      op = out_cost_match.group(1)
+      val = float(out_cost_match.group(2))
+      if op == "<":
+        predicates.append(lambda m, v=val: float(m.get("pricing_output") or 0) < v)
+      elif op == "<=":
+        predicates.append(lambda m, v=val: float(m.get("pricing_output") or 0) <= v)
+      elif op == ">":
+        predicates.append(lambda m, v=val: float(m.get("pricing_output") or 0) > v)
+      elif op == ">=":
+        predicates.append(lambda m, v=val: float(m.get("pricing_output") or 0) >= v)
+      elif op in ("=", "=="):
+        predicates.append(lambda m, v=val: abs(float(m.get("pricing_output") or 0) - v) < 1e-9)
+      elif op == "!=":
+        predicates.append(lambda m, v=val: abs(float(m.get("pricing_output") or 0) - v) >= 1e-9)
+      continue
+
+    # 2. Context Length Filter (e.g. context>=1M, ctx>=32k, context<128k)
+    ctx_match = re.match(r'^(?:context|ctx)(<=|>=|<|>|==|=|!=)(\d+(?:\.\d+)?)([kmb]?)$', token_lower)
+    if ctx_match:
+      op = ctx_match.group(1)
+      num = float(ctx_match.group(2))
+      unit = ctx_match.group(3)
+      if unit == "m":
+        target_ctx = int(num * 1_000_000)
+      elif unit == "k":
+        target_ctx = int(num * 1_000)
+      else:
+        target_ctx = int(num)
+
+      def check_ctx(m, o=op, target=target_ctx):
+        c = m.get("context")
+        if c is None:
+          return False
+        c = int(c)
+        if o == "<":
+          return c < target
+        elif o == "<=":
+          return c <= target
+        elif o == ">":
+          return c > target
+        elif o == ">=":
+          return c >= target
+        elif o in ("=", "=="):
+          return c == target
+        elif o == "!=":
+          return c != target
+        return True
+
+      predicates.append(check_ctx)
+      continue
+
+    # 3. Size Filter (e.g. size<5g, size<=10gb, size>1g)
+    size_match = re.match(r'^size(<=|>=|<|>|==|=|!=)(\d+(?:\.\d+)?)([gmk]?b?)$', token_lower)
+    if size_match:
+      op = size_match.group(1)
+      num = float(size_match.group(2))
+      unit = size_match.group(3)
+      if "g" in unit:
+        target_bytes = int(num * (1024**3))
+      elif "m" in unit:
+        target_bytes = int(num * (1024**2))
+      elif "k" in unit:
+        target_bytes = int(num * 1024)
+      else:
+        target_bytes = int(num * (1024**3)) if num < 1024 else int(num)
+
+      def check_size(m, o=op, target=target_bytes):
+        s = m.get("size")
+        if s is None:
+          return False
+        s = int(s)
+        if o == "<":
+          return s < target
+        elif o == "<=":
+          return s <= target
+        elif o == ">":
+          return s > target
+        elif o == ">=":
+          return s >= target
+        elif o in ("=", "=="):
+          return s == target
+        elif o == "!=":
+          return s != target
+        return True
+
+      predicates.append(check_size)
+      continue
+
+    # 4. Category / Flag Filter (e.g. cat:vision, is:vision, cat:free, is:free)
+    if token_lower.startswith(("cat:", "is:")):
+      cat_val = token_lower.split(":", 1)[1]
+      if cat_val in ("vision", "image", "multimodal"):
+        def check_vision(m):
+          arch = m.get("architecture")
+          if isinstance(arch, dict):
+            mods = arch.get("input_modalities") or []
+            if "image" in mods or "video" in mods:
+              return True
+          m_id = str(m.get("id") or "").lower()
+          m_name = str(m.get("name") or "").lower()
+          return "vision" in m_id or "vision" in m_name
+        predicates.append(check_vision)
+      elif cat_val == "free":
+        predicates.append(lambda m: float(m.get("pricing_input") or 0) == 0 and float(m.get("pricing_output") or 0) == 0)
+      continue
+
+    # 5. Sorting Option (e.g. sort:cost, sort:context, sort:newest, sort:size)
+    if token_lower.startswith("sort:"):
+      sort_val = token_lower[5:]
+      if sort_val in ("cost", "price"):
+        sort_by = "cost"
+      elif sort_val in ("context", "ctx"):
+        sort_by = "context"
+      elif sort_val in ("newest", "date"):
+        sort_by = "newest"
+      elif sort_val == "size":
+        sort_by = "size"
+      continue
+
+    # 6. Freestanding text filter
+    text_filters.append(token_lower)
+
+  results = []
+  for m in available_models:
+    m_id = str(m.get("id") or "").lower()
+    m_name = str(m.get("name") or "").lower()
+
+    if text_filters and not all(f in m_id or f in m_name for f in text_filters):
+      continue
+
+    if not all(pred(m) for pred in predicates):
+      continue
+
+    results.append(m)
+
+  # Perform sorting
+  if sort_by == "cost":
+    results.sort(key=lambda x: float(x.get("pricing_input") or 0))
+  elif sort_by == "context":
+    results.sort(key=lambda x: int(x.get("context") or 0), reverse=True)
+  elif sort_by == "newest":
+    results.sort(key=lambda x: float(x.get("created") or 0), reverse=True)
+  elif sort_by == "size":
+    results.sort(key=lambda x: int(x.get("size") or 0), reverse=True)
+
+  return results
 
 
 def cmd_models(session: Any, arg: str) -> bool:
@@ -240,135 +452,33 @@ def cmd_models(session: Any, arg: str) -> bool:
     if len(parts) < 2:
       console.print("[bold red]Error: Usage: /models search <query>[/bold red]")
       return True
-      
-    query = parts[1].strip()
-    
-    # Parse search parameters
-    text_filters = []
-    max_cost = None
-    min_context = None
-    only_free = False
-    only_vision = False
-    max_size_bytes = None
-    min_size_bytes = None
-    sort_by = None
-    
-    import re
-    for token in query.split():
-      token_lower = token.lower()
-      
-      # 1. Cost/Price Filter (e.g. cost<1.5, price<=0.5)
-      cost_match = re.match(r'(?:cost|price)(<=?|<)(\d+(?:\.\d+)?)', token_lower)
-      if cost_match:
-        max_cost = float(cost_match.group(2))
-        continue
-        
-      # 2. Context Length Filter (e.g. context>=32k, ctx>128k)
-      ctx_match = re.match(r'(?:context|ctx)([>=]{1,2})(\d+)([kk]?)', token_lower)
-      if ctx_match:
-        val = int(ctx_match.group(2))
-        if ctx_match.group(3):
-          val *= 1000
-        min_context = val
-        continue
 
-      # 3. Size Filter (e.g. size<5g, size<=10gb)
-      size_match = re.match(r'size(<=?|<|>=?|>)(\d+(?:\.\d+)?)([gm]b?)', token_lower)
-      if size_match:
-        op = size_match.group(1)
-        val = float(size_match.group(2))
-        unit = size_match.group(3)
-        bytes_val = int(val * (1024**3)) if 'g' in unit else int(val * (1024**2))
-        if '>' in op:
-          min_size_bytes = bytes_val
-        else:
-          max_size_bytes = bytes_val
-        continue
-        
-      # 4. Category Filter (e.g. cat:vision, cat:image, cat:free)
-      if token_lower.startswith('cat:'):
-        cat_val = token_lower[4:]
-        if cat_val in ('vision', 'image', 'multimodal'):
-          only_vision = True
-        elif cat_val == 'free':
-          only_free = True
-        continue
-        
-      # 5. Sorting Option (e.g. sort:cost, sort:context, sort:newest, sort:size)
-      if token_lower.startswith('sort:'):
-        sort_val = token_lower[5:]
-        if sort_val in ('cost', 'price'):
-          sort_by = 'cost'
-        elif sort_val in ('context', 'ctx'):
-          sort_by = 'context'
-        elif sort_val in ('newest', 'date'):
-          sort_by = 'newest'
-        elif sort_val == 'size':
-          sort_by = 'size'
-        continue
-        
-      # 6. Freestanding text filter
-      text_filters.append(token_lower)
-      
-    # Perform filtering
-    results = []
-    for m in getattr(session, "available_models", []):
-      m_id = m.get("id", "").lower()
-      m_name = m.get("name", "").lower()
-      if text_filters and not all(f in m_id or f in m_name for f in text_filters):
-        continue
-      if max_cost is not None and m.get("pricing_input", 0) > max_cost:
-        continue
-      if only_free and (m.get("pricing_input", 0) > 0 or m.get("pricing_output", 0) > 0):
-        continue
-      if min_context is not None and m.get("context", 0) < min_context:
-        continue
-      if max_size_bytes is not None and m.get("size", 0) > max_size_bytes:
-        continue
-      if min_size_bytes is not None and m.get("size", 0) < min_size_bytes:
-        continue
-      if only_vision:
-        has_vision = False
-        input_mods = m.get("architecture", {}).get("input_modalities", []) if isinstance(m.get("architecture"), dict) else []
-        if 'image' in input_mods or 'video' in input_mods:
-          has_vision = True
-        elif 'vision' in m_id or 'vision' in m_name:
-          has_vision = True
-        if not has_vision:
-          continue
-      results.append(m)
-      
-    # Perform sorting
-    if sort_by == 'cost':
-      results.sort(key=lambda x: x.get("pricing_input", 0))
-    elif sort_by == 'context':
-      results.sort(key=lambda x: x.get("context", 0), reverse=True)
-    elif sort_by == 'newest':
-      results.sort(key=lambda x: x.get("created", 0), reverse=True)
-    elif sort_by == 'size':
-      results.sort(key=lambda x: x.get("size", 0), reverse=True)
-      
+    query = parts[1].strip()
+    results = filter_models(getattr(session, "available_models", []), query)
+
     if not results:
       console.print(f"[yellow]No models matching '{query}' found.[/yellow]")
       return True
-      
+
     from rich.table import Table
     table = Table(title=f"Search Results for '{query}'", show_header=True, header_style="bold magenta")
-    
+
     if session.provider == "openrouter" or any("pricing_input" in m for m in results):
       table.add_column("Model ID", style="cyan")
       table.add_column("Name", style="white")
       table.add_column("Context Length", style="green", justify="right")
       table.add_column("Input (per 1M)", style="yellow", justify="right")
       table.add_column("Output (per 1M)", style="yellow", justify="right")
-      
+
       for m in results[:25]:
+        p_in = m.get("pricing_input")
+        p_out = m.get("pricing_output")
         table.add_row(
-          m.get("id", ""), 
-          m.get("name", ""), 
+          m.get("id", ""),
+          m.get("name", ""),
           f"{m['context']:,}" if m.get("context") else "Unknown",
-          f"${m.get('pricing_input', 0):.2f}",
-          f"${m.get('pricing_output', 0):.2f}"
+          f"${p_in:.2f}" if p_in is not None else "$0.00",
+          f"${p_out:.2f}" if p_out is not None else "$0.00"
         )
       console.print(table)
       if len(results) > 25:
@@ -378,10 +488,12 @@ def cmd_models(session: Any, arg: str) -> bool:
       table.add_column("Name", style="white")
       table.add_column("Size", style="green", justify="right")
       table.add_column("Quantization", style="yellow")
-      
+
       for m in results:
-        size_gb = m.get("size", 0) / (1024**3)
-        quant = m.get("details", {}).get("quantization_level", "Unknown")
+        size_bytes = m.get("size") or 0
+        size_gb = size_bytes / (1024**3)
+        details = m.get("details") or {}
+        quant = details.get("quantization_level", "Unknown") if isinstance(details, dict) else "Unknown"
         table.add_row(m.get("id", ""), m.get("name", ""), f"{size_gb:.2f} GB", quant)
       console.print(table)
     else:
