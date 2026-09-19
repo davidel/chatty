@@ -7,12 +7,12 @@ name = "chatty-agent"
 version = "0.3.1"
 description = "AI Chatbot CLI with advanced sandboxed text and file system interaction"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.8"
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: Apache Software License",
-    "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
 ]
 dependencies = [
     "requests",
