@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+import time
 import unittest
 import sys
 
@@ -476,6 +477,50 @@ class TestSandboxOps(unittest.TestCase):
     with open(file_path, "r") as f:
       content = f.read()
     self.assertIn("with timeout", content)
+
+  def test_tool_patch_file_fuzzy_matcher_large_file(self):
+    test_file = "test_large_fuzzy.py"
+    file_path = os.path.join(self.sandbox_dir, test_file)
+    lines = []
+    for i in range(600):
+      if i == 450:
+        lines.append("def process_special_checkout(order_req, client_res):")
+        lines.append("  token = order_req.get('special_checkout_token')")
+        lines.append("  if not token:")
+        lines.append("    return client_res.status(400)")
+        lines.append("  return client_res.json({'order_status': 'completed', 'token': token})")
+        lines.append("")
+      else:
+        lines.append(f"def handler_{i}(req, res):")
+        lines.append(f"  val = req.get('param_{i}')")
+        lines.append(f"  if not val:")
+        lines.append(f"    return res.status(400)")
+        lines.append(f"  return res.json({{'code': {i}, 'data': val}})")
+        lines.append("")
+    with open(file_path, "w") as f:
+      f.write("\n".join(lines))
+
+    patch = (
+      "<<<<<<< SEARCH\n"
+      "    def process_special_checkout(order_req, client_res):\n"
+      "      # handle special checkout\n"
+      "      token = order_req.get('special_checkout_token')\n"
+      "      if not token:\n"
+      "        return client_res.status(400)\n"
+      "      return client_res.json({'order_status': 'completed', 'token': token})\n"
+      "=======\n"
+      "def process_special_checkout(order_req, client_res):\n"
+      "  return client_res.json({'order_status': 'updated'})\n"
+      ">>>>>>> REPLACE\n"
+    )
+    t0 = time.time()
+    res = tool_patch_file(self.sandbox_dir, test_file, patch)
+    elapsed = time.time() - t0
+    self.assertIn("Successfully updated file", res)
+    self.assertLess(elapsed, 0.5)
+    with open(file_path, "r") as f:
+      content = f.read()
+    self.assertIn("'order_status': 'updated'", content)
 
   def test_tool_patch_file_near_miss_diagnostics(self):
     test_file = "test_diag.py"

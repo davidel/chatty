@@ -341,6 +341,13 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
   if num_search_lines == 0 or (num_search_lines == 1 and search_lines[0] == ""):
     return "empty_search", None
 
+  norm_file_lines = [normalize_code_line(l) for l in file_lines]
+  norm_search_lines = [normalize_code_line(l) for l in search_lines]
+  file_non_empty = [(idx, norm_file_lines[idx]) for idx in range(num_file_lines) if norm_file_lines[idx]]
+  search_non_empty = [(idx, norm_search_lines[idx]) for idx in range(num_search_lines) if norm_search_lines[idx]]
+  file_tokens = [tok for _, tok in file_non_empty]
+  search_tokens = [tok for _, tok in search_non_empty]
+
   def get_end_char(end_idx: int) -> int:
     if end_idx >= num_file_lines - 1:
       return len(file_content_norm)
@@ -377,12 +384,7 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
     return "not_unique", fuzzy_matches
 
   # --- Tier 3: Whitespace & Blank-Line Collapsed Sublist Match ---
-  search_non_empty = [(idx, normalize_code_line(l)) for idx, l in enumerate(search_lines) if normalize_code_line(l)]
-  if search_non_empty:
-    file_non_empty = [(idx, normalize_code_line(l)) for idx, l in enumerate(file_lines) if normalize_code_line(l)]
-    search_tokens = [tok for _, tok in search_non_empty]
-    file_tokens = [tok for _, tok in file_non_empty]
-
+  if search_non_empty and file_non_empty:
     tier3_matches = []
     n_tokens = len(search_tokens)
     for j in range(len(file_tokens) - n_tokens + 1):
@@ -420,27 +422,60 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
 
   # --- Tier 4: Windowed Fuzzy Match (SequenceMatcher) ---
   candidates = []
-  if len(search_non_empty) >= 2:
-    def norm_block(text: str) -> str:
-      lines = text.splitlines()
-      return "\n".join(normalize_code_line(l) for l in lines if l.strip())
+  if len(search_non_empty) >= 2 and file_non_empty:
+    norm_search = "\n".join(search_tokens)
+    M_ne = len(search_tokens)
+    num_tokens = len(file_tokens)
 
-    norm_search = norm_block(search_block_norm)
-    M = len(search_lines)
-    min_w = max(2, M - 3)
-    max_w = min(num_file_lines, M + 4)
+    min_w_ne = max(1, M_ne - 3)
+    max_w_ne = min(num_tokens, M_ne + 3)
 
-    for W in range(min_w, max_w + 1):
-      for i in range(num_file_lines - W + 1):
-        cand_lines = file_lines[i:i + W]
-        cand_norm = norm_block("\n".join(cand_lines))
-        if not cand_norm:
-          continue
-        sm = difflib.SequenceMatcher(None, norm_search, cand_norm)
-        if sm.quick_ratio() >= 0.70:
-          r = sm.ratio()
-          if r >= 0.50:
-            candidates.append((r, i, i + W - 1))
+    if num_tokens > 80:
+      search_lines_set = set(search_tokens)
+      search_tokens_set = set(re.findall(r'\w+|[^\w\s]+', norm_search))
+
+      line_scores = [0] * num_tokens
+      for idx, line in enumerate(file_tokens):
+        if line in search_lines_set:
+          line_scores[idx] = max(len(line), 10)
+        else:
+          shared = set(re.findall(r'\w+|[^\w\s]+', line)) & search_tokens_set
+          if shared:
+            line_scores[idx] = sum(len(w) for w in shared)
+
+      pref = [0] * (num_tokens + 1)
+      for i, s in enumerate(line_scores):
+        pref[i + 1] = pref[i] + s
+
+      max_j_score = 0
+      j_scores = []
+      for j in range(num_tokens - M_ne + 1):
+        sc = pref[j + M_ne] - pref[j]
+        if sc > 0:
+          if sc > max_j_score:
+            max_j_score = sc
+          j_scores.append((sc, j))
+
+      cutoff = max(1, int(max_j_score * 0.40)) if max_j_score > 0 else 1
+      promising_starts = [j for sc, j in j_scores if sc >= cutoff]
+      if len(promising_starts) > 60:
+        j_scores.sort(key=lambda x: x[0], reverse=True)
+        promising_starts = [j for _, j in j_scores[:60]]
+    else:
+      promising_starts = list(range(num_tokens))
+
+    if promising_starts:
+      sm = difflib.SequenceMatcher(None, '', norm_search)
+      for j in promising_starts:
+        for W_ne in range(min_w_ne, min(num_tokens - j, max_w_ne) + 1):
+          cand_norm = "\n".join(file_tokens[j:j + W_ne])
+          sm.set_seq1(cand_norm)
+          if sm.quick_ratio() >= 0.70:
+            r = sm.ratio()
+            if r >= 0.40:
+              orig_start = file_non_empty[j][0]
+              orig_end = file_non_empty[j + W_ne - 1][0]
+              candidates.append((r, orig_start, orig_end))
 
   if candidates:
     candidates.sort(key=lambda c: c[0], reverse=True)
@@ -461,11 +496,26 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
 
     if best_score >= SIMILARITY_THRESHOLD:
       if (best_score - second_best_score) >= MARGIN_THRESHOLD:
-        # Trim unmatched edge blank lines
-        while best_start < best_end and not file_lines[best_start].strip() and search_lines and search_lines[0].strip():
-          best_start += 1
-        while best_end > best_start and not file_lines[best_end].strip() and search_lines and search_lines[-1].strip():
-          best_end -= 1
+        # Include leading blank lines if search_lines had them
+        s_lead_blanks = 0
+        for l in search_lines:
+          if not l.strip():
+            s_lead_blanks += 1
+          else:
+            break
+        while s_lead_blanks > 0 and best_start > 0 and not file_lines[best_start - 1].strip():
+          best_start -= 1
+          s_lead_blanks -= 1
+        # Include trailing blank lines if search_lines had them
+        s_trail_blanks = 0
+        for l in reversed(search_lines):
+          if not l.strip():
+            s_trail_blanks += 1
+          else:
+            break
+        while s_trail_blanks > 0 and best_end < num_file_lines - 1 and not file_lines[best_end + 1].strip():
+          best_end += 1
+          s_trail_blanks -= 1
 
         shift, indent_char = compute_shift(file_lines[best_start:best_end + 1], search_lines)
         return "found", (line_start_chars[best_start], get_end_char(best_end), shift, indent_char, False)
@@ -498,14 +548,14 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
     divergence_expected = ""
     divergence_actual = ""
     s0_stripped = search_lines[0].strip()
-    s0_norm = normalize_code_line(search_lines[0])
+    s0_norm = norm_search_lines[0]
 
     for i, f_line in enumerate(file_lines):
-      if s0_stripped and (f_line.strip() == s0_stripped or normalize_code_line(f_line) == s0_norm):
+      if s0_stripped and (f_line.strip() == s0_stripped or norm_file_lines[i] == s0_norm):
         matched = 1
         while (i + matched < num_file_lines and
                matched < num_search_lines and
-               normalize_code_line(file_lines[i + matched]) == normalize_code_line(search_lines[matched])):
+               norm_file_lines[i + matched] == norm_search_lines[matched]):
           matched += 1
 
         if matched > max_matched and matched < num_search_lines and (i + matched < num_file_lines):
@@ -530,10 +580,10 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
 
   # Case 3: Single-line search block whitespace mismatch
   if not diagnostic_msg and num_search_lines == 1:
-    s_clean = normalize_code_line(search_lines[0])
+    s_clean = norm_search_lines[0]
     if s_clean:
       for i, f_line in enumerate(file_lines):
-        if normalize_code_line(f_line) == s_clean:
+        if norm_file_lines[i] == s_clean:
           diagnostic_msg = (
             f"Line {i+1} matches SEARCH text but differs in whitespace or indentation:\n"
             f"  File:   {repr(f_line)}\n"
