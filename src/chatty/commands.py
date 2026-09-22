@@ -10,6 +10,7 @@ console = Console()
 
 
 def cmd_exit(session: Any, arg: str) -> bool:
+  session.cleanup_scratch(prompt=True)
   session.cleanup_background_commands()
   console.print("[bold green]Goodbye![/bold green]")
   return False

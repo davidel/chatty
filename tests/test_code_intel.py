@@ -61,7 +61,7 @@ function go() {
       f.write(code)
     symbols = self.extractor.get_outline("cached_file.py")
     self.assertEqual(len(symbols), 1)
-    cache_file = os.path.join(self.temp_dir, ".chatty", "symbol_cache.json")
+    cache_file = os.path.join(self.temp_dir, ".chatty", "cache", "symbol_cache.json")
     self.assertTrue(os.path.exists(cache_file))
 
   def test_find_symbol(self):

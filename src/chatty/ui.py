@@ -487,6 +487,7 @@ def start_interactive_loop(session: Any):
       session._print("\n[yellow]KeyboardInterrupt (Ctrl+C). Type /exit to quit.[/yellow]")
     except EOFError:
       # Handle Ctrl+D
+      session.cleanup_scratch(prompt=True)
       session.cleanup_background_commands()
       session._print("\n[bold green]Goodbye![/bold green]")
       break

@@ -46,7 +46,7 @@ class SymbolExtractor:
   def __init__(self, sandbox_dir: str, lsp_client: Optional[Any] = None):
     self.sandbox_dir = sandbox_dir
     self.lsp_client = lsp_client
-    self.cache_path = os.path.join(self.sandbox_dir, ".chatty", "symbol_cache.json")
+    self.cache_path = os.path.join(self.sandbox_dir, ".chatty", "cache", "symbol_cache.json")
     self.cache = self._load_cache()
 
   def get_outline(self, rel_path: str) -> List[Dict[str, Any]]:

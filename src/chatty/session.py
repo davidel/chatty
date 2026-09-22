@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -412,6 +413,7 @@ class ChatbotSession:
       "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), copying files/directories (copy_file), moving/renaming files/directories (move_file), deleting files (delete_file), deleting directories (delete_directory), creating directories (make_directory), formatting files (format_file), patching files (patch_file), searching regex patterns (search_grep), inspecting file outline symbols (get_outline), searching symbols globally (find_symbol), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), peeking at background task output (peek_task_output), terminating background processes (kill_process), sleeping (sleep), and asking questions (ask_question).\n"
       "All paths provided to the tools will resolve relative to the sandbox directory.\n"
       "You are strictly prohibited from writing files outside the sandbox folder.\n"
+      "CRITICAL: When creating temporary test scripts, one-off execution snippets, scratchpad notes, or intermediate debug files, you MUST create and store them in the '.chatty/scratch/' directory (relative to the sandbox). Do not litter the workspace or root directories with temporary files or scratch scripts.\n"
       "CRITICAL: When you need to ask the user a question, clarify instructions, confirm decisions, or present a set of choices/options, you MUST use the dedicated 'ask_question' tool instead of asking questions in your conversational text response. This allows the CLI to prompt the user interactively and return their response to you in the tool execution loop.\n"
       "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like list_dir, read_file, search_grep, locate_files, get_file_info, copy_file, move_file, delete_file, delete_directory, make_directory) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more, cp, mv, rm, rmdir, mkdir, ls) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
       "CRITICAL: For performing search-and-replace edits (similar to 'sed'), you MUST use 'patch_file'. It takes a 'patch' string containing one or more Aider-style SEARCH/REPLACE blocks (format: <<<<<<< SEARCH\n[exact lines or unique substring to replace]\n=======\n[new replacement]\n>>>>>>> REPLACE), or direct 'search' and 'replace' parameters. The SEARCH block must match a unique sequence of consecutive lines or a unique intra-line substring in the target file. Chaining multiple SEARCH/REPLACE blocks sequentially in a single 'patch' call is supported for editing multiple locations in the same file. It supports a 'dry_run' boolean flag and returns the applied unified diff. Do not include line numbers, file paths, or diff headers inside the blocks.\n"
@@ -476,6 +478,13 @@ class ChatbotSession:
     # Ensure sandbox exists
     os.makedirs(self.sandbox, exist_ok=True)
     os.chdir(self.sandbox)
+    
+    # Ensure .chatty/scratch exists and .gitignore ignores .chatty/
+    self.scratch_dir = os.path.join(self.sandbox, ".chatty", "scratch")
+    os.makedirs(self.scratch_dir, exist_ok=True)
+    self._scratch_handled = False
+    from chatty.backup import ensure_gitignore_ignores_chatty
+    ensure_gitignore_ignores_chatty(self.sandbox)
     
     # Initialize client
     self.available_models = []
@@ -848,6 +857,47 @@ class ChatbotSession:
   def cleanup_background_commands(self):
     """Kills all active background tasks and removes temporary files."""
     self.runner.cleanup_background_commands()
+
+  def cleanup_scratch(self, prompt: bool = True):
+    """Wipes the .chatty/scratch directory, prompting the user if interactive."""
+    if getattr(self, "_scratch_handled", False):
+      return
+    self._scratch_handled = True
+    scratch_dir = getattr(self, "scratch_dir", None)
+    if not scratch_dir:
+      scratch_dir = os.path.join(self.sandbox, ".chatty", "scratch")
+    if not os.path.exists(scratch_dir):
+      return
+    try:
+      items = [f for f in os.listdir(scratch_dir) if f != ".gitkeep"]
+    except OSError:
+      return
+    if not items:
+      return
+    wipe = True
+    if prompt and not self.headless:
+      try:
+        rel_dir = os.path.relpath(scratch_dir, self.sandbox)
+        with self._pause_live():
+          self._print(f"\nWipe temporary scratch directory ({rel_dir})? [bold green]\\[Y/n][/bold green] ", end="")
+          resp = input().strip().lower()
+          if resp in ("n", "no"):
+            wipe = False
+      except (KeyboardInterrupt, EOFError):
+        pass
+    if wipe:
+      try:
+        for item in items:
+          item_path = os.path.join(scratch_dir, item)
+          if os.path.isdir(item_path):
+            shutil.rmtree(item_path)
+          else:
+            os.unlink(item_path)
+        if not self.headless and prompt:
+          self._print("[bold green]Scratch directory wiped.[/bold green]")
+        logger.info("Scratch directory wiped successfully.")
+      except Exception as e:
+        logger.warning(f"Failed to wipe scratch directory: {e}")
 
   def _prune_background_commands(self):
     """Prunes old completed background commands."""
@@ -1636,4 +1686,5 @@ class ChatbotSession:
     return self
 
   def __exit__(self, exc_type, exc_val, exc_tb):
+    self.cleanup_scratch(prompt=False)
     self.cleanup_background_commands()
