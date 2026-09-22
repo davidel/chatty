@@ -161,20 +161,28 @@ def _is_retryable_exception(self, e: Exception) -> bool:
 
 def _resolve_model_and_provider(self, model_name: str) -> Tuple[str, Optional[Dict[str, Any]]]:
   """Resolves model name and provider preferences (if colon syntax is present)."""
-  if not model_name or ":" not in model_name:
-    return model_name, None
-  parts = model_name.rsplit(":", 1)
-  base_model = parts[0]
-  suffix = parts[1]
-  if suffix in ("free", "nitro", "floor"):
-    return model_name, None
-  extra_body = {
-    "provider": {
-      "order": [suffix],
-      "allow_fallbacks": False
-    }
-  }
-  return base_model, extra_body
+  actual_model = model_name
+  extra_body: Dict[str, Any] = {}
+
+  if hasattr(self, "provider_instance") and hasattr(self.provider_instance, "get_extra_body"):
+    prov_extra = self.provider_instance.get_extra_body(model_name)
+    if prov_extra:
+      extra_body.update(prov_extra)
+  elif getattr(self, "provider", None) == "openrouter":
+    extra_body["include_reasoning"] = True
+
+  if model_name and ":" in model_name:
+    parts = model_name.rsplit(":", 1)
+    base_model = parts[0]
+    suffix = parts[1]
+    if suffix not in ("free", "nitro", "floor"):
+      actual_model = base_model
+      extra_body["provider"] = {
+        "order": [suffix],
+        "allow_fallbacks": False
+      }
+
+  return actual_model, extra_body if extra_body else None
 
 
 def get_oracle_model(self) -> Optional[str]:
@@ -690,9 +698,22 @@ def run_llm_cycle(self):
               "tools": self.get_tools(),
               "stream": True
             }
-            if extra_body:
-              kwargs["extra_body"] = extra_body
-            stream = self._create_completion(**kwargs)
+            try:
+              stream = self._create_completion(**kwargs)
+            except Exception as e2:
+              if self._is_retryable_exception(e2):
+                raise
+              if extra_body and "include_reasoning" in extra_body:
+                logger.debug(f"Failed with extra_body: {e2}. Retrying without include_reasoning.")
+                self._throttle_request()
+                fallback_extra = {k: v for k, v in extra_body.items() if k != "include_reasoning"}
+                if fallback_extra:
+                  kwargs["extra_body"] = fallback_extra
+                else:
+                  kwargs.pop("extra_body", None)
+                stream = self._create_completion(**kwargs)
+              else:
+                raise
           
           first_metadata_chunk = True
           first_chunk = True

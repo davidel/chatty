@@ -106,6 +106,10 @@ class BaseProvider(ABC):
     """Returns the default model for discovery/reconnaissance tasks."""
     return self.get_default_model(api_key)
 
+  def get_extra_body(self, model: str) -> Optional[Dict[str, Any]]:
+    """Returns provider-specific extra_body kwargs for completion requests."""
+    return None
+
 
 class OllamaProvider(BaseProvider):
   @property
@@ -282,6 +286,10 @@ class OpenRouterProvider(BaseProvider):
     message.pop("reasoning", None)
     message.pop("reasoning_content", None)
     message.pop("reasoning_details", None)
+
+  def get_extra_body(self, model: str) -> Optional[Dict[str, Any]]:
+    """Requests reasoning/thinking tokens from OpenRouter so thinking models stream their thought process."""
+    return {"include_reasoning": True}
 
 
 class GenericProvider(BaseProvider):

@@ -149,6 +149,26 @@ class TestOracle(unittest.TestCase):
       }
     })
 
+    # Test openrouter provider resolution includes include_reasoning
+    session_openrouter = ChatbotSession(
+      provider="openrouter",
+      model="meta/muse-spark-1.3-contributor",
+      sandbox=self.sandbox_dir
+    )
+    model, extra = session_openrouter._resolve_model_and_provider("meta/muse-spark-1.3-contributor")
+    self.assertEqual(model, "meta/muse-spark-1.3-contributor")
+    self.assertEqual(extra, {"include_reasoning": True})
+
+    model, extra = session_openrouter._resolve_model_and_provider("meta/muse-spark-1.3-contributor:together")
+    self.assertEqual(model, "meta/muse-spark-1.3-contributor")
+    self.assertEqual(extra, {
+      "include_reasoning": True,
+      "provider": {
+        "order": ["together"],
+        "allow_fallbacks": False
+      }
+    })
+
   def test_is_retryable_exception(self):
     import openai
     # Construct mock/real APIStatusError
