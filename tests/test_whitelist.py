@@ -156,6 +156,18 @@ class TestWhitelistAndPermissions(unittest.TestCase):
     self.assertIn(os.path.realpath(path2), session.allowed_rw_paths)
     self.assertIn(os.path.realpath(path3), session.allowed_ro_paths)
 
+  def test_default_tmp_whitelist(self):
+    session = ChatbotSession(
+      provider="ollama",
+      model="mock-model",
+      sandbox=self.sandbox_dir,
+      headless=True
+    )
+    tmp_path = os.path.realpath(tempfile.gettempdir())
+    self.assertIn(tmp_path, session.allowed_rw_paths)
+    self.assertTrue(session.has_path_permission(os.path.join(tmp_path, "any_file.txt"), write=True))
+    self.assertTrue(session.has_path_permission(os.path.join(tmp_path, "any_file.txt"), write=False))
+
 
 if __name__ == '__main__':
   unittest.main()

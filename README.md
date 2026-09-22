@@ -281,6 +281,7 @@ If Landlock is unavailable (non-Linux systems, older kernels, or missing compile
 
 #### Out-of-Sandbox Path Whitelisting
 To allow the chatbot to access files or directories outside the sandboxed folder:
+* **Default Permissions**: By default, the system temporary directory (`/tmp` / `tempfile.gettempdir()`) is included in the Read-Write whitelist to allow temporary file operations matching the Landlock sandbox environment.
 * **CLI Startup Whitelist**: Use the `--whitelist` (or `-w`) option to whitelist paths at startup.
   ```bash
   chatty -w /usr/include:ro -w /home/user/project

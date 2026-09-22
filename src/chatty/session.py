@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import tempfile
 import time
 import uuid
 import weakref
@@ -496,7 +497,7 @@ class ChatbotSession:
     
     # Whitelist and Interactive Permission Sets
     self.allowed_ro_paths: Set[str] = set()
-    self.allowed_rw_paths: Set[str] = set()
+    self.allowed_rw_paths: Set[str] = {os.path.realpath(tempfile.gettempdir())}
     self.temp_allowed_ro_paths: Set[str] = set()
     self.temp_allowed_rw_paths: Set[str] = set()
     
