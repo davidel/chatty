@@ -102,6 +102,10 @@ class BaseProvider(ABC):
     message.pop("reasoning_details", None)
     message.pop("thought_signature", None)
 
+  def get_default_discovery_model(self, api_key: Optional[str] = None) -> Optional[str]:
+    """Returns the default model for discovery/reconnaissance tasks."""
+    return self.get_default_model(api_key)
+
 
 class OllamaProvider(BaseProvider):
   @property
@@ -113,6 +117,19 @@ class OllamaProvider(BaseProvider):
 
   def get_default_model(self, api_key: Optional[str] = None) -> str:
     return "qwen2.5-coder:7b"
+
+  def get_default_discovery_model(self, api_key: Optional[str] = None) -> Optional[str]:
+    try:
+      models = self.fetch_models(None, None)
+      for m in models:
+        m_id = m.get("id", "").lower()
+        if "coder" in m_id or "code" in m_id:
+          return m["id"]
+      if models:
+        return models[0]["id"]
+    except Exception:
+      pass
+    return self.get_default_model(api_key)
 
   def init_client(self, url: Optional[str], api_key: Optional[str]) -> LiteLLMClientStub:
     base = url or self.get_default_url()
@@ -176,6 +193,36 @@ class OpenRouterProvider(BaseProvider):
       pass
     return "google/gemini-2.5-flash:free"
 
+  def get_default_discovery_model(self, api_key: Optional[str] = None) -> str:
+    try:
+      models = self.fetch_models(None, api_key)
+      coding_matches = []
+      general_matches = []
+
+      for m in models:
+        p_in = m.get("pricing_input", 0.0)
+        p_out = m.get("pricing_output", 0.0)
+        # Cost bounds: <= $0.15/M input, <= $0.30/M output
+        if p_in <= 0.15 and p_out <= 0.30:
+          supp = m.get("supported_parameters") or []
+          if supp and "tools" not in supp:
+            continue
+          text = (m.get("id", "") + " " + (m.get("description") or "") + " " + m.get("name", "")).lower()
+          is_coding = any(k in text for k in ["code", "coder", "coding", "programming", "developer"])
+          if is_coding:
+            coding_matches.append(m["id"])
+          else:
+            general_matches.append(m["id"])
+
+      if coding_matches:
+        return coding_matches[0]
+      if general_matches:
+        return general_matches[0]
+    except Exception as e:
+      logger.debug(f"Error resolving dynamic OpenRouter discovery model: {e}")
+
+    return self.get_default_model(api_key)
+
   def init_client(self, url: Optional[str], api_key: Optional[str]) -> LiteLLMClientStub:
     base = url or self.get_default_url()
     key = resolve_api_key("openrouter", api_key)
@@ -218,6 +265,7 @@ class OpenRouterProvider(BaseProvider):
             "pricing_output": float(m.get("pricing", {}).get("completion", 0)) * 1e6,
             "description": m.get("description"),
             "architecture": m.get("architecture"),
+            "supported_parameters": m.get("supported_parameters", []),
             "created": m.get("created"),
             "knowledge_cutoff": m.get("knowledge_cutoff"),
             "hugging_face_id": m.get("hugging_face_id"),

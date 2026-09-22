@@ -1,0 +1,322 @@
+import json
+import logging
+import os
+import re
+import time
+import uuid
+from typing import Any, Dict, List, Optional, Set
+
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.text import Text
+from rich.markup import escape
+
+from chatty.tools import TOOLS_SCHEMA, execute_tool
+from chatty.safety import active_session_var
+from chatty.ui import optional_live, LiveScreenLayout
+
+logger = logging.getLogger("chatty")
+console = Console()
+
+DISCOVERY_TOOL_NAMES: Set[str] = {
+  "read_file",
+  "search_grep",
+  "locate_files",
+  "get_outline",
+  "find_symbol",
+  "get_file_info",
+  "fetch_url",
+}
+
+
+def extract_session_context(session: Any) -> str:
+  """Extracts compact context from the parent session messages."""
+  if not getattr(session, "messages", None):
+    return ""
+
+  referenced_files: List[str] = []
+  recent_user_requests: List[str] = []
+
+  for msg in session.messages[-15:]:
+    role = msg.get("role")
+    if role == "user":
+      content = msg.get("content", "")
+      if isinstance(content, str) and content.strip():
+        # Avoid huge prompt dumps
+        summary = content.strip().split("\n")[0][:120]
+        recent_user_requests.append(summary)
+
+    # Check for tool call arguments
+    tool_calls = msg.get("tool_calls") or []
+    for tc in tool_calls:
+      func = tc.get("function", {})
+      args_str = func.get("arguments", "")
+      try:
+        args = json.loads(args_str) if isinstance(args_str, str) else (args_str or {})
+        for k in ("path", "file_path", "target_file"):
+          val = args.get(k)
+          if val and isinstance(val, str) and val not in referenced_files:
+            referenced_files.append(val)
+      except Exception:
+        pass
+
+  parts = []
+  if referenced_files:
+    top_files = referenced_files[-8:]
+    parts.append("Recently referenced files in active session:\n" + "\n".join(f"- `{f}`" for f in top_files))
+
+  if recent_user_requests:
+    last_req = recent_user_requests[-1]
+    parts.append(f"Recent user prompt context: \"{last_req}\"")
+
+  if not parts:
+    return ""
+
+  return "## Existing Session Context\n" + "\n\n".join(parts)
+
+
+def build_discovery_system_prompt(session: Any, task: str) -> str:
+  """Builds the specialized reconnaissance system prompt."""
+  context_section = extract_session_context(session)
+
+  repo_map_section = ""
+  if hasattr(session, "get_repo_map") and getattr(session.config, "repo_map", True):
+    try:
+      rmap = session.get_repo_map()
+      if rmap:
+        repo_map_section = f"## Workspace Repository Map\n```\n{rmap}\n```\n"
+    except Exception as e:
+      logger.debug(f"Error fetching repo map for discovery: {e}")
+
+  prompt = (
+    "You are an expert Workspace Discovery & Reconnaissance Agent.\n"
+    "Your SOLE MISSION is to investigate the codebase and compile a clear, precise, and actionable context dossier "
+    "for the following task, without attempting to solve or implement the task yourself.\n\n"
+    f"Task to investigate:\n{task}\n\n"
+    "CRITICAL CONSTRAINTS & RULES:\n"
+    "1. DO NOT write code, propose patches, or attempt to implement the solution.\n"
+    "2. DO NOT write, edit, delete, or create any files. You only have read-only inspection tools.\n"
+    "3. Use your tools proactively (locate_files, search_grep, find_symbol, get_outline, read_file, get_file_info, fetch_url) "
+    "to explore the codebase.\n"
+    "4. Thoroughly investigate:\n"
+    "   - Exact target files and line ranges that are relevant to this task.\n"
+    "   - Key definitions (classes, functions, types, constants).\n"
+    "   - Call graphs, callers, callees, and dependencies.\n"
+    "   - Existing tests and test fixtures covering this functionality.\n"
+    "   - Potential constraints, edge cases, or architectural patterns.\n"
+    "5. When you have gathered all necessary information, provide your FINAL RESPONSE as a clean, structured Markdown dossier "
+    "in the following format (do NOT call further tools once you provide this):\n\n"
+    "### Target Files & Line Ranges\n"
+    "- `path/to/file`: lines X-Y (brief reason why this code is relevant)\n\n"
+    "### Key Symbols & Definitions\n"
+    "- `SymbolName` (in `path/to/file:line`): role and purpose\n\n"
+    "### Dependencies & Call Sites\n"
+    "- Inter-module interactions, callers, and callees\n\n"
+    "### Relevant Tests\n"
+    "- `tests/test_something.py`: existing test coverage\n\n"
+    "### Architectural Notes & Constraints\n"
+    "- Important conventions, pitfalls, or design decisions to keep in mind\n"
+  )
+
+  if context_section:
+    prompt += f"\n{context_section}\n"
+  if repo_map_section:
+    prompt += f"\n{repo_map_section}\n"
+
+  return prompt
+
+
+def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> str:
+  """Runs the discovery agent loop and returns the discovered context dossier."""
+  discovery_model = session.get_discovery_model()
+  loops_limit = max_loops if max_loops is not None else getattr(session.config, "discovery_loops", 50)
+
+  logger.info(f"Starting discovery agent (model={discovery_model}, max_loops={loops_limit}) for task: {task}")
+
+  # Filter tools for discovery
+  discovery_tools = [
+    t for t in TOOLS_SCHEMA
+    if t.get("type") == "function" and t.get("function", {}).get("name") in DISCOVERY_TOOL_NAMES
+  ]
+
+  system_prompt = build_discovery_system_prompt(session, task)
+  discovery_messages: List[Dict[str, Any]] = [
+    {"role": "system", "content": system_prompt},
+    {"role": "user", "content": f"Investigate the codebase and assemble the reconnaissance dossier for this task:\n{task}"}
+  ]
+
+  final_dossier = ""
+  panels = [{
+    "title": "🔍 Discovery Agent",
+    "content": f"Starting reconnaissance with [bold cyan]{discovery_model}[/bold cyan]...",
+    "border_style": "cyan"
+  }]
+
+  max_retries = 3
+
+  for loop_idx in range(loops_limit):
+    actual_model, extra_body = session._resolve_model_and_provider(discovery_model)
+    session._throttle_request()
+
+    kwargs: Dict[str, Any] = {
+      "model": actual_model,
+      "messages": discovery_messages,
+      "tools": discovery_tools,
+      "stream": True,
+    }
+    if extra_body:
+      kwargs["extra_body"] = extra_body
+
+    content_accumulated = ""
+    tool_calls_accumulated: List[Dict[str, Any]] = []
+    usage_metadata = None
+    api_succeeded = False
+
+    panels[0]["content"] = f"Reconnaissance step [bold yellow]{loop_idx + 1}/{loops_limit}[/bold yellow] (model: {discovery_model})..."
+
+    for attempt in range(1, max_retries + 1):
+      try:
+        with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not session.headless, refresh_per_second=12, transient=True) as live:
+          stream = session._create_completion(**kwargs)
+          for chunk in stream:
+            if hasattr(chunk, "usage") and chunk.usage:
+              usage_metadata = chunk.usage
+            elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+              usage_metadata = chunk.model_extra["usage"]
+
+            if not chunk.choices:
+              continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            if delta.content:
+              content_accumulated += delta.content
+
+            if delta.tool_calls:
+              for tc in delta.tool_calls:
+                idx = tc.index
+                while len(tool_calls_accumulated) <= idx:
+                  tool_calls_accumulated.append({
+                    "id": None,
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""}
+                  })
+                item = tool_calls_accumulated[idx]
+                if tc.id:
+                  item["id"] = tc.id
+                if tc.function:
+                  if tc.function.name:
+                    item["function"]["name"] += tc.function.name
+                  if tc.function.arguments:
+                    item["function"]["arguments"] += tc.function.arguments
+
+          api_succeeded = True
+          break
+      except Exception as e:
+        logger.warning(f"Discovery API attempt {attempt} failed: {e}")
+        if attempt < max_retries:
+          time.sleep(2 ** attempt)
+        else:
+          logger.exception("Discovery agent API call failed permanently.")
+          if not session.headless:
+            console.print(f"[bold red]Error in discovery agent:[/bold red] {e}")
+          return final_dossier or f"Error: Discovery agent encountered an error: {e}"
+
+    if not api_succeeded:
+      break
+
+    # Track token usage
+    p_tok = getattr(usage_metadata, "prompt_tokens", None) if usage_metadata else None
+    c_tok = getattr(usage_metadata, "completion_tokens", None) if usage_metadata else None
+    if p_tok is None:
+      p_tok = session._calculate_tokens_for_messages(discovery_messages)
+    if c_tok is None:
+      c_tok = session.count_tokens_estimate(content_accumulated)
+
+    if discovery_model not in session.model_usage:
+      session.model_usage[discovery_model] = {"prompt_tokens": 0, "completion_tokens": 0}
+    session.model_usage[discovery_model]["prompt_tokens"] += p_tok
+    session.model_usage[discovery_model]["completion_tokens"] += c_tok
+
+    # Fallback to text parsed tool calls if needed
+    if not tool_calls_accumulated and content_accumulated:
+      parsed_calls = session.extract_tool_calls_from_text(content_accumulated)
+      if parsed_calls:
+        tool_calls_accumulated = parsed_calls
+        content_accumulated = ""
+
+    # If no tool calls were made, the agent finished its investigation!
+    if not tool_calls_accumulated:
+      final_dossier = content_accumulated.strip()
+      break
+
+    # Format assistant message with tool calls
+    assistant_msg: Dict[str, Any] = {
+      "role": "assistant",
+      "content": content_accumulated or None,
+      "tool_calls": tool_calls_accumulated
+    }
+    discovery_messages.append(assistant_msg)
+
+    # Execute tools
+    for tc in tool_calls_accumulated:
+      if not tc.get("id"):
+        tc["id"] = f"call_{uuid.uuid4().hex[:12]}"
+      t_name = tc.get("function", {}).get("name", "")
+      t_args_raw = tc.get("function", {}).get("arguments", "")
+
+      try:
+        args_parsed = json.loads(t_args_raw) if isinstance(t_args_raw, str) else (t_args_raw or {})
+      except Exception:
+        from chatty.utils import repair_json
+        try:
+          args_parsed = json.loads(repair_json(t_args_raw))
+        except Exception as e:
+          args_parsed = {}
+
+      if t_name not in DISCOVERY_TOOL_NAMES:
+        t_result = (
+          f"Error: Tool '{t_name}' is not permitted in discovery mode. "
+          f"You only have read-only inspection tools: {', '.join(sorted(DISCOVERY_TOOL_NAMES))}."
+        )
+      else:
+        token = active_session_var.set(session)
+        try:
+          logger.info(f"Discovery tool execution: {t_name} with {args_parsed}")
+          t_result = execute_tool(t_name, args_parsed, session)
+        except Exception as e:
+          t_result = f"Error executing {t_name}: {str(e)}"
+        finally:
+          active_session_var.reset(token)
+
+      discovery_messages.append({
+        "role": "tool",
+        "tool_call_id": tc["id"],
+        "name": t_name,
+        "content": t_result
+      })
+
+  # If loop limit was reached without final output, request synthesis
+  if not final_dossier:
+    try:
+      actual_model, extra_body = session._resolve_model_and_provider(discovery_model)
+      discovery_messages.append({
+        "role": "user",
+        "content": "Reconnaissance turn limit reached. Please synthesize all gathered context into the final Markdown dossier now."
+      })
+      kwargs = {
+        "model": actual_model,
+        "messages": discovery_messages,
+        "stream": False,
+      }
+      if extra_body:
+        kwargs["extra_body"] = extra_body
+      resp = session._create_completion(**kwargs)
+      if resp.choices and resp.choices[0].message:
+        final_dossier = resp.choices[0].message.content or ""
+    except Exception as e:
+      logger.warning(f"Error requesting discovery synthesis: {e}")
+
+  return final_dossier

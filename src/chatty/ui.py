@@ -177,11 +177,11 @@ class ChattyCompleter(Completer):
           sub_doc = Document(path_text, cursor_position=len(path_text))
           for completion in self.path_completer.get_completions(sub_doc, complete_event):
             yield completion
-        elif cmd in ('/model', '/models'):
+        elif cmd in ('/model', '/models', '/oracle', '/discovery_model', '/discover_model'):
           sub_text = parts[1] if len(parts) > 1 else ""
           is_models_add = (cmd == '/models' and sub_text.startswith('add '))
           is_models_info = (cmd == '/models' and sub_text.startswith('info '))
-          if is_models_add or is_models_info or cmd == '/model':
+          if is_models_add or is_models_info or cmd in ('/model', '/oracle', '/discovery_model', '/discover_model'):
             if is_models_add:
               prefix = sub_text[4:]
             elif is_models_info:
@@ -237,6 +237,8 @@ def show_help(session: Any):
     ("/model [ID|name]", "View or switch the current LLM model by ID or name"),
     ("/models [add <name> | remove <ID/name> | available [--refresh] | search <query> | info <ID/name>]", "List, add, remove, search, or view details of LLM models"),
     ("/oracle [name]", "View or switch the oracle model used for suggestions"),
+    ("/discover <task>", "Run discovery agent to scout codebase context for a task"),
+    ("/discovery_model [name] / /discover_model", "View or switch the model used for discovery"),
     ("/sandbox [path]", "View or change the sandbox directory path"),
     ("/context [tokens]", "View or modify the history token limit"),
     ("/loops [iterations]", "View or modify the max sequential tool loops limit"),
@@ -280,6 +282,8 @@ def show_status(session: Any):
   table.add_row("Provider", session.provider)
   table.add_row("Model", session.model)
   table.add_row("Oracle Model", session.get_oracle_model() or "Not configured")
+  table.add_row("Discovery Model", session.get_discovery_model() or "Not configured")
+  table.add_row("Discovery Loops", f"{session.discovery_loops} loops")
   table.add_row("Sandbox Path", session.sandbox)
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")

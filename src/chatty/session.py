@@ -168,6 +168,8 @@ class SessionConfig:
   api_timeout: float = 60.0
   repo_map: bool = True
   repo_map_tokens: int = 1024
+  discovery_model: Optional[str] = None
+  discovery_loops: int = 50
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
@@ -343,6 +345,8 @@ class ChatbotSession:
     api_timeout: float = 60.0,
     repo_map: bool = True,
     repo_map_tokens: int = 1024,
+    discovery_model: Optional[str] = None,
+    discovery_loops: int = 50,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -383,7 +387,9 @@ class ChatbotSession:
         api_delay=api_delay,
         api_timeout=api_timeout,
         repo_map=repo_map,
-        repo_map_tokens=repo_map_tokens
+        repo_map_tokens=repo_map_tokens,
+        discovery_model=discovery_model,
+        discovery_loops=discovery_loops
       )
 
     # Ensure static_skills defaults correctly if not provided
@@ -845,6 +851,23 @@ class ChatbotSession:
   def consult_oracle(self, query: str) -> str:
     """Consults the oracle model for suggestions/reasoning assistance."""
     return consult_oracle(self, query)
+
+  def get_discovery_model(self) -> str:
+    """Returns the configured discovery model, or provider default scout model."""
+    if getattr(self.config, "discovery_model", None):
+      return self.config.discovery_model
+    try:
+      default_scout = self.provider_instance.get_default_discovery_model(self.api_key)
+      if default_scout:
+        return default_scout
+    except Exception as e:
+      logger.debug(f"Error resolving provider default discovery model: {e}")
+    return self.model
+
+  def run_discovery(self, task: str, max_loops: Optional[int] = None) -> str:
+    """Runs codebase reconnaissance using the discovery agent."""
+    from chatty.discovery import run_discovery
+    return run_discovery(self, task, max_loops=max_loops)
 
   def tool_run_tests(self, command: str = None) -> str:
     """Run tests in the sandbox, auto-detecting the testing framework if no command is provided."""
@@ -1423,6 +1446,8 @@ class ChatbotSession:
       "model": self.model,
       "models": self.models,
       "oracle_model": getattr(self, "oracle_model", None),
+      "discovery_model": getattr(self, "discovery_model", None),
+      "discovery_loops": getattr(self, "discovery_loops", 50),
       "context_size": self.context_size,
       "sandbox": self.sandbox,
       "max_loops": self.max_loops,
@@ -1459,6 +1484,10 @@ class ChatbotSession:
       self.models = session_data["models"]
     if "oracle_model" in session_data:
       self.oracle_model = session_data["oracle_model"]
+    if "discovery_model" in session_data:
+      self.discovery_model = session_data["discovery_model"]
+    if "discovery_loops" in session_data:
+      self.discovery_loops = session_data["discovery_loops"]
     if "context_size" in session_data:
       self.context_size = session_data["context_size"]
     if "sandbox" in session_data:

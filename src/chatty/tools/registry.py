@@ -357,6 +357,14 @@ def handle_ask_oracle(arguments: Dict[str, Any], session: Any) -> str:
   return session.consult_oracle(query)
 
 
+def handle_discover_context(arguments: Dict[str, Any], session: Any) -> str:
+  task = arguments.get("task", "").strip()
+  if not task:
+    return "Error: Missing parameter 'task'."
+  from chatty.discovery import run_discovery
+  return run_discovery(session, task)
+
+
 TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any], Any], str]] = {
   "move_file": handle_move_file,
   "copy_file": handle_copy_file,
@@ -384,6 +392,7 @@ TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any], Any], str]] = {
   "ask_question": handle_ask_question,
   "search_web": handle_search_web,
   "ask_oracle": handle_ask_oracle,
+  "discover_context": handle_discover_context,
   "get_outline": handle_get_outline,
   "find_symbol": handle_find_symbol,
 }

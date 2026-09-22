@@ -99,6 +99,8 @@ python3 -m chatty [options]
 | `--api-timeout` | *None* | float | `60.0` | Timeout in seconds for API requests and streams. |
 | `--repo-map / --no-repo-map` | *None* | flag | `True` | Include a Tree-Sitter / PageRank repository map in the system prompt. |
 | `--repo-map-tokens` | *None* | integer | `1024` | Target token budget for the repository map. |
+| `--discovery-model` | *None* | string | *Auto-resolved* | Model identifier for the discovery/scout agent (dynamically selects a fast, low-cost coding model on OpenRouter, a local coder model on Ollama, or falls back to the active model). |
+| `--discovery-loops` | *None* | integer | `50` | Maximum tool execution loops allowed for the discovery agent. |
 
 
 ---
@@ -147,6 +149,8 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/model` | `[ID\|name]` | View active model name or switch to another model by name or 1-based index/ID. |
 | `/models` | `[add <name>\|remove <ID\|name>\|available [--refresh]\|search <query>\|info <ID\|name>]` | List, add, remove, search, or view details of LLM models. |
 | `/oracle` | `[name]` | View active oracle model name or switch to another oracle model by name. |
+| `/discover` | `<task>` | Run discovery agent to scout codebase context for a given task. |
+| `/discovery_model` / `/discover_model` | `[name]` | View or switch the model used for discovery agent. |
 | `/sandbox` | `[path]` | View sandbox path or change it. Instantly loads any skills found in the new sandbox. |
 | `/whitelist` / `/permissions` | `[add <path> [ro\|rw] \| remove <path> \| clear]` | View or manage whitelisted out-of-sandbox paths. |
 | `/skill` | `[NAME...\|clear]` | Load on-demand skill(s) or clear explicitly loaded ones. |
@@ -196,6 +200,16 @@ The `/models search` command supports combining multiple conditions (all AND-ed 
 - **Text Keywords**: Model name/ID keywords (e.g. `qwen`, `coder`, `llama`).
 - **Flexible Syntax**: Supports spaces around comparison operators (e.g. `cost < 0.1 context >= 1M`), optional commas, and chained conditions.
 
+### Codebase Discovery Agent
+
+Chatty features an integrated **Discovery Agent** (scout) that explores the workspace using read-only tools to gather precise context, target files, exact line ranges, and architectural dependencies before implementation begins:
+
+- **Interactive Command**: Use `/discover <task>` to run reconnaissance interactively. The resulting dossier is rendered in the terminal and injected directly into conversational memory for the next turn.
+- **Autonomous LLM Tool**: The primary LLM can invoke the `discover_context(task)` tool whenever it needs to explore the repository.
+- **Configurable Scout Model**: Switch models anytime using `/discovery_model <model>` (with full Tab completion) or `--discovery-model <model>`.
+- **Intelligent Provider Defaults**: Automatically selects a fast, low-cost coding model on OpenRouter (filtered dynamically by cost bounds, tool support, and popularity) or a local coder model on Ollama, ensuring exploration does not burn expensive primary model tokens.
+- **Strict Read-Only Enforcement**: The scout agent is restricted strictly to inspection tools (`read_file`, `search_grep`, `locate_files`, `get_outline`, `find_symbol`, `get_file_info`, `fetch_url`). All writes, patches, deletions, and shell command executions are completely blocked.
+
 ---
 
 ## Sandboxed File System Tools
@@ -220,8 +234,11 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 
 
 ### Code Search & Diagnostics
+- **`discover_context`**: Delegates codebase reconnaissance to a fast scout discovery agent. The discovery agent explores the workspace using read-only tools to compile a structured dossier of target files, line spans, key definitions, and architectural notes for a given task.
 - **`search_grep`**: Performs recursive regular expression string matching on files. Can report line numbers (`line_numbers: true`) to aid editing.
 - **`locate_files`**: Finds files recursively matching glob configurations (e.g., `**/*.py`).
+- **`get_outline`**: Extracts symbols (classes, functions, methods) defined in a specific file.
+- **`find_symbol`**: Searches symbol definitions across the entire workspace.
 - **`run_tests`**: Runs test scripts (`pytest`, `npm test`, custom targets).
 
 ### Web & Information Retrieval

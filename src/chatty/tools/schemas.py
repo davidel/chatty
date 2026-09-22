@@ -590,6 +590,23 @@ TOOLS_SCHEMA = [
   {
     "type": "function",
     "function": {
+      "name": "discover_context",
+      "description": "Delegate codebase reconnaissance and context gathering to a fast scout discovery agent. The discovery agent explores the workspace using read-only search and outline tools to build a curated dossier of relevant files, exact line spans, key symbols, and architectural notes for a given task, without modifying any files.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The specific feature, bug, topic, or implementation task for the discovery agent to investigate across the workspace."
+          }
+        },
+        "required": ["task"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "list_file_backups",
       "description": "List all available timestamped backups for a given file path. Backups are created automatically on every file write/patch/delete operation.",
       "parameters": {

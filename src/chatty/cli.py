@@ -31,6 +31,16 @@ def main():
     help="Model identifier to use as the oracle. Default determines based on provider."
   )
   parser.add_argument(
+    "--discovery-model",
+    help="Model identifier to use for the discovery/scout agent (defaults to active model)."
+  )
+  parser.add_argument(
+    "--discovery-loops",
+    type=int,
+    default=50,
+    help="Maximum tool loops allowed for the discovery agent (default: 50)."
+  )
+  parser.add_argument(
     "--context-size", "-c",
     type=int,
     default=8192,
@@ -301,7 +311,9 @@ def main():
     api_delay=args.api_delay,
     api_timeout=args.api_timeout,
     repo_map=args.repo_map,
-    repo_map_tokens=args.repo_map_tokens
+    repo_map_tokens=args.repo_map_tokens,
+    discovery_model=args.discovery_model,
+    discovery_loops=args.discovery_loops
   ) as chat_session:
     if not args.headless:
       chat_session.start_loop()

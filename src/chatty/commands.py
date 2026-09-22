@@ -111,6 +111,21 @@ def cmd_oracle(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_discovery_model(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    disc_model = session.get_discovery_model()
+    if getattr(session.config, "discovery_model", None):
+      console.print(f"Current discovery model: [bold cyan]{disc_model}[/bold cyan]")
+    else:
+      console.print(f"Discovery model is not explicitly configured (defaulting to active model: [bold cyan]{disc_model}[/bold cyan]).")
+    return True
+
+  session.discovery_model = arg
+  console.print(f"Switched discovery model to: [bold green]{arg}[/bold green]")
+  return True
+
+
 def filter_models(available_models: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
   """Filters and sorts available models based on user query conditions.
 
@@ -976,6 +991,8 @@ def cmd_config(session: Any, arg: str) -> bool:
     "max_dir_items": int,
     "repo_map": bool,
     "repo_map_tokens": int,
+    "discovery_model": str,
+    "discovery_loops": int,
   }
   
   arg = arg.strip()
@@ -1333,6 +1350,33 @@ def cmd_repo_map(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_discover(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    console.print("[bold red]Error: Please specify a task or topic to discover context for.[/bold red]")
+    console.print("Usage: /discover <task description>")
+    return True
+  from chatty.discovery import run_discovery
+  dossier = run_discovery(session, arg)
+  if not dossier:
+    console.print("[yellow]Discovery agent finished without returning context.[/yellow]")
+    return True
+  from rich.panel import Panel
+  from rich.markdown import Markdown
+  console.print(Panel(Markdown(dossier), title=f"[bold cyan]🔍 Discovery Dossier: {arg}[/bold cyan]", border_style="cyan"))
+
+  session.messages.append({
+    "role": "user",
+    "content": f"[Context gathered by Discovery Agent for task: '{arg}']:\n\n{dossier}"
+  })
+  session.messages.append({
+    "role": "assistant",
+    "content": f"Understood. I have reviewed the discovered context for '{arg}'. How would you like to proceed?"
+  })
+  console.print("[bold green]Dossier loaded into active conversation context.[/bold green]")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -1346,6 +1390,9 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/model": cmd_model,
   "/models": cmd_models,
   "/oracle": cmd_oracle,
+  "/discover": cmd_discover,
+  "/discovery_model": cmd_discovery_model,
+  "/discover_model": cmd_discovery_model,
   "/sandbox": cmd_sandbox,
   "/context": cmd_context,
   "/loops": cmd_loops,
