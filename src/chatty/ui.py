@@ -250,6 +250,7 @@ def show_help(session: Any):
     ("/pop <index>", "Truncate history from index (1-based) onwards"),
     ("/tools", "List available sandbox tools and schemas"),
     ("/find_symbol <name>", "Search the global project-wide index for any symbol"),
+    ("/repo_map [refresh] / /map", "Display the Tree-Sitter repository map"),
     ("/whitelist [add <path> [ro|rw] | remove <path> | clear]", "Manage whitelisted out-of-sandbox paths"),
     ("/skill [NAME...|clear]", "Load skill(s) on-demand or clear explicitly loaded skills"),
     ("/config [key=value]", "List, view, or change configuration parameters live"),
@@ -282,6 +283,7 @@ def show_status(session: Any):
   table.add_row("Sandbox Path", session.sandbox)
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
+  table.add_row("Repo Map", f"{'Enabled' if session.repo_map else 'Disabled'} (budget: {session.repo_map_tokens} tokens)")
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
   table.add_row("API Request Timeout", f"{session.api_timeout} seconds")
   table.add_row("Total Messages", str(len(session.messages)))

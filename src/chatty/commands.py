@@ -974,6 +974,8 @@ def cmd_config(session: Any, arg: str) -> bool:
     "max_command_chars": int,
     "max_url_chars": int,
     "max_dir_items": int,
+    "repo_map": bool,
+    "repo_map_tokens": int,
   }
   
   arg = arg.strip()
@@ -1319,6 +1321,18 @@ def cmd_find_symbol(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_repo_map(session: Any, arg: str) -> bool:
+  arg = arg.strip().lower()
+  refresh = arg in ("refresh", "-r", "--refresh", "reload")
+  repo_map = session.get_repo_map(refresh=refresh)
+  if not repo_map:
+    console.print("[yellow]Repository map is empty or no source files found.[/yellow]")
+    return True
+  from rich.panel import Panel
+  console.print(Panel(repo_map, title="[bold cyan]Repository Map (Tree-Sitter / PageRank)[/bold cyan]", border_style="cyan"))
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -1343,6 +1357,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/load_session": cmd_load_session,
   "/tools": cmd_tools,
   "/find_symbol": cmd_find_symbol,
+  "/repo_map": cmd_repo_map,
+  "/map": cmd_repo_map,
   "/skill": cmd_skill,
   "/history": cmd_history,
   "/undo": cmd_undo,

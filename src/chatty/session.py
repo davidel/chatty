@@ -12,6 +12,7 @@ import weakref
 from typing import List, Dict, Any, Tuple, Optional, Set
 from dataclasses import dataclass, field
 
+from chatty.repo_map import RepoMap
 from chatty.runner import SubprocessRunner, cleanup_resources
 from chatty.llm import (
   _invalidate_token_cache,
@@ -165,6 +166,8 @@ class SessionConfig:
   max_thinking_leeway_chars: int = 2000
   api_delay: float = 2.5
   api_timeout: float = 60.0
+  repo_map: bool = True
+  repo_map_tokens: int = 1024
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
@@ -338,6 +341,8 @@ class ChatbotSession:
     max_thinking_leeway_chars: int = 2000,
     api_delay: float = 2.5,
     api_timeout: float = 60.0,
+    repo_map: bool = True,
+    repo_map_tokens: int = 1024,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -376,7 +381,9 @@ class ChatbotSession:
         max_thinking_chars=max_thinking_chars,
         max_thinking_leeway_chars=max_thinking_leeway_chars,
         api_delay=api_delay,
-        api_timeout=api_timeout
+        api_timeout=api_timeout,
+        repo_map=repo_map,
+        repo_map_tokens=repo_map_tokens
       )
 
     # Ensure static_skills defaults correctly if not provided
@@ -485,6 +492,9 @@ class ChatbotSession:
     self._scratch_handled = False
     from chatty.backup import ensure_gitignore_ignores_chatty
     ensure_gitignore_ignores_chatty(self.sandbox)
+    
+    # Initialize RepoMap
+    self.repo_map = RepoMap(self.sandbox, max_tokens=self.config.repo_map_tokens)
     
     # Initialize client
     self.available_models = []
@@ -718,9 +728,14 @@ class ChatbotSession:
           meta = skill["metadata"]
           active_skills.append(f"### Skill: {meta.get('name')}\n{skill['body']}")
       if not active_skills:
-        return self.system_prompt
-      skills_text = "\n\n".join(active_skills)
-      return f"{self.system_prompt}\n\n## Available Skills\n{skills_text}"
+        prompt_text = self.system_prompt
+      else:
+        skills_text = "\n\n".join(active_skills)
+        prompt_text = f"{self.system_prompt}\n\n## Available Skills\n{skills_text}"
+      repo_map_str = self.get_repo_map()
+      if repo_map_str:
+        prompt_text += f"\n\n## Repository Map\nBelow is a structural map of key definitions across the workspace (ranked by centrality):\n```\n{repo_map_str}\n```"
+      return prompt_text
 
     # Progressive disclosure mode
     available_skills_lines = []
@@ -771,8 +786,21 @@ class ChatbotSession:
       parts.append(available_skills_text)
     if activated_skills_text:
       parts.append(activated_skills_text)
+    repo_map_str = self.get_repo_map()
+    if repo_map_str:
+      parts.append(f"## Repository Map\nBelow is a structural map of key definitions across the workspace (ranked by centrality):\n```\n{repo_map_str}\n```")
 
     return "\n\n".join(parts)
+
+  def get_repo_map(self, refresh: bool = False) -> str:
+    """Generates or retrieves the cached Tree-Sitter / PageRank repository map."""
+    if not getattr(self.config, "repo_map", True):
+      return ""
+    if not hasattr(self, "repo_map"):
+      self.repo_map = RepoMap(self.sandbox, max_tokens=getattr(self.config, "repo_map_tokens", 1024))
+    if refresh:
+      self.repo_map.cache.clear()
+    return self.repo_map.generate_map()
 
   def init_client(self):
     """Initializes or updates the OpenAI client based on active settings."""

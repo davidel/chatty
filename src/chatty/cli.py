@@ -178,6 +178,18 @@ def main():
     default=60.0,
     help="Timeout in seconds for API requests and streams (default: 60.0)."
   )
+  parser.add_argument(
+    "--repo-map",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Include a Tree-Sitter repository map in the system prompt (default: True)."
+  )
+  parser.add_argument(
+    "--repo-map-tokens",
+    type=int,
+    default=1024,
+    help="Target token budget for repository map (default: 1024)."
+  )
   
   args = parser.parse_args()
   
@@ -287,7 +299,9 @@ def main():
     max_thinking_chars=args.max_thinking_chars,
     max_thinking_leeway_chars=args.max_thinking_leeway_chars,
     api_delay=args.api_delay,
-    api_timeout=args.api_timeout
+    api_timeout=args.api_timeout,
+    repo_map=args.repo_map,
+    repo_map_tokens=args.repo_map_tokens
   ) as chat_session:
     if not args.headless:
       chat_session.start_loop()

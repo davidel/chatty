@@ -25,7 +25,13 @@ dependencies = [
     "litellm",
     "pypdf",
     "tree-sitter",
-    "tree-sitter-languages",
+    "tree-sitter-python",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-go",
+    "tree-sitter-rust",
 ]
 
 [project.scripts]

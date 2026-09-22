@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional
 
 try:
   import tree_sitter
-  import tree_sitter_languages
   HAS_TREE_SITTER = True
 except ImportError:
   HAS_TREE_SITTER = False
@@ -150,25 +149,31 @@ class SymbolExtractor:
     if not lang_name:
       return None
     try:
+      from chatty.repo_map import get_tree_sitter_language
+      language = get_tree_sitter_language(lang_name)
+      if not language:
+        return None
       with open(abs_path, "r", encoding="utf-8", errors="ignore") as f:
         code_bytes = f.read().encode("utf-8")
-      language = tree_sitter_languages.get_language(lang_name)
-      parser = tree_sitter.Parser()
-      parser.set_language(language)
+      parser = tree_sitter.Parser(language)
       tree = parser.parse(code_bytes)
       query_str = self._get_tree_sitter_query(lang_name)
       if not query_str:
         return None
-      query = language.query(query_str)
-      captures = query.captures(tree.root_node)
+      query = tree_sitter.Query(language, query_str)
+      cursor = tree_sitter.QueryCursor(query)
+      captures = cursor.captures(tree.root_node)
       symbols = []
-      for node, tag in captures:
-        symbols.append({
-          "name": node.text.decode("utf-8", errors="ignore") if hasattr(node, "text") else "",
-          "type": tag,
-          "line": node.start_point[0] + 1,
-          "parent": self._find_parent_class_ts(node)
-        })
+      for tag, nodes in captures.items():
+        for node in nodes:
+          parent = self._find_parent_class_ts(node)
+          sym_type = "method" if (tag == "function" and parent) else tag
+          symbols.append({
+            "name": node.text.decode("utf-8", errors="ignore") if hasattr(node, "text") else "",
+            "type": sym_type,
+            "line": node.start_point[0] + 1,
+            "parent": parent
+          })
       return symbols
     except Exception:
       return None
@@ -241,6 +246,7 @@ class SymbolExtractor:
       ".jsx": "javascript",
       ".ts": "typescript",
       ".tsx": "typescript",
+      ".c": "c",
       ".cpp": "cpp",
       ".cc": "cpp",
       ".cxx": "cpp",
@@ -264,9 +270,10 @@ class SymbolExtractor:
         (function_declaration name: (identifier) @function)
         (method_definition name: (property_identifier) @method)
       """
-    elif lang_name == "cpp":
+    elif lang_name in ("c", "cpp"):
       return """
         (class_specifier name: (type_identifier) @class)
+        (struct_specifier name: (type_identifier) @struct)
         (function_definition declarator: (function_declarator declarator: (field_identifier) @method))
         (function_definition declarator: (function_declarator declarator: (identifier) @function))
       """

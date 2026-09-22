@@ -47,3 +47,6 @@ src/chatty/landlock_exec.test
 
 # Scratch directory
 scratch/
+
+# Chatty session / cache directory
+.chatty/

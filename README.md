@@ -97,6 +97,8 @@ python3 -m chatty [options]
 | `--max-thinking-leeway-chars` | *None* | integer | `2000` | Leeway in characters beyond the maximum before hard-aborting or prompting. |
 | `--api-delay` | *None* | float | `2.5` | Minimum delay in seconds between consecutive API requests. |
 | `--api-timeout` | *None* | float | `60.0` | Timeout in seconds for API requests and streams. |
+| `--repo-map / --no-repo-map` | *None* | flag | `True` | Include a Tree-Sitter / PageRank repository map in the system prompt. |
+| `--repo-map-tokens` | *None* | integer | `1024` | Target token budget for the repository map. |
 
 
 ---
@@ -161,6 +163,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/backups` | `<file_path>` | Lists all available timestamped backups for a given file. |
 | `/restore` | `<file_path> [index_or_timestamp]` | Restores a file to a specific backup version (defaults to the latest). |
 | `/tools` | None | Lists available sandboxed tools and their schema definitions. |
+| `/repo_map` / `/map` | `[refresh]` | Displays the Tree-Sitter / PageRank repository map. |
 | `/config` | `[key=value]` | List, view, or change configuration parameters live. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
 | `/compress` | `[N]` | Directs the model to summarize current conversational state using a structured format, resets older history, and keeps N (default 4) recent messages intact. |
