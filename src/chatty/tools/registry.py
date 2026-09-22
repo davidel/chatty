@@ -127,28 +127,6 @@ def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:
     return "Error: Must specify either 'patch' or both 'search' and 'replace'."
 
 
-def handle_multi_patch(arguments: Dict[str, Any], session: Any) -> str:
-  return (
-    "Error: The 'multi_patch' tool has been deprecated. "
-    "Please use the unified 'patch_file' tool with a single string parameter 'patch' "
-    "containing one or more Aider-style SEARCH/REPLACE blocks."
-  )
-
-
-def handle_edit_lines(arguments: Dict[str, Any], session: Any) -> str:
-  return (
-    "Error: The 'edit_lines' tool has been deprecated. "
-    "Please use the unified 'patch_file' tool with Aider-style SEARCH/REPLACE blocks instead."
-  )
-
-
-def handle_multi_edit_lines(arguments: Dict[str, Any], session: Any) -> str:
-  return (
-    "Error: The 'multi_edit_lines' tool has been deprecated. "
-    "Please use the unified 'patch_file' tool with Aider-style SEARCH/REPLACE blocks instead."
-  )
-
-
 def handle_format_file(arguments: Dict[str, Any], session: Any) -> str:
   path = arguments.get("path")
   formatter = arguments.get("formatter")
@@ -391,9 +369,6 @@ TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any], Any], str]] = {
   "hex_dump": handle_hex_dump,
   "write_file": handle_write_file,
   "patch_file": handle_patch_file,
-  "multi_patch": handle_multi_patch,
-  "edit_lines": handle_edit_lines,
-  "multi_edit_lines": handle_multi_edit_lines,
   "format_file": handle_format_file,
   "search_grep": handle_search_grep,
   "run_command": handle_run_command,
