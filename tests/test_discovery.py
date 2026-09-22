@@ -213,10 +213,57 @@ class TestDiscoveryAgent(unittest.TestCase):
       {"id": "llama3:8b", "name": "llama3"},
       {"id": "qwen2.5-coder:7b", "name": "qwen2.5-coder"}
     ]
-
     with patch.object(prov, "fetch_models", return_value=mock_models):
       chosen = prov.get_default_discovery_model()
       self.assertEqual(chosen, "qwen2.5-coder:7b")
+
+  @patch("chatty.llm.execute_tool")
+  @patch("chatty.llm.optional_live")
+  def test_discover_context_bypasses_outer_live(self, mock_optional_live, mock_execute_tool):
+    from types import SimpleNamespace
+    mock_execute_tool.return_value = "### Discovered Dossier"
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    mock_client = MagicMock()
+    self.session.client = mock_client
+    self.session.headless = False
+
+    # Mock tool call chunk followed by completion chunk
+    mock_tool_call = SimpleNamespace(
+      id="call_disc_123",
+      index=0,
+      function=SimpleNamespace(
+        name="discover_context",
+        arguments='{"task": "investigate auth flow"}'
+      )
+    )
+
+    chunk_turn1 = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=[mock_tool_call]))],
+      usage=None,
+      model_extra=None
+    )
+    chunk_turn2 = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Done investigating", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+
+    mock_client.chat.completions.create.side_effect = [[chunk_turn1], [chunk_turn2]]
+
+    self.session.messages = [{"role": "user", "content": "Help with auth"}]
+    with patch("time.sleep"):
+      self.session.run_llm_cycle()
+
+    mock_execute_tool.assert_called_once_with("discover_context", {"task": "investigate auth flow"}, self.session)
+
+    # Verify optional_live was never called with "🔧 Executing Tool" panel
+    for call in mock_optional_live.call_args_list:
+      renderable = call.args[0] if call.args else call.kwargs.get("renderable")
+      if hasattr(renderable, "panels"):
+        for p in renderable.panels:
+          self.assertNotEqual(p.get("title"), "🔧 Executing Tool")
 
 
 if __name__ == "__main__":
