@@ -192,7 +192,7 @@ def _run_scout_loop(
   final_dossier = ""
   panels = [{
     "title": title,
-    "content": f"Starting {log_label.lower()} with [bold cyan]{discovery_model}[/bold cyan]...",
+    "content": Text.from_markup(f"Starting {log_label.lower()} with [bold cyan]{escape(discovery_model)}[/bold cyan]..."),
     "border_style": "cyan"
   }]
 
@@ -216,7 +216,7 @@ def _run_scout_loop(
     usage_metadata = None
     api_succeeded = False
 
-    panels[0]["content"] = f"Investigation step [bold yellow]{loop_idx + 1}/{loops_limit}[/bold yellow] (model: {discovery_model})..."
+    panels[0]["content"] = Text.from_markup(f"Investigation step [bold yellow]{loop_idx + 1}/{loops_limit}[/bold yellow] (model: {escape(discovery_model)})...")
 
     for attempt in range(1, max_retries + 1):
       try:
