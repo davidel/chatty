@@ -139,7 +139,7 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "format_file",
-      "description": "Format a source code file using the appropriate formatter (e.g. black/ruff for Python, clang-format for C/C++/SystemVerilog/Verilog, prettier for JS/TS/HTML/CSS/MD, or built-in json/yaml tools). Shows a diff of changes.",
+      "description": "Format a source code file using the appropriate formatter (e.g. yapf/black/ruff for Python, clang-format for C/C++/SystemVerilog/Verilog, prettier for JS/TS/HTML/CSS/MD, or built-in json/yaml tools). Automatically detects repo configuration files (such as .style.yapf, .clang-format, pyproject.toml, .prettierrc) if not specified. Shows a diff of changes.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -149,11 +149,11 @@ TOOLS_SCHEMA = [
           },
           "formatter": {
             "type": "string",
-            "description": "Optional name of the formatter tool to use (e.g. 'clang-format', 'black', 'ruff', 'prettier', etc.). If omitted, chatty will auto-select the best available tool based on file extension."
+            "description": "Optional name of the formatter tool to use (e.g. 'yapf', 'clang-format', 'black', 'ruff', 'prettier', etc.). If omitted, chatty will autodetect from repository configuration files or fall back to the best available tool based on file extension."
           },
           "config_path": {
             "type": "string",
-            "description": "Optional path to the tool-specific configuration file relative to the sandbox root (e.g. '.clang-format', 'pyproject.toml', 'prettier.config.js', etc.)."
+            "description": "Optional path to the tool-specific configuration file relative to the sandbox root (e.g. '.style.yapf', '.clang-format', 'pyproject.toml', 'prettier.config.js', etc.). If omitted, chatty will automatically search for repository-level configuration files."
           }
         },
         "required": ["path"]

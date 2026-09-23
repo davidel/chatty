@@ -816,6 +816,242 @@ def get_available_formatters() -> List[str]:
   return formatters
 
 
+def _get_format_search_dirs(sandbox_dir: str, file_path: str) -> List[str]:
+  """Returns search directories from the file's parent directory up to sandbox_dir."""
+  abs_sandbox = os.path.abspath(sandbox_dir)
+  abs_file = os.path.abspath(file_path)
+  dirs = []
+  curr = os.path.dirname(abs_file)
+  while True:
+    dirs.append(curr)
+    if curr == abs_sandbox:
+      break
+    parent = os.path.dirname(curr)
+    if parent == curr:
+      break
+    curr = parent
+  if abs_sandbox not in dirs:
+    dirs.append(abs_sandbox)
+  return dirs
+
+
+def _detect_config_for_formatter(formatter: str, search_dirs: List[str]) -> Optional[str]:
+  """Detects a configuration file path for a specified formatter."""
+  formatter = formatter.lower()
+  if formatter == "yapf":
+    for d in search_dirs:
+      target = os.path.join(d, ".style.yapf")
+      if os.path.isfile(target):
+        return target
+      target = os.path.join(d, "pyproject.toml")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            if "[tool.yapf]" in f.read():
+              return target
+        except Exception:
+          pass
+      target = os.path.join(d, "setup.cfg")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            if "[yapf]" in f.read():
+              return target
+        except Exception:
+          pass
+
+  elif formatter == "ruff":
+    for d in search_dirs:
+      for name in ("ruff.toml", ".ruff.toml"):
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return target
+      target = os.path.join(d, "pyproject.toml")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            if "[tool.ruff]" in f.read():
+              return target
+        except Exception:
+          pass
+
+  elif formatter == "black":
+    for d in search_dirs:
+      target = os.path.join(d, "pyproject.toml")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            if "[tool.black]" in f.read():
+              return target
+        except Exception:
+          pass
+
+  elif formatter == "autopep8":
+    for d in search_dirs:
+      for name in (".pep8", ".flake8"):
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return target
+      target = os.path.join(d, "setup.cfg")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            c = f.read()
+            if "[pep8]" in c or "[autopep8]" in c:
+              return target
+        except Exception:
+          pass
+      target = os.path.join(d, "pyproject.toml")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            if "[tool.autopep8]" in f.read():
+              return target
+        except Exception:
+          pass
+
+  elif formatter == "clang-format":
+    for d in search_dirs:
+      for name in (".clang-format", "_clang-format"):
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return target
+
+  elif formatter == "prettier":
+    prettier_names = (
+      ".prettierrc",
+      ".prettierrc.json",
+      ".prettierrc.yml",
+      ".prettierrc.yaml",
+      ".prettierrc.json5",
+      ".prettierrc.js",
+      ".prettierrc.cjs",
+      ".prettierrc.mjs",
+      ".prettierrc.toml",
+      "prettier.config.js",
+      "prettier.config.cjs",
+      "prettier.config.mjs"
+    )
+    for d in search_dirs:
+      for name in prettier_names:
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return target
+      target = os.path.join(d, "package.json")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            if '"prettier"' in f.read():
+              return target
+        except Exception:
+          pass
+
+  elif formatter == "rustfmt":
+    for d in search_dirs:
+      for name in ("rustfmt.toml", ".rustfmt.toml"):
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return target
+
+  return None
+
+
+def _detect_formatter_and_config(ext: str, search_dirs: List[str]) -> Tuple[Optional[str], Optional[str]]:
+  """Autodetects formatter and configuration file from repository configs based on file extension."""
+  if ext == ".py":
+    for d in search_dirs:
+      target = os.path.join(d, ".style.yapf")
+      if os.path.isfile(target):
+        return ("yapf", target)
+
+    for d in search_dirs:
+      for name in ("ruff.toml", ".ruff.toml"):
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return ("ruff", target)
+
+    for d in search_dirs:
+      target = os.path.join(d, "pyproject.toml")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+          if "[tool.yapf]" in content:
+            return ("yapf", target)
+          if "[tool.ruff]" in content:
+            return ("ruff", target)
+          if "[tool.black]" in content:
+            return ("black", target)
+          if "[tool.autopep8]" in content:
+            return ("autopep8", target)
+        except Exception:
+          pass
+
+    for d in search_dirs:
+      target = os.path.join(d, "setup.cfg")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+          if "[yapf]" in content:
+            return ("yapf", target)
+          if "[pep8]" in content or "[autopep8]" in content:
+            return ("autopep8", target)
+        except Exception:
+          pass
+
+    for d in search_dirs:
+      for name in (".pep8", ".flake8"):
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return ("autopep8", target)
+
+  elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java", ".sv", ".svh", ".v"):
+    for d in search_dirs:
+      for name in (".clang-format", "_clang-format"):
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return ("clang-format", target)
+
+  elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md", ".json", ".yaml", ".yml"):
+    prettier_names = (
+      ".prettierrc",
+      ".prettierrc.json",
+      ".prettierrc.yml",
+      ".prettierrc.yaml",
+      ".prettierrc.json5",
+      ".prettierrc.js",
+      ".prettierrc.cjs",
+      ".prettierrc.mjs",
+      ".prettierrc.toml",
+      "prettier.config.js",
+      "prettier.config.cjs",
+      "prettier.config.mjs"
+    )
+    for d in search_dirs:
+      for name in prettier_names:
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return ("prettier", target)
+      target = os.path.join(d, "package.json")
+      if os.path.isfile(target):
+        try:
+          with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            if '"prettier"' in f.read():
+              return ("prettier", target)
+        except Exception:
+          pass
+
+  elif ext in (".rs", ".rlib"):
+    for d in search_dirs:
+      for name in ("rustfmt.toml", ".rustfmt.toml"):
+        target = os.path.join(d, name)
+        if os.path.isfile(target):
+          return ("rustfmt", target)
+
+  return (None, None)
+
+
 def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_path: str = None) -> str:
   """Automatically format a source code file using the appropriate formatter."""
   try:
@@ -842,6 +1078,8 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
 
     # 2. Determine which formatter to use
     chosen_formatter = None
+    search_dirs = _get_format_search_dirs(sandbox_dir, safe_p)
+
     if formatter:
       formatter_lower = formatter.lower()
       if not shutil.which(formatter_lower):
@@ -851,41 +1089,55 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
           return f"Error: Formatter '{formatter}' is not installed or not found in system path."
       else:
         chosen_formatter = formatter_lower
+
+      if not config_abs_path:
+        config_abs_path = _detect_config_for_formatter(chosen_formatter, search_dirs)
+
     else:
-      # Auto-select based on file extension
-      if ext == ".py":
-        for tool in ["black", "ruff", "yapf", "autopep8"]:
-          if shutil.which(tool):
-            chosen_formatter = tool
-            break
-        if not chosen_formatter:
-          return "Error: No Python formatter found (black, ruff, yapf, or autopep8)."
-      elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java", ".sv", ".svh", ".v"):
-        if shutil.which("clang-format"):
-          chosen_formatter = "clang-format"
-        else:
-          return "Error: clang-format is not installed on the system."
-      elif ext == ".go":
-        if shutil.which("gofmt"):
-          chosen_formatter = "gofmt"
-        else:
-          return "Error: gofmt is not installed on the system."
-      elif ext in (".rs", ".rlib"):
-        if shutil.which("rustfmt"):
-          chosen_formatter = "rustfmt"
-        else:
-          return "Error: rustfmt is not installed on the system."
-      elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md", ".json", ".yaml", ".yml"):
-        if shutil.which("prettier"):
-          chosen_formatter = "prettier"
-        elif ext == ".json":
-          chosen_formatter = "built-in-json"
-        elif ext in (".yaml", ".yml"):
-          chosen_formatter = "built-in-yaml"
-        else:
-          return "Error: prettier is not installed on the system."
+      # Auto-detect formatter and configuration file from repository configs
+      detected_formatter, detected_config = _detect_formatter_and_config(ext, search_dirs)
+      if detected_formatter:
+        if not shutil.which(detected_formatter):
+          rel_cfg = os.path.relpath(detected_config, sandbox_dir) if detected_config else "repo config"
+          return f"Error: Formatter '{detected_formatter}' detected from configuration file '{rel_cfg}' is not installed on the system."
+        chosen_formatter = detected_formatter
+        if not config_abs_path:
+          config_abs_path = detected_config
       else:
-        return f"Error: No formatter configured for files with extension '{ext}'."
+        # Fall back to auto-select based on file extension
+        if ext == ".py":
+          for tool in ["black", "ruff", "yapf", "autopep8"]:
+            if shutil.which(tool):
+              chosen_formatter = tool
+              break
+          if not chosen_formatter:
+            return "Error: No Python formatter found (black, ruff, yapf, or autopep8)."
+        elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java", ".sv", ".svh", ".v"):
+          if shutil.which("clang-format"):
+            chosen_formatter = "clang-format"
+          else:
+            return "Error: clang-format is not installed on the system."
+        elif ext == ".go":
+          if shutil.which("gofmt"):
+            chosen_formatter = "gofmt"
+          else:
+            return "Error: gofmt is not installed on the system."
+        elif ext in (".rs", ".rlib"):
+          if shutil.which("rustfmt"):
+            chosen_formatter = "rustfmt"
+          else:
+            return "Error: rustfmt is not installed on the system."
+        elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md", ".json", ".yaml", ".yml"):
+          if shutil.which("prettier"):
+            chosen_formatter = "prettier"
+          elif ext == ".json":
+            chosen_formatter = "built-in-json"
+          elif ext in (".yaml", ".yml"):
+            chosen_formatter = "built-in-yaml"
+          else:
+            return "Error: prettier is not installed on the system."
+        else:
+          return f"Error: No formatter configured for files with extension '{ext}'."
 
     # 3. Run the chosen formatter command
     formatted_content = None
@@ -985,7 +1237,8 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       return f"File '{rel_path}' is already formatted correctly."
 
     print_diff(rel_path, old_content, formatted_content)
-    return f"Successfully formatted file '{rel_path}' using {formatter_used}."
+    config_info = f" (config: {os.path.relpath(config_abs_path, sandbox_dir)})" if config_abs_path else ""
+    return f"Successfully formatted file '{rel_path}' using {formatter_used}{config_info}."
 
   except Exception as e:
     return f"Error formatting file: {str(e)}"
