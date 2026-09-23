@@ -1377,6 +1377,33 @@ def cmd_discover(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_web_research(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    console.print("[bold red]Error: Please specify a query or topic to research.[/bold red]")
+    console.print("Usage: /research <topic or query>")
+    return True
+  from chatty.discovery import run_web_research
+  briefing = run_web_research(session, arg)
+  if not briefing:
+    console.print("[yellow]Web research agent finished without returning results.[/yellow]")
+    return True
+  from rich.panel import Panel
+  from rich.markdown import Markdown
+  console.print(Panel(Markdown(briefing), title=f"[bold cyan]🌐 Web Research Briefing: {arg}[/bold cyan]", border_style="cyan"))
+
+  session.messages.append({
+    "role": "user",
+    "content": f"[Technical Briefing gathered by Web Research Agent for: '{arg}']:\n\n{briefing}"
+  })
+  session.messages.append({
+    "role": "assistant",
+    "content": f"Understood. I have reviewed the web research briefing for '{arg}'. How would you like to proceed?"
+  })
+  console.print("[bold green]Research briefing loaded into active conversation context.[/bold green]")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -1393,6 +1420,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/discover": cmd_discover,
   "/discovery_model": cmd_discovery_model,
   "/discover_model": cmd_discovery_model,
+  "/research": cmd_web_research,
+  "/web_research": cmd_web_research,
   "/sandbox": cmd_sandbox,
   "/context": cmd_context,
   "/loops": cmd_loops,

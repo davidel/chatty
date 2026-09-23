@@ -1145,7 +1145,7 @@ def run_llm_cycle(self):
         # Execute tool
         token = active_session_var.set(self)
         try:
-          if t_name in ("ask_question", "discover_context", "ask_oracle"):
+          if t_name in ("ask_question", "discover_context", "ask_oracle", "web_research"):
             logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
             t_result = execute_tool(t_name, args_parsed, self)
           else:

@@ -423,11 +423,13 @@ class ChatbotSession:
     self.current_loop = 0
     default_prompt = (
       "You are a helpful assistant with local sandboxed file access and shell execution capabilities.\n"
-      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), copying files/directories (copy_file), moving/renaming files/directories (move_file), deleting files (delete_file), deleting directories (delete_directory), creating directories (make_directory), formatting files (format_file), patching files (patch_file), searching regex patterns (search_grep), inspecting file outline symbols (get_outline), searching symbols globally (find_symbol), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), peeking at background task output (peek_task_output), terminating background processes (kill_process), sleeping (sleep), and asking questions (ask_question).\n"
+      "You have tools for: listing directories (list_dir), locating files (locate_files), checking file info (get_file_info), reading files (read_file), writing files (write_file), copying files/directories (copy_file), moving/renaming files/directories (move_file), deleting files (delete_file), deleting directories (delete_directory), creating directories (make_directory), formatting files (format_file), patching files (patch_file), searching regex patterns (search_grep), inspecting file outline symbols (get_outline), searching symbols globally (find_symbol), scouting repository context (discover_context), performing web research (web_research), fetching web content (fetch_url), executing shell commands (run_command), checking background tasks (check_background_command), peeking at background task output (peek_task_output), terminating background processes (kill_process), sleeping (sleep), and asking questions (ask_question).\n"
       "All paths provided to the tools will resolve relative to the sandbox directory.\n"
       "You are strictly prohibited from writing files outside the sandbox folder.\n"
       "CRITICAL: When creating temporary test scripts, one-off execution snippets, scratchpad notes, or intermediate debug files, you MUST create and store them in the '.chatty/scratch/' directory (relative to the sandbox). Do not litter the workspace or root directories with temporary files or scratch scripts.\n"
       "CRITICAL: When you need to ask the user a question, clarify instructions, confirm decisions, or present a set of choices/options, you MUST use the dedicated 'ask_question' tool instead of asking questions in your conversational text response. This allows the CLI to prompt the user interactively and return their response to you in the tool execution loop.\n"
+      "CRITICAL: When investigating a task, feature request, bug, or codebase architecture, you SHOULD use the dedicated 'discover_context' tool to scout the repository and compile a curated dossier of relevant files and symbols before reading or modifying files.\n"
+      "CRITICAL: When you need to look up external documentation, third-party libraries, API usage, or unfamiliar error messages on the internet, you MUST use the dedicated 'web_research' tool instead of attempting manual trial-and-error. You must only use 'fetch_url' when you already have an exact, explicit web URL to inspect.\n"
       "CRITICAL: You MUST use the dedicated, high-level filesystem tools (like list_dir, read_file, search_grep, locate_files, get_file_info, copy_file, move_file, delete_file, delete_directory, make_directory) instead of running command-line utilities (like grep, find, cat, head, tail, sed, awk, less, more, cp, mv, rm, rmdir, mkdir, ls) inside run_command. Shell execution using run_command is blocked for these actions and will return an error. You must use get_file_info instead of running 'wc' or 'wc -l' inside run_command.\n"
       "CRITICAL: For performing search-and-replace edits (similar to 'sed'), you MUST use 'patch_file'. It takes a 'patch' string containing one or more Aider-style SEARCH/REPLACE blocks (format: <<<<<<< SEARCH\n[exact lines or unique substring to replace]\n=======\n[new replacement]\n>>>>>>> REPLACE), or direct 'search' and 'replace' parameters. The SEARCH block must match a unique sequence of consecutive lines or a unique intra-line substring in the target file. Chaining multiple SEARCH/REPLACE blocks sequentially in a single 'patch' call is supported for editing multiple locations in the same file. It supports a 'dry_run' boolean flag and returns the applied unified diff. Do not include line numbers, file paths, or diff headers inside the blocks.\n"
       "CRITICAL: When you need to reformat source code files or enforce layout/style guidelines (such as indentation, line-splitting, or spacing), you MUST use the dedicated 'format_file' tool instead of manually editing the files using 'patch_file'. 'format_file' automatically respects project-level configuration files (such as .style.yapf, .clang-format, pyproject.toml, .prettierrc), or you can provide the formatter and config_path explicitly.\n"
@@ -869,6 +871,11 @@ class ChatbotSession:
     from chatty.discovery import run_discovery
     return run_discovery(self, task, max_loops=max_loops)
 
+  def run_web_research(self, query: str, max_loops: Optional[int] = None) -> str:
+    """Runs web research using the scout agent."""
+    from chatty.discovery import run_web_research
+    return run_web_research(self, query, max_loops=max_loops)
+
   def tool_run_tests(self, command: str = None) -> str:
     """Run tests in the sandbox, auto-detecting the testing framework if no command is provided."""
     return self.runner.tool_run_tests(command)
@@ -1119,9 +1126,13 @@ class ChatbotSession:
     tools = []
     for t in TOOLS_SCHEMA:
       t_copy = dict(t)
-      if t_copy["function"]["name"] == "ask_oracle" and not has_oracle:
+      t_name = t_copy["function"]["name"]
+      if t_name == "ask_oracle" and not has_oracle:
         continue
-      if t_copy["function"]["name"] == "format_file":
+      if t_name == "search_web":
+        # Hide raw search_web from the main LLM so it delegates to web_research instead
+        continue
+      if t_name == "format_file":
         t_copy["function"] = dict(t_copy["function"])
         t_copy["function"]["description"] = (
           "Format a source code file using the appropriate formatter. Shows a diff of changes. "

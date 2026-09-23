@@ -11,12 +11,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../s
 from chatty.session import ChatbotSession
 from chatty.discovery import (
   DISCOVERY_TOOL_NAMES,
+  REPO_SCOUT_TOOL_NAMES,
+  WEB_RESEARCH_TOOL_NAMES,
   extract_session_context,
   build_discovery_system_prompt,
-  run_discovery
+  build_web_research_system_prompt,
+  run_discovery,
+  run_web_research
 )
-from chatty.tools.registry import handle_discover_context, TOOL_REGISTRY
-from chatty.commands import cmd_discover, cmd_discovery_model
+from chatty.tools.registry import handle_discover_context, handle_web_research, TOOL_REGISTRY
+from chatty.commands import cmd_discover, cmd_discovery_model, cmd_web_research
 from chatty.ui import ChattyCompleter
 from prompt_toolkit.document import Document
 
@@ -264,6 +268,66 @@ class TestDiscoveryAgent(unittest.TestCase):
       if hasattr(renderable, "panels"):
         for p in renderable.panels:
           self.assertNotEqual(p.get("title"), "🔧 Executing Tool")
+
+  def test_web_research_tool_restrictions(self):
+    self.assertIn("search_web", WEB_RESEARCH_TOOL_NAMES)
+    self.assertIn("fetch_url", WEB_RESEARCH_TOOL_NAMES)
+
+    self.assertNotIn("read_file", WEB_RESEARCH_TOOL_NAMES)
+    self.assertNotIn("write_file", WEB_RESEARCH_TOOL_NAMES)
+    self.assertNotIn("run_command", WEB_RESEARCH_TOOL_NAMES)
+    self.assertNotIn("patch_file", WEB_RESEARCH_TOOL_NAMES)
+
+  def test_build_web_research_system_prompt(self):
+    query = "How to configure httpx timeout in Python"
+    prompt = build_web_research_system_prompt(query)
+    self.assertIn("Technical Web Research & Documentation Scout", prompt)
+    self.assertIn(query, prompt)
+    self.assertIn("search_web", prompt)
+    self.assertIn("fetch_url", prompt)
+    self.assertIn("PRESERVE TECHNICAL FIDELITY", prompt)
+    self.assertIn("### Code Examples & API Signatures", prompt)
+    self.assertIn("### References & Sources", prompt)
+
+  def test_web_research_tool_registry(self):
+    self.assertIn("web_research", TOOL_REGISTRY)
+
+    err = handle_web_research({}, self.session)
+    self.assertIn("Missing parameter 'query'", err)
+
+  @patch("chatty.discovery.run_web_research")
+  def test_handle_web_research(self, mock_run):
+    mock_run.return_value = "### Technical Briefing\n- use httpx.Timeout(10.0)"
+    res = handle_web_research({"query": "httpx timeout configuration"}, self.session)
+    self.assertEqual(res, "### Technical Briefing\n- use httpx.Timeout(10.0)")
+    mock_run.assert_called_once_with(self.session, "httpx timeout configuration")
+
+  @patch("chatty.discovery.run_web_research")
+  def test_cmd_web_research(self, mock_run):
+    # Empty query
+    res = cmd_web_research(self.session, "")
+    self.assertTrue(res)
+
+    # Valid query
+    mock_run.return_value = "### Technical Briefing\n- documentation snippet"
+    init_msg_count = len(self.session.messages)
+    res = cmd_web_research(self.session, "pydantic v2 migration")
+    self.assertTrue(res)
+    mock_run.assert_called_once_with(self.session, "pydantic v2 migration")
+
+    # Injected into session messages
+    self.assertEqual(len(self.session.messages), init_msg_count + 2)
+    self.assertEqual(self.session.messages[-2]["role"], "user")
+    self.assertIn("pydantic v2 migration", self.session.messages[-2]["content"])
+    self.assertIn("documentation snippet", self.session.messages[-2]["content"])
+
+  def test_main_llm_tools_filter_search_web(self):
+    tools = self.session.get_tools()
+    tool_names = [t["function"]["name"] for t in tools]
+    self.assertIn("web_research", tool_names)
+    self.assertIn("discover_context", tool_names)
+    self.assertIn("fetch_url", tool_names)
+    self.assertNotIn("search_web", tool_names)
 
 
 if __name__ == "__main__":

@@ -19,13 +19,19 @@ from chatty.ui import optional_live, LiveScreenLayout
 logger = logging.getLogger("chatty")
 console = Console()
 
-DISCOVERY_TOOL_NAMES: Set[str] = {
+REPO_SCOUT_TOOL_NAMES: Set[str] = {
   "read_file",
   "search_grep",
   "locate_files",
   "get_outline",
   "find_symbol",
   "get_file_info",
+  "fetch_url",
+}
+DISCOVERY_TOOL_NAMES: Set[str] = REPO_SCOUT_TOOL_NAMES
+
+WEB_RESEARCH_TOOL_NAMES: Set[str] = {
+  "search_web",
   "fetch_url",
 }
 
@@ -127,29 +133,66 @@ def build_discovery_system_prompt(session: Any, task: str) -> str:
   return prompt
 
 
-def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> str:
-  """Runs the discovery agent loop and returns the discovered context dossier."""
+def build_web_research_system_prompt(query: str) -> str:
+  """Builds the specialized technical web research system prompt."""
+  return (
+    "You are an expert Technical Web Research & Documentation Scout.\n"
+    "Your SOLE MISSION is to investigate online sources, official documentation, issues, and technical articles "
+    "to provide a comprehensive, accurate, and actionable answer to the following technical query, "
+    "without attempting to modify local files.\n\n"
+    f"Query to research:\n{query}\n\n"
+    "CRITICAL CONSTRAINTS & RULES:\n"
+    "1. Use 'search_web' to locate high-quality, authoritative technical sources (official documentation, "
+    "GitHub issues/releases, Stack Overflow, package repositories).\n"
+    "2. Use 'fetch_url' to inspect detailed pages, API specifications, and code samples.\n"
+    "3. PRESERVE TECHNICAL FIDELITY: Maintain exact method names, code snippets, type annotations, "
+    "configuration options, and error messages verbatim. Do not paraphrase code or guess syntax.\n"
+    "4. Note specific library versions, deprecations, breaking changes, and minimum requirements.\n"
+    "5. When you have gathered all necessary information, provide your FINAL RESPONSE as a clean, "
+    "structured Markdown briefing (do NOT call further tools once you provide this):\n\n"
+    "### Summary & Direct Answer\n"
+    "- Clear, direct answer to the query\n\n"
+    "### Code Examples & API Signatures\n"
+    "```language\n"
+    "# Verbatim working code examples or syntax\n"
+    "```\n\n"
+    "### Important Nuances & Edge Cases\n"
+    "- Version compatibility, pitfalls, deprecations, or required flags\n\n"
+    "### References & Sources\n"
+    "- [Source Title](URL): what was verified here\n"
+  )
+
+
+def _run_scout_loop(
+  session: Any,
+  title: str,
+  system_prompt: str,
+  user_prompt: str,
+  allowed_tools: Set[str],
+  max_loops: Optional[int] = None,
+  log_label: str = "Scout agent"
+) -> str:
+  """Shared loop engine for scout agents."""
   discovery_model = session.get_discovery_model()
   loops_limit = max_loops if max_loops is not None else getattr(session.config, "discovery_loops", 50)
 
-  logger.info(f"Starting discovery agent (model={discovery_model}, max_loops={loops_limit}) for task: {task}")
+  logger.info(f"Starting {log_label} (model={discovery_model}, max_loops={loops_limit})")
 
-  # Filter tools for discovery
-  discovery_tools = [
+  # Filter tools for this scout mode
+  scout_tools = [
     t for t in TOOLS_SCHEMA
-    if t.get("type") == "function" and t.get("function", {}).get("name") in DISCOVERY_TOOL_NAMES
+    if t.get("type") == "function" and t.get("function", {}).get("name") in allowed_tools
   ]
 
-  system_prompt = build_discovery_system_prompt(session, task)
-  discovery_messages: List[Dict[str, Any]] = [
+  scout_messages: List[Dict[str, Any]] = [
     {"role": "system", "content": system_prompt},
-    {"role": "user", "content": f"Investigate the codebase and assemble the reconnaissance dossier for this task:\n{task}"}
+    {"role": "user", "content": user_prompt}
   ]
 
   final_dossier = ""
   panels = [{
-    "title": "🔍 Discovery Agent",
-    "content": f"Starting reconnaissance with [bold cyan]{discovery_model}[/bold cyan]...",
+    "title": title,
+    "content": f"Starting {log_label.lower()} with [bold cyan]{discovery_model}[/bold cyan]...",
     "border_style": "cyan"
   }]
 
@@ -161,8 +204,8 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
 
     kwargs: Dict[str, Any] = {
       "model": actual_model,
-      "messages": discovery_messages,
-      "tools": discovery_tools,
+      "messages": scout_messages,
+      "tools": scout_tools,
       "stream": True,
     }
     if extra_body:
@@ -173,7 +216,7 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
     usage_metadata = None
     api_succeeded = False
 
-    panels[0]["content"] = f"Reconnaissance step [bold yellow]{loop_idx + 1}/{loops_limit}[/bold yellow] (model: {discovery_model})..."
+    panels[0]["content"] = f"Investigation step [bold yellow]{loop_idx + 1}/{loops_limit}[/bold yellow] (model: {discovery_model})..."
 
     for attempt in range(1, max_retries + 1):
       try:
@@ -215,14 +258,14 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
           api_succeeded = True
           break
       except Exception as e:
-        logger.warning(f"Discovery API attempt {attempt} failed: {e}")
+        logger.warning(f"{log_label} API attempt {attempt} failed: {e}")
         if attempt < max_retries:
           time.sleep(2 ** attempt)
         else:
-          logger.exception("Discovery agent API call failed permanently.")
+          logger.exception(f"{log_label} API call failed permanently.")
           if not session.headless:
-            console.print(f"[bold red]Error in discovery agent:[/bold red] {e}")
-          return final_dossier or f"Error: Discovery agent encountered an error: {e}"
+            console.print(f"[bold red]Error in {log_label}:[/bold red] {e}")
+          return final_dossier or f"Error: {log_label} encountered an error: {e}"
 
     if not api_succeeded:
       break
@@ -231,7 +274,7 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
     p_tok = getattr(usage_metadata, "prompt_tokens", None) if usage_metadata else None
     c_tok = getattr(usage_metadata, "completion_tokens", None) if usage_metadata else None
     if p_tok is None:
-      p_tok = session._calculate_tokens_for_messages(discovery_messages)
+      p_tok = session._calculate_tokens_for_messages(scout_messages)
     if c_tok is None:
       c_tok = session.count_tokens_estimate(content_accumulated)
 
@@ -258,7 +301,7 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
       "content": content_accumulated or None,
       "tool_calls": tool_calls_accumulated
     }
-    discovery_messages.append(assistant_msg)
+    scout_messages.append(assistant_msg)
 
     # Execute tools
     for tc in tool_calls_accumulated:
@@ -276,22 +319,22 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
         except Exception as e:
           args_parsed = {}
 
-      if t_name not in DISCOVERY_TOOL_NAMES:
+      if t_name not in allowed_tools:
         t_result = (
-          f"Error: Tool '{t_name}' is not permitted in discovery mode. "
-          f"You only have read-only inspection tools: {', '.join(sorted(DISCOVERY_TOOL_NAMES))}."
+          f"Error: Tool '{t_name}' is not permitted in this scout mode. "
+          f"You only have access to: {', '.join(sorted(allowed_tools))}."
         )
       else:
         token = active_session_var.set(session)
         try:
-          logger.info(f"Discovery tool execution: {t_name} with {args_parsed}")
+          logger.info(f"{log_label} tool execution: {t_name} with {args_parsed}")
           t_result = execute_tool(t_name, args_parsed, session)
         except Exception as e:
           t_result = f"Error executing {t_name}: {str(e)}"
         finally:
           active_session_var.reset(token)
 
-      discovery_messages.append({
+      scout_messages.append({
         "role": "tool",
         "tool_call_id": tc["id"],
         "name": t_name,
@@ -302,13 +345,13 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
   if not final_dossier:
     try:
       actual_model, extra_body = session._resolve_model_and_provider(discovery_model)
-      discovery_messages.append({
+      scout_messages.append({
         "role": "user",
-        "content": "Reconnaissance turn limit reached. Please synthesize all gathered context into the final Markdown dossier now."
+        "content": "Investigation turn limit reached. Please synthesize all gathered context and information into the final Markdown briefing now."
       })
       kwargs = {
         "model": actual_model,
-        "messages": discovery_messages,
+        "messages": scout_messages,
         "stream": False,
       }
       if extra_body:
@@ -317,6 +360,36 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
       if resp.choices and resp.choices[0].message:
         final_dossier = resp.choices[0].message.content or ""
     except Exception as e:
-      logger.warning(f"Error requesting discovery synthesis: {e}")
+      logger.warning(f"Error requesting {log_label} synthesis: {e}")
 
   return final_dossier
+
+
+def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> str:
+  """Runs codebase reconnaissance using the discovery agent."""
+  system_prompt = build_discovery_system_prompt(session, task)
+  user_prompt = f"Investigate the codebase and assemble the reconnaissance dossier for this task:\n{task}"
+  return _run_scout_loop(
+    session=session,
+    title="🔍 Discovery Agent",
+    system_prompt=system_prompt,
+    user_prompt=user_prompt,
+    allowed_tools=REPO_SCOUT_TOOL_NAMES,
+    max_loops=max_loops,
+    log_label="Discovery agent",
+  )
+
+
+def run_web_research(session: Any, query: str, max_loops: Optional[int] = None) -> str:
+  """Runs web research using the scout agent."""
+  system_prompt = build_web_research_system_prompt(query)
+  user_prompt = f"Research the web and compile a comprehensive technical briefing for this query:\n{query}"
+  return _run_scout_loop(
+    session=session,
+    title="🌐 Web Research Agent",
+    system_prompt=system_prompt,
+    user_prompt=user_prompt,
+    allowed_tools=WEB_RESEARCH_TOOL_NAMES,
+    max_loops=max_loops,
+    log_label="Web research agent",
+  )

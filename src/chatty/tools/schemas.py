@@ -607,6 +607,23 @@ TOOLS_SCHEMA = [
   {
     "type": "function",
     "function": {
+      "name": "web_research",
+      "description": "Delegate external technical research and documentation investigation to an autonomous web scout agent. The agent executes web searches, reads documentation pages, and synthesizes a comprehensive briefing with verified verbatim code examples, API signatures, and citations without cluttering the main conversation history.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The specific technical topic, library documentation, API usage, error message, or technology question to research online."
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "list_file_backups",
       "description": "List all available timestamped backups for a given file path. Backups are created automatically on every file write/patch/delete operation.",
       "parameters": {

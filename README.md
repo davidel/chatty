@@ -151,6 +151,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/oracle` | `[name]` | View active oracle model name or switch to another oracle model by name. |
 | `/discover` | `<task>` | Run discovery agent to scout codebase context for a given task. |
 | `/discovery_model` / `/discover_model` | `[name]` | View or switch the model used for discovery agent. |
+| `/research` / `/web_research` | `<query>` | Run web scout agent to research technical documentation, issues, or APIs online. |
 | `/sandbox` | `[path]` | View sandbox path or change it. Instantly loads any skills found in the new sandbox. |
 | `/whitelist` / `/permissions` | `[add <path> [ro\|rw] \| remove <path> \| clear]` | View or manage whitelisted out-of-sandbox paths. |
 | `/skill` | `[NAME...\|clear]` | Load on-demand skill(s) or clear explicitly loaded ones. |
@@ -200,15 +201,28 @@ The `/models search` command supports combining multiple conditions (all AND-ed 
 - **Text Keywords**: Model name/ID keywords (e.g. `qwen`, `coder`, `llama`).
 - **Flexible Syntax**: Supports spaces around comparison operators (e.g. `cost < 0.1 context >= 1M`), optional commas, and chained conditions.
 
-### Codebase Discovery Agent
+### Autonomous Scout Agents (Codebase Discovery & Web Research)
 
-Chatty features an integrated **Discovery Agent** (scout) that explores the workspace using read-only tools to gather precise context, target files, exact line ranges, and architectural dependencies before implementation begins:
+Chatty features an integrated **Scout Agent Engine** powered by a secondary, fast model (`--discovery-model`) that runs multi-turn investigation loops in an isolated, ephemeral context. This prevents exploratory tool calls, voluminous file dumps, and raw web pages from littering the main conversation history:
 
-- **Interactive Command**: Use `/discover <task>` to run reconnaissance interactively. The resulting dossier is rendered in the terminal and injected directly into conversational memory for the next turn.
-- **Autonomous LLM Tool**: The primary LLM can invoke the `discover_context(task)` tool whenever it needs to explore the repository.
+#### 1. Codebase Discovery Scout (`discover_context` / `/discover`)
+Explores the workspace using read-only tools to gather precise context, target files, exact line ranges, symbol definitions, and architectural dependencies before code modifications begin:
+- **Interactive Command**: Use `/discover <task>` to run reconnaissance interactively. The resulting dossier is rendered in the terminal and injected directly into conversational memory.
+- **Autonomous LLM Tool**: The primary LLM can invoke `discover_context(task)` whenever it needs to survey the repository.
+- **Code Intel & Repo Map**: Injects the active Tree-Sitter / PageRank repo map and recent file history into the scout prompt.
+- **Strict Tool Whitelist**: Restricted strictly to inspection tools (`read_file`, `search_grep`, `locate_files`, `get_outline`, `find_symbol`, `get_file_info`, `fetch_url`). All write and execution tools are blocked.
+
+#### 2. Web Research Scout (`web_research` / `/research`)
+Autonomously searches the web, inspects documentation pages and GitHub issues, and extracts verified answers without bloating the main model's context window:
+- **Interactive Command**: Use `/research <query>` (or `/web_research <query>`) to investigate documentation or error messages interactively.
+- **Autonomous LLM Tool**: The primary LLM invokes `web_research(query)` instead of performing manual search/scraping iterations.
+- **Technical Fidelity**: Enforces verbatim preservation of code snippets, exact type signatures, and library versions, along with source citations.
+- **Strict Tool Whitelist**: Restricted to internet search and URL fetching tools (`search_web`, `fetch_url`).
+
+#### Scout Configuration & Model Tiering
 - **Configurable Scout Model**: Switch models anytime using `/discovery_model <model>` (with full Tab completion) or `--discovery-model <model>`.
-- **Intelligent Provider Defaults**: Automatically selects a fast, low-cost coding model on OpenRouter (filtered dynamically by cost bounds, tool support, and popularity) or a local coder model on Ollama, ensuring exploration does not burn expensive primary model tokens.
-- **Strict Read-Only Enforcement**: The scout agent is restricted strictly to inspection tools (`read_file`, `search_grep`, `locate_files`, `get_outline`, `find_symbol`, `get_file_info`, `fetch_url`). All writes, patches, deletions, and shell command executions are completely blocked.
+- **Intelligent Provider Defaults**: Automatically selects a fast, low-cost coding model on OpenRouter (dynamically filtered by cost bounds and popularity) or a local model on Ollama, ensuring exploration does not burn expensive primary model tokens.
+- **Configurable Turns**: Control maximum investigation iterations via `--discovery-loops <N>` (default: 50).
 
 ---
 
@@ -221,7 +235,7 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`read_file`**: Reads text files. Accepts optional `start_line` and `end_line` parameters (1-indexed), supports displaying line numbers, and honors `--max-read-chars`.
 - **`write_file`**: Writes full text contents to a file.
 - **`patch_file`**: Replaces one or more unique blocks of code inside a file using Aider-style SEARCH/REPLACE blocks (or direct `search`/`replace` parameters). Highly robust to whitespace and indentation differences (automatically adjusts output indentation to match the file). Supports unique sub-line (intra-line) replacements, chaining multiple blocks sequentially in one patch parameter, detailed mismatch diagnostics, a `dry_run` simulation mode, and returns applied unified diffs.
-- **`format_file`**: Styles source files using formatters: `black`/`ruff` for Python, `clang-format` for C/C++, `prettier` for frontend, or custom JSON/YAML encoders. Displays diff results.
+- **`format_file`**: Styles source files using appropriate project formatters (`black`/`ruff`/`yapf` for Python, `clang-format` for C/C++, `prettier` for web). Automatically detects repo configuration files (`.style.yapf`, `.clang-format`, `pyproject.toml`, `.prettierrc`) and discovered installed system formatters, or accepts custom formatter rules. Displays diff results.
 - **`move_file`**: Renames or moves files and directories safely inside the sandbox boundaries.
 - **`copy_file`**: Recursively copies file system structures.
 - **`delete_file`**: Permanently removes a file. Fails on directories.
@@ -231,6 +245,9 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`hex_dump`**: Performs a hex dump or parses slices of binary files into integers of various widths (8/16/32/64-bit), endianness, and signedness.
 - **`list_file_backups`**: Lists all available timestamped backups for a file path.
 - **`read_file_backup`**: Reads the contents of a specific timestamped file backup (with optional range read and line numbering).
+
+### Scratchpad & Workspace Cleanliness (`.chatty/scratch/`)
+Chatty instructs the agent to store all temporary test scripts, one-off execution snippets, scratchpad notes, and intermediate debug files inside `.chatty/scratch/` (relative to the sandbox root) to prevent workspace clutter and avoid polluting `git status`. When exiting Chatty, if any files exist in `.chatty/scratch/`, the CLI interactively prompts whether you want to clean them up or preserve them.
 
 
 ### Code Search & Diagnostics
@@ -242,14 +259,15 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`run_tests`**: Runs test scripts (`pytest`, `npm test`, custom targets).
 
 ### Web & Information Retrieval
-- **`search_web`**: Searches the web for a query and returns titles, URLs, and snippets. Supports multiple backends via environment variables (checked in priority order):
+- **`web_research`**: Primary web tool for the LLM. Delegates technical documentation research, API exploration, and troubleshooting to the autonomous web scout agent. The scout issues iterative queries, fetches and parses web pages, and synthesizes a concise technical briefing with verbatim code snippets and citations without cluttering the main conversation history.
+- **`fetch_url`**: Directly fetches the text content of an explicit public URL. Automatically parses both HTML (converting it to clean plain text) and PDF documents. For scanned PDFs (which lack a text layer), it features an optional zero-overhead OCR fallback utilizing `pytesseract` and `pdf2image` dynamically if available on the host system.
+- **`search_web`**: Search backend used by the web research scout (supporting multiple providers via environment variables in priority order):
   - **Tavily**: Set `TAVILY_API_KEY` (highly recommended for clean, parsed AI search results).
   - **Brave Search**: Set `BRAVE_API_KEY` (independent, privacy-focused search).
   - **Google Custom Search**: Set `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` (legacy Google search engine).
   - **Serper**: Set `SERPER_API_KEY` (Google search proxy).
   - **SerpApi**: Set `SERPAPI_API_KEY` (Google search proxy).
   - **Yahoo Scraper**: Default fallback if no keys are provided (unreliable for heavy use).
-- **`fetch_url`**: Fetches the text content of a public URL. Automatically parses both HTML (converting it to clean plain text) and PDF documents. For scanned PDFs (which lack a text layer), it features an optional zero-overhead OCR fallback utilizing `pytesseract` and `pdf2image` dynamically if available on the host system.
 
 ### Command & Background Execution
 - **`run_command`**: Runs shell commands from the sandbox directory.

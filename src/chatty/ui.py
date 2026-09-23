@@ -239,6 +239,7 @@ def show_help(session: Any):
     ("/oracle [name]", "View or switch the oracle model used for suggestions"),
     ("/discover <task>", "Run discovery agent to scout codebase context for a task"),
     ("/discovery_model [name] / /discover_model", "View or switch the model used for discovery"),
+    ("/research <query> / /web_research", "Run web scout agent to research online documentation or issues"),
     ("/sandbox [path]", "View or change the sandbox directory path"),
     ("/context [tokens]", "View or modify the history token limit"),
     ("/loops [iterations]", "View or modify the max sequential tool loops limit"),
