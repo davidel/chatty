@@ -22,11 +22,10 @@ from chatty.tools import (
 class TestSandboxOps(unittest.TestCase):
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   def test_make_directory(self):
     # Test simple creation

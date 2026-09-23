@@ -21,13 +21,12 @@ from chatty.utils import (
 from chatty.session import ChatbotSession
 
 class TestCutoffs(unittest.TestCase):
-    def setUp(self):
-        self.old_cwd = os.getcwd()
-        self.sandbox_dir = tempfile.mkdtemp()
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
 
-    def tearDown(self):
-        os.chdir(self.old_cwd)
-        shutil.rmtree(self.sandbox_dir)
+  def tearDown(self):
+    os.chdir(self.old_cwd)
 
     def test_truncate_output(self):
         text = "abcdefghij"
@@ -265,6 +264,14 @@ class TestCutoffs(unittest.TestCase):
 
 
 class TestReasoningAccumulation(unittest.TestCase):
+
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
+
   def test_reasoning_accumulation(self):
     import unittest.mock as mock
     from chatty.session import ChatbotSession
@@ -273,7 +280,7 @@ class TestReasoningAccumulation(unittest.TestCase):
       provider="openrouter",
       model="google/gemini-2.5-flash",
       context_size=10000,
-      sandbox="/tmp"
+      sandbox=self.sandbox_dir
     )
 
     class MockDelta:
@@ -316,7 +323,7 @@ class TestReasoningAccumulation(unittest.TestCase):
       provider="ollama",
       model="qwen2.5-coder:7b",
       context_size=10000,
-      sandbox="/tmp"
+      sandbox=self.sandbox_dir
     )
 
     class MockDelta:
@@ -368,7 +375,7 @@ class TestReasoningAccumulation(unittest.TestCase):
       provider="openrouter",
       model="gpt-luna-pro",
       context_size=10000,
-      sandbox="/tmp"
+      sandbox=self.sandbox_dir
     )
 
     class MockDelta:
@@ -420,7 +427,7 @@ class TestReasoningAccumulation(unittest.TestCase):
       provider="openrouter",
       model="google/gemini-2.5-flash",
       context_size=10000,
-      sandbox="/tmp"
+      sandbox=self.sandbox_dir
     )
 
     class MockUsage:
@@ -467,7 +474,7 @@ class TestReasoningAccumulation(unittest.TestCase):
       provider="ollama",
       model="qwen2.5-coder:7b",
       context_size=10000,
-      sandbox="/tmp"
+      sandbox=self.sandbox_dir
     )
 
     class MockDelta:
@@ -554,11 +561,10 @@ class TestReasoningAccumulation(unittest.TestCase):
 class TestToolResultJsonWrapping(unittest.TestCase):
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   def test_tool_result_json_wrapping(self):
     import unittest.mock as mock
@@ -638,6 +644,13 @@ class TestToolResultJsonWrapping(unittest.TestCase):
 
 class TestAutoContinuation(unittest.TestCase):
 
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
+
   def test_auto_continuation_on_length_limit(self):
     import unittest.mock as mock
     from chatty.session import ChatbotSession
@@ -646,7 +659,7 @@ class TestAutoContinuation(unittest.TestCase):
       provider="openrouter",
       model="google/gemini-2.5-flash",
       context_size=10000,
-      sandbox="/tmp"
+      sandbox=self.sandbox_dir
     )
 
     class MockDelta:
@@ -688,11 +701,10 @@ class TestUrlCaching(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   @unittest.mock.patch('requests.get')
   def test_tool_fetch_url_caching(self, mock_get):

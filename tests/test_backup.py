@@ -21,10 +21,7 @@ from chatty.backup import list_backups, restore_backup
 class TestBackupAndRestore(unittest.TestCase):
 
   def setUp(self):
-    self.sandbox_dir = tempfile.mkdtemp()
-
-  def tearDown(self):
-    shutil.rmtree(self.sandbox_dir)
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
 
   def test_write_and_patch_creates_backups(self):
     # 1. Write initial file (should not create backup as file did not exist yet)

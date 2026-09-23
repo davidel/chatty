@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import tempfile
 import unittest
 import sys
 
@@ -71,6 +72,13 @@ class TestGlogFormatter(unittest.TestCase):
 
 class TestLLMConversationLogging(unittest.TestCase):
 
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
+
   def test_debug_logging_enabled(self):
     import io
     from unittest.mock import Mock
@@ -91,7 +99,7 @@ class TestLLMConversationLogging(unittest.TestCase):
         provider="openrouter",
         model="google/gemini-2.5-flash",
         context_size=10000,
-        sandbox="/tmp",
+        sandbox=self.sandbox_dir,
         api_key="sk-or-v1-secretapikeyhere"
       )
       
@@ -181,7 +189,7 @@ class TestLLMConversationLogging(unittest.TestCase):
         provider="openrouter",
         model="google/gemini-2.5-flash",
         context_size=10000,
-        sandbox="/tmp"
+        sandbox=self.sandbox_dir
       )
       session.client = Mock()
       session.client.default_headers = {}

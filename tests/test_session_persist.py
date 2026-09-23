@@ -15,13 +15,11 @@ class TestSessionPersist(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
-    self.save_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
+    self.save_dir = self.enterContext(tempfile.TemporaryDirectory())
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
-    shutil.rmtree(self.save_dir)
 
   def test_save_and_load_session(self):
     session = ChatbotSession(

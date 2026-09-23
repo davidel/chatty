@@ -17,7 +17,7 @@ class TestThinkingLoops(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.session = ChatbotSession(
       provider="ollama",
       model="test-model",
@@ -34,7 +34,6 @@ class TestThinkingLoops(unittest.TestCase):
   def tearDown(self):
     self.isatty_patcher.stop()
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   @patch("chatty.session.openai.OpenAI")
   def test_thinking_loop_aborts_and_retries_with_nudge(self, mock_openai):

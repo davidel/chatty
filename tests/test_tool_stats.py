@@ -12,19 +12,18 @@ from chatty.session import ChatbotSession
 from chatty.tools import execute_tool
 
 class TestToolStats(unittest.TestCase):
-    def setUp(self):
-        self.old_cwd = os.getcwd()
-        self.sandbox_dir = tempfile.mkdtemp()
-        self.session = ChatbotSession(
-            provider="ollama",
-            model="mock-model",
-            context_size=10000,
-            sandbox=self.sandbox_dir
-        )
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
+    self.session = ChatbotSession(
+      provider="ollama",
+      model="mock-model",
+      context_size=10000,
+      sandbox=self.sandbox_dir
+    )
 
-    def tearDown(self):
-        os.chdir(self.old_cwd)
-        shutil.rmtree(self.sandbox_dir)
+  def tearDown(self):
+    os.chdir(self.old_cwd)
 
     def test_initial_stats(self):
         # Stats should be empty initially

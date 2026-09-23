@@ -12,10 +12,7 @@ from chatty.tools import tool_format_file
 
 class TestFormatFile(unittest.TestCase):
   def setUp(self):
-    self.sandbox_dir = tempfile.mkdtemp()
-
-  def tearDown(self):
-    shutil.rmtree(self.sandbox_dir)
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
 
   def test_format_json(self):
     # Create unformatted JSON

@@ -17,10 +17,7 @@ from chatty.tools.web_ops import tool_search_web
 class TestToolsModularity(unittest.TestCase):
 
   def setUp(self):
-    self.sandbox_dir = tempfile.mkdtemp()
-
-  def tearDown(self):
-    shutil.rmtree(self.sandbox_dir)
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
 
   def test_schema_validity(self):
     self.assertTrue(len(TOOLS_SCHEMA) > 0)

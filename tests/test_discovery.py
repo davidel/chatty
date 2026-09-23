@@ -29,7 +29,7 @@ class TestDiscoveryAgent(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.session = ChatbotSession(
       provider="ollama",
       model="test-model",
@@ -41,7 +41,6 @@ class TestDiscoveryAgent(unittest.TestCase):
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   def test_discovery_tool_restrictions(self):
     # Only read-only tools should be allowed

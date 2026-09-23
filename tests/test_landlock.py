@@ -13,10 +13,11 @@ from chatty.landlock import compile_landlock_binary, wrap_command_with_landlock
 class TestLandlock(unittest.TestCase):
 
   def setUp(self):
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
 
   def tearDown(self):
-    shutil.rmtree(self.sandbox_dir)
+    os.chdir(self.old_cwd)
 
   def test_compile_binary(self):
     if sys.platform != "linux":

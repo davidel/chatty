@@ -12,7 +12,7 @@ from chatty.session import ChatbotSession
 class TestCommandSafety(unittest.TestCase):
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.session = ChatbotSession(
       provider="ollama",
       model="mock-model",
@@ -23,7 +23,6 @@ class TestCommandSafety(unittest.TestCase):
   def tearDown(self):
     self.session.cleanup_background_commands()
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   def test_sandbox_chdir(self):
     self.assertEqual(os.path.realpath(os.getcwd()), os.path.realpath(self.sandbox_dir))
@@ -553,47 +552,47 @@ class TestSafetyModuleAndDelegation(unittest.TestCase):
   def test_chatbot_session_attribute_delegation(self):
     # Test dynamic configuration getter / setter delegation
     old_cwd = os.getcwd()
-    temp_dir = tempfile.mkdtemp()
     try:
-      session = ChatbotSession(
-        provider="openrouter",
-        model="google/gemini-2.5-flash",
-        context_size=4096,
-        sandbox=temp_dir
-      )
-      self.assertEqual(session.provider, "openrouter")
-      self.assertEqual(session.model, "google/gemini-2.5-flash")
-      self.assertEqual(session.context_size, 4096)
-      
-      # Change attributes
-      session.provider = "ollama"
-      session.model = "llama3"
-      session.context_size = 8192
-      
-      # Verify changes propagate to config object
-      self.assertEqual(session.config.provider, "ollama")
-      self.assertEqual(session.config.model, "llama3")
-      self.assertEqual(session.config.context_size, 8192)
-      
-      # Verify changes reflect back on properties
-      self.assertEqual(session.provider, "ollama")
-      self.assertEqual(session.model, "llama3")
-      self.assertEqual(session.context_size, 8192)
+      with tempfile.TemporaryDirectory() as temp_dir:
+        session = ChatbotSession(
+          provider="openrouter",
+          model="google/gemini-2.5-flash",
+          context_size=4096,
+          sandbox=temp_dir
+        )
+        self.assertEqual(session.provider, "openrouter")
+        self.assertEqual(session.model, "google/gemini-2.5-flash")
+        self.assertEqual(session.context_size, 4096)
+        
+        # Change attributes
+        session.provider = "ollama"
+        session.model = "llama3"
+        session.context_size = 8192
+        
+        # Verify changes propagate to config object
+        self.assertEqual(session.config.provider, "ollama")
+        self.assertEqual(session.config.model, "llama3")
+        self.assertEqual(session.config.context_size, 8192)
+        
+        # Verify changes reflect back on properties
+        self.assertEqual(session.provider, "ollama")
+        self.assertEqual(session.model, "llama3")
+        self.assertEqual(session.context_size, 8192)
 
-      # Non-existent attribute lookup
-      with self.assertRaises(AttributeError):
-        _ = session.non_existent_attribute_123
+        # Non-existent attribute lookup
+        with self.assertRaises(AttributeError):
+          _ = session.non_existent_attribute_123
 
+        os.chdir(old_cwd)
     finally:
       os.chdir(old_cwd)
-      shutil.rmtree(temp_dir)
 
 
 class TestPythonScriptSafety(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.session = ChatbotSession(
       provider="ollama",
       model="test-model",
@@ -602,7 +601,6 @@ class TestPythonScriptSafety(unittest.TestCase):
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   def test_ast_signature_generation(self):
     from chatty.safety import get_structural_signature

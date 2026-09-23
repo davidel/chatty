@@ -8,11 +8,8 @@ from chatty.tools.code_intel import SymbolExtractor
 class TestCodeIntel(unittest.TestCase):
 
   def setUp(self):
-    self.temp_dir = tempfile.mkdtemp()
+    self.temp_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.extractor = SymbolExtractor(self.temp_dir)
-
-  def tearDown(self):
-    shutil.rmtree(self.temp_dir)
 
   def test_python_ast_extractor(self):
     code = """

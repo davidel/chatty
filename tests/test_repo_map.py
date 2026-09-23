@@ -17,12 +17,11 @@ class TestRepoMap(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.temp_dir = tempfile.mkdtemp()
+    self.temp_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.repo_map = RepoMap(self.temp_dir, max_tokens=500)
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.temp_dir)
 
   def test_python_tag_extraction(self):
     code = """

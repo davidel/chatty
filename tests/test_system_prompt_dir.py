@@ -14,14 +14,13 @@ class TestSystemPromptDir(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.temp_dir = tempfile.mkdtemp()
+    self.temp_dir = self.enterContext(tempfile.TemporaryDirectory())
     os.chdir(self.temp_dir)
     self.sandbox_dir = os.path.join(self.temp_dir, "sandbox")
     os.makedirs(self.sandbox_dir, exist_ok=True)
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.temp_dir)
 
   def test_system_prompt_appends_from_cwd(self):
     # Create .chatty/system_prompt in the current working directory

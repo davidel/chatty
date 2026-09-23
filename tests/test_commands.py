@@ -16,7 +16,7 @@ class TestCommandsRegistry(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.session = ChatbotSession(
       provider="ollama",
       model="test-model",
@@ -25,7 +25,6 @@ class TestCommandsRegistry(unittest.TestCase):
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   def test_registry_contains_commands(self):
     self.assertIn("/exit", COMMANDS)
@@ -225,7 +224,7 @@ class TestCompressCommand(unittest.TestCase):
 
   def setUp(self):
     self.old_cwd = os.getcwd()
-    self.sandbox_dir = tempfile.mkdtemp()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.session = ChatbotSession(
       provider="ollama",
       model="test-model",
@@ -235,7 +234,6 @@ class TestCompressCommand(unittest.TestCase):
 
   def tearDown(self):
     os.chdir(self.old_cwd)
-    shutil.rmtree(self.sandbox_dir)
 
   def test_compress_basic_and_rolling_window(self):
     import unittest.mock as mock

@@ -16,8 +16,9 @@ from chatty.commands import cmd_whitelist
 class TestWhitelistAndPermissions(unittest.TestCase):
 
   def setUp(self):
-    self.sandbox_dir = tempfile.mkdtemp()
-    self.outside_dir = tempfile.mkdtemp()
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
+    self.outside_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.session = ChatbotSession(
       provider="ollama",
       model="mock-model",
@@ -32,8 +33,7 @@ class TestWhitelistAndPermissions(unittest.TestCase):
     self.session.temp_allowed_rw_paths.clear()
 
   def tearDown(self):
-    shutil.rmtree(self.sandbox_dir)
-    shutil.rmtree(self.outside_dir)
+    os.chdir(self.old_cwd)
 
   def test_inside_sandbox_always_allowed(self):
     # Any path inside the sandbox is allowed by default
