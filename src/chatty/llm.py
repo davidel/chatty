@@ -1154,7 +1154,12 @@ def run_llm_cycle(self):
               "content": Text.from_markup(f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]"),
               "border_style": "yellow"
             }]
-            with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), console=console, enabled=not self.headless, refresh_per_second=12) as live:
+            with optional_live(
+              LiveScreenLayout(panels, self.get_rich_status_bar()),
+              console=console,
+              enabled=not self.headless,
+              auto_refresh=False
+            ) as live:
               self._active_live = live
               try:
                 logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
@@ -1162,7 +1167,7 @@ def run_llm_cycle(self):
               finally:
                 self._active_live = None
               # Remove status bar before exiting Live context
-              live.update(LiveScreenLayout(panels, None))
+              live.update(LiveScreenLayout(panels, None), refresh=True)
         finally:
           active_session_var.reset(token)
           self.temp_allowed_ro_paths.clear()
