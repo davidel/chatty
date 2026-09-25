@@ -170,13 +170,26 @@ def _run_scout_loop(
   user_prompt: str,
   allowed_tools: Set[str],
   max_loops: Optional[int] = None,
-  log_label: str = "Scout agent"
+  log_label: str = "Scout agent",
+  query: str = ""
 ) -> str:
   """Shared loop engine for scout agents."""
   discovery_model = session.get_discovery_model()
   loops_limit = max_loops if max_loops is not None else getattr(session.config, "discovery_loops", 50)
 
   logger.info(f"Starting {log_label} (model={discovery_model}, max_loops={loops_limit})")
+
+  def _format_panel_content(status_text: str) -> Text:
+    if query:
+      trimmed_query = query.strip()
+      if "\n" in trimmed_query:
+        return Text.from_markup(
+          f"[bold]Query:[/bold]\n[yellow]{escape(trimmed_query)}[/yellow]\n\n{status_text}"
+        )
+      return Text.from_markup(
+        f"[bold]Query:[/bold] [yellow]{escape(trimmed_query)}[/yellow]\n\n{status_text}"
+      )
+    return Text.from_markup(status_text)
 
   # Filter tools for this scout mode
   scout_tools = [
@@ -192,7 +205,7 @@ def _run_scout_loop(
   final_dossier = ""
   panels = [{
     "title": title,
-    "content": Text.from_markup(f"Starting {log_label.lower()} with [bold cyan]{escape(discovery_model)}[/bold cyan]..."),
+    "content": _format_panel_content(f"Starting {log_label.lower()} with [bold cyan]{escape(discovery_model)}[/bold cyan]..."),
     "border_style": "cyan"
   }]
 
@@ -216,7 +229,9 @@ def _run_scout_loop(
     usage_metadata = None
     api_succeeded = False
 
-    panels[0]["content"] = Text.from_markup(f"Investigation step [bold yellow]{loop_idx + 1}/{loops_limit}[/bold yellow] (model: {escape(discovery_model)})...")
+    panels[0]["content"] = _format_panel_content(
+      f"Investigation step [bold yellow]{loop_idx + 1}/{loops_limit}[/bold yellow] (model: {escape(discovery_model)})..."
+    )
 
     for attempt in range(1, max_retries + 1):
       try:
@@ -377,6 +392,7 @@ def run_discovery(session: Any, task: str, max_loops: Optional[int] = None) -> s
     allowed_tools=REPO_SCOUT_TOOL_NAMES,
     max_loops=max_loops,
     log_label="Discovery agent",
+    query=task,
   )
 
 
@@ -392,4 +408,5 @@ def run_web_research(session: Any, query: str, max_loops: Optional[int] = None) 
     allowed_tools=WEB_RESEARCH_TOOL_NAMES,
     max_loops=max_loops,
     log_label="Web research agent",
+    query=query,
   )

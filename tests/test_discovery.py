@@ -328,6 +328,64 @@ class TestDiscoveryAgent(unittest.TestCase):
     self.assertIn("fetch_url", tool_names)
     self.assertNotIn("search_web", tool_names)
 
+  @patch("chatty.discovery.optional_live")
+  def test_run_discovery_shows_query_in_panel(self, mock_optional_live):
+    from types import SimpleNamespace
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    mock_chunk = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Done dossier", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+    with patch.object(self.session, "_create_completion", return_value=[mock_chunk]):
+      task_str = "Inspect [user] tokens in auth.py"
+      res = run_discovery(self.session, task_str, max_loops=1)
+      self.assertEqual(res, "Done dossier")
+
+    self.assertTrue(mock_optional_live.called)
+    captured_contents = []
+    for call in mock_optional_live.call_args_list:
+      layout = call.args[0] if call.args else call.kwargs.get("renderable")
+      if hasattr(layout, "panels"):
+        for p in layout.panels:
+          content = p.get("content")
+          text_str = content.plain if hasattr(content, "plain") else str(content)
+          captured_contents.append(text_str)
+
+    self.assertTrue(any("Query: Inspect [user] tokens in auth.py" in c for c in captured_contents))
+    self.assertTrue(any("Investigation step 1/1" in c for c in captured_contents))
+
+  @patch("chatty.discovery.optional_live")
+  def test_run_web_research_shows_query_in_panel(self, mock_optional_live):
+    from types import SimpleNamespace
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    mock_chunk = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Done briefing", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+    with patch.object(self.session, "_create_completion", return_value=[mock_chunk]):
+      query_str = "httpx timeout options\nand retry policy"
+      res = run_web_research(self.session, query_str, max_loops=1)
+      self.assertEqual(res, "Done briefing")
+
+    self.assertTrue(mock_optional_live.called)
+    captured_contents = []
+    for call in mock_optional_live.call_args_list:
+      layout = call.args[0] if call.args else call.kwargs.get("renderable")
+      if hasattr(layout, "panels"):
+        for p in layout.panels:
+          content = p.get("content")
+          text_str = content.plain if hasattr(content, "plain") else str(content)
+          captured_contents.append(text_str)
+
+    self.assertTrue(any("Query:\nhttpx timeout options\nand retry policy" in c for c in captured_contents))
+    self.assertTrue(any("Investigation step 1/1" in c for c in captured_contents))
+
 
 if __name__ == "__main__":
   unittest.main()
