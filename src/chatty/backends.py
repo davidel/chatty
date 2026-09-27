@@ -304,6 +304,19 @@ class DockerBackend(ExecutionBackend):
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
       cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
 
+    try:
+      import getpass
+      username = getpass.getuser()
+    except Exception:
+      username = "chatty"
+
+    user_home = f"/home/{username}"
+    container_path = f"/workspace/.venv/bin:{user_home}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    cmd.extend([
+      "-e", f"HOME={user_home}",
+      "-e", f"PATH={container_path}"
+    ])
+
     mounted_destinations = {self.container_workspace}
 
     for p in self.allowed_ro_paths:

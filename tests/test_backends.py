@@ -79,6 +79,15 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertTrue(backend.is_running)
     self.assertEqual(backend.get_name(), "docker")
 
+    run_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "run"
+    ]
+    self.assertTrue(len(run_calls) > 0)
+    run_cmd = run_calls[0][0][0]
+    self.assertTrue(any(arg.startswith("HOME=") for arg in run_cmd))
+    self.assertTrue(any(arg.startswith("PATH=") and ".local/bin" in arg for arg in run_cmd))
+
     # Verify command execution wrapper
     cmd_args, use_shell, cwd = backend.build_command_args("ls -la", cwd="/tmp/sandbox")
     self.assertFalse(use_shell)

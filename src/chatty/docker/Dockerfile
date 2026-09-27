@@ -31,6 +31,8 @@ RUN if [ "${USER_ID}" -ne 0 ]; then \
     fi && \
     echo "ALL ALL=(ALL:ALL) NOPASSWD: ALL" >> /etc/sudoers
 
+ENV PATH="/workspace/.venv/bin:/home/${USER_NAME}/.local/bin:${PATH}"
+
 USER ${USER_NAME}
 WORKDIR /workspace
 CMD ["sleep", "infinity"]
