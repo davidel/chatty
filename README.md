@@ -72,7 +72,7 @@ python3 -m chatty [options]
 | `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. Ollama: auto-detects first local model (falls back to `qwen2.5-coder:7b`). OpenRouter: dynamically defaults to the most popular free model (falls back to `google/gemini-2.5-flash:free`). Custom: required (no fallback). |
 | `--oracle-model` | *None* | string | *None* | Model identifier to use as the oracle. No default is assumed (the oracle tool is only active if an oracle model is explicitly configured). |
 | `--context-size` | `-c` | integer | `8192` | Target context window length constraint in tokens. |
-| `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. |
+| `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. If neither Docker nor Landlock is available and `--sandbox` is specified, Chatty aborts to prevent un-sandboxed execution unless `--backend none` is passed. |
 | `--skills-path` | `-k` | string | *None* | Custom directory paths to scan for static/dynamic Skills (can be specified multiple times). |
 | `--ondemand-skills-path` | `-o` | string | *None* | Custom directory paths to scan for on-demand Skills (can be specified multiple times). |
 | `--whitelist` | `-w` | string | *None* | Add an out-of-sandbox path to the initial whitelist. Can end with `:ro` or `:rw` to set mode (defaults to `ro`). Can be specified multiple times. |
@@ -101,6 +101,11 @@ python3 -m chatty [options]
 | `--repo-map-tokens` | *None* | integer | `1024` | Target token budget for the repository map. |
 | `--discovery-model` | *None* | string | *Auto-resolved* | Model identifier for the discovery/scout agent (dynamically selects a fast, low-cost coding model on OpenRouter, a local coder model on Ollama, or falls back to the active model). |
 | `--discovery-loops` | *None* | integer | `50` | Maximum tool execution loops allowed for the discovery agent. |
+| `--backend` | `-B` | string | `auto` | Execution backend for shell commands: `auto` (default: Docker if available, else Landlock on Linux, else fails if `--sandbox` specified), `docker` (companion container), `landlock` (Linux Landlock LSM), or `none` (direct host execution). |
+| `--docker-image` | *None* | string | `chatty-sandbox:latest` | Docker image tag to use for the companion container. |
+| `--dockerfile` | *None* | string | *None* | Path to a custom Dockerfile to build and use for the companion container. |
+| `--docker-build` | *None* | flag | `False` | Force building or rebuilding the Docker companion image on startup. |
+| `--docker-host` | *None* | string | *None* | Custom Docker host endpoint (e.g. `tcp://127.0.0.1:2375` or `unix:///run/user/1000/docker.sock`). Overrides `DOCKER_HOST`. |
 
 
 ---
@@ -318,6 +323,16 @@ When the Docker backend is active, Chatty manages the entire lifecycle of an iso
   chatty --docker-host tcp://127.0.0.1:2375
   chatty --docker-host unix:///run/user/1000/docker.sock
   ```
+  > **Tip (Bridging into unprivileged containers or sandboxes with `socat`)**:
+  > If Chatty is running inside an isolated sandbox or container that shares the host network but does not have `/var/run/docker.sock` mounted (such as a Bubblewrap sandbox), you can forward the Docker socket to localhost on the host machine:
+  > ```bash
+  > # Run on host:
+  > socat TCP-LISTEN:2375,bind=127.0.0.1,reuseaddr,fork UNIX-CLIENT:/var/run/docker.sock &
+  > ```
+  > Then connect Chatty from inside the sandbox using:
+  > ```bash
+  > chatty --docker-host tcp://127.0.0.1:2375
+  > ```
 * **Orphan Cleanup**: Companion containers are labeled (`chatty.managed=true`). Chatty automatically stops and removes containers on exit and cleans up any stale containers from previously crashed sessions on startup.
 
 ### 4. Kernel-Level Linux Landlock Sandboxing
