@@ -1404,6 +1404,57 @@ def cmd_web_research(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_docker(session: Any, arg: str) -> bool:
+  if not hasattr(session, "backend") or session.backend.get_name() != "docker":
+    backend_name = session.backend.get_name() if hasattr(session, "backend") else "none"
+    console.print(f"[bold red]Error: Docker companion container is not active in this session (current backend: '{backend_name}').[/bold red]")
+    return True
+
+  backend = session.backend
+  if not getattr(backend, "is_running", False):
+    console.print(f"[bold red]Error: Docker companion container '{backend.container_name}' is not currently running.[/bold red]")
+    return True
+
+  arg = arg.strip()
+  if not arg:
+    console.print(Panel(
+      f"[bold cyan]Container:[/bold cyan] {backend.container_name}\n"
+      f"[bold cyan]Image:[/bold cyan] {backend.image}\n"
+      f"[bold cyan]Status:[/bold cyan] [bold green]Running[/bold green]\n"
+      f"[bold cyan]Workspace:[/bold cyan] {backend.container_workspace} ({backend.host_sandbox})\n"
+      f"[bold cyan]Docker Host:[/bold cyan] {backend.docker_host or 'default (local socket)'}\n\n"
+      f"[dim]Usage: /docker <command> (or /container <command>)[/dim]\n"
+      f"[dim]Example: /docker pytest[/dim]\n"
+      f"[dim]Example: /docker sudo apt update[/dim]\n"
+      f"[dim]Example: /docker bash[/dim]",
+      title="[bold cyan]Docker Companion Container[/bold cyan]",
+      border_style="cyan"
+    ))
+    return True
+
+  import subprocess
+  import sys
+
+  is_tty = sys.stdin.isatty() and sys.stdout.isatty()
+  docker_cmd = [
+    backend.docker_bin, "exec",
+    "-it" if is_tty else "-i",
+    "-w", backend.container_workspace,
+    backend.container_name,
+    "/bin/sh", "-c", arg
+  ]
+  console.print(f"[dim]Running in container '{backend.container_name}': {arg}[/dim]\n")
+  try:
+    res = subprocess.run(docker_cmd, env=backend._get_docker_env())
+    if res.returncode != 0:
+      console.print(f"\n[bold red]Container command exited with code {res.returncode}[/bold red]")
+  except KeyboardInterrupt:
+    console.print("\n[yellow]Command interrupted by user.[/yellow]")
+  except Exception as e:
+    console.print(f"[bold red]Error executing command in container: {e}[/bold red]")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -1451,6 +1502,9 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/save_response": cmd_save_response,
   "/save_reply": cmd_save_response,
   "/show": cmd_show,
+  "/docker": cmd_docker,
+  "/container": cmd_docker,
+  "/dexec": cmd_docker,
 }
 
 

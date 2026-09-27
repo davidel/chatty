@@ -171,7 +171,7 @@ class SessionConfig:
   discovery_model: Optional[str] = None
   discovery_loops: int = 50
   backend: str = "auto"
-  docker_image: str = "chatty-sandbox:latest"
+  docker_image: Optional[str] = None
   dockerfile: Optional[str] = None
   docker_build: bool = False
   docker_host: Optional[str] = None
@@ -403,7 +403,7 @@ class ChatbotSession:
         discovery_model=discovery_model,
         discovery_loops=discovery_loops,
         backend=backend or "auto",
-        docker_image=docker_image or "chatty-sandbox:latest",
+        docker_image=docker_image,
         dockerfile=dockerfile,
         docker_build=docker_build,
         docker_host=docker_host,

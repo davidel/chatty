@@ -127,7 +127,9 @@ class TestDockerBackendUnit(unittest.TestCase):
       if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "build"
     ]
     self.assertTrue(len(build_calls) > 0)
-    self.assertEqual(build_calls[0][0][0][3], "custom-image:v1")
+    build_cmd = build_calls[0][0][0]
+    self.assertEqual(build_cmd[3], "custom-image:v1")
+    self.assertIn("--build-arg", build_cmd)
 
   def test_docker_host_env_handling(self):
     backend = DockerBackend(

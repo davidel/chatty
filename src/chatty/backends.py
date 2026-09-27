@@ -18,6 +18,18 @@ def get_default_dockerfile_path() -> str:
   return os.path.join(current_dir, "docker", "Dockerfile")
 
 
+def get_default_image_tag() -> str:
+  try:
+    import getpass
+    username = getpass.getuser().lower()
+    safe_user = "".join(c for c in username if c.isalnum() or c in ("_", "-", "."))
+    if safe_user:
+      return f"chatty-sandbox:{safe_user}"
+  except Exception:
+    pass
+  return "chatty-sandbox:latest"
+
+
 def is_docker_available(docker_bin: str = "docker", docker_host: Optional[str] = None) -> bool:
   if not shutil.which(docker_bin):
     return False
@@ -128,7 +140,7 @@ class DockerBackend(ExecutionBackend):
     self,
     session_id: str,
     host_sandbox: str,
-    image: str = "chatty-sandbox:latest",
+    image: Optional[str] = None,
     dockerfile: Optional[str] = None,
     build_image: bool = False,
     allowed_ro_paths: Optional[List[str]] = None,
@@ -140,7 +152,7 @@ class DockerBackend(ExecutionBackend):
   ):
     self.session_id = session_id
     self.host_sandbox = os.path.abspath(host_sandbox)
-    self.image = image
+    self.image = image or get_default_image_tag()
     self.dockerfile = dockerfile
     self.build_image = build_image
     self.allowed_ro_paths = allowed_ro_paths or []
@@ -188,7 +200,7 @@ class DockerBackend(ExecutionBackend):
       self.build_companion_image(dockerfile=self.dockerfile, tag=self.image)
     else:
       if not self._image_exists(self.image):
-        if self.image == "chatty-sandbox:latest":
+        if self.image.startswith("chatty-sandbox"):
           self._notify(f"Default image '{self.image}' not found. Building companion image (this may take a minute on first run)...")
           self.build_companion_image(dockerfile=get_default_dockerfile_path(), tag=self.image)
         else:
@@ -224,9 +236,20 @@ class DockerBackend(ExecutionBackend):
       raise FileNotFoundError(f"Dockerfile not found at '{df_path}'")
     context_dir = os.path.dirname(os.path.abspath(df_path))
     logger.info(f"Building Docker image '{target_tag}' using Dockerfile '{df_path}'...")
+    uid = str(os.getuid()) if hasattr(os, "getuid") else "1000"
+    gid = str(os.getgid()) if hasattr(os, "getgid") else "1000"
+    try:
+      import getpass
+      username = getpass.getuser()
+    except Exception:
+      username = "chatty"
+
     cmd = [
       self.docker_bin, "build",
       "-t", target_tag,
+      "--build-arg", f"USER_ID={uid}",
+      "--build-arg", f"GROUP_ID={gid}",
+      "--build-arg", f"USER_NAME={username}",
       "-f", df_path,
       context_dir
     ]

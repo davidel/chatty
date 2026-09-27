@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../s
 from chatty.session import ChatbotSession
 from chatty.commands import COMMANDS, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress, cmd_skill, filter_models
 from chatty.utils import repair_json
+from rich.panel import Panel
 
 
 class TestCommandsRegistry(unittest.TestCase):
@@ -705,6 +706,55 @@ class TestCompressCommand(unittest.TestCase):
       self.assertTrue(res)
       panels_rendered = [args[0] for args, kwargs in mock_print.call_args_list if len(args) > 0 and isinstance(args[0], Panel)]
       self.assertTrue(any(p.title == "🧠 Thinking Process" and p.renderable == "thought process" for p in panels_rendered))
+
+
+class TestDockerCommand(unittest.TestCase):
+
+  def test_docker_command_when_backend_not_docker(self):
+    from unittest.mock import MagicMock, patch
+    session = MagicMock()
+    session.backend.get_name.return_value = "local"
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/docker"](session, "pytest")
+      self.assertTrue(res)
+      self.assertTrue(any("not active in this session" in str(arg) for arg in mock_print.call_args[0]))
+
+  def test_docker_command_status_when_no_arg(self):
+    from unittest.mock import MagicMock, patch
+    session = MagicMock()
+    session.backend.get_name.return_value = "docker"
+    session.backend.is_running = True
+    session.backend.container_name = "chatty-test"
+    session.backend.image = "chatty-sandbox:test"
+    session.backend.container_workspace = "/workspace"
+    session.backend.host_sandbox = "/tmp/sandbox"
+    session.backend.docker_host = None
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/docker"](session, "")
+      self.assertTrue(res)
+      self.assertTrue(any(isinstance(arg, Panel) for arg in mock_print.call_args[0]))
+
+  def test_docker_command_exec(self):
+    from unittest.mock import MagicMock, patch
+    with patch("subprocess.run") as mock_run:
+      mock_run.return_value = MagicMock(returncode=0)
+      session = MagicMock()
+      session.backend.get_name.return_value = "docker"
+      session.backend.is_running = True
+      session.backend.container_name = "chatty-test"
+      session.backend.image = "chatty-sandbox:test"
+      session.backend.container_workspace = "/workspace"
+      session.backend.docker_bin = "docker"
+      session.backend._get_docker_env.return_value = {"DOCKER_HOST": "tcp://test"}
+
+      res = COMMANDS["/docker"](session, "pytest tests/")
+      self.assertTrue(res)
+      mock_run.assert_called_once()
+      cmd = mock_run.call_args[0][0]
+      self.assertEqual(cmd[0], "docker")
+      self.assertEqual(cmd[1], "exec")
+      self.assertIn("chatty-test", cmd)
+      self.assertIn("pytest tests/", cmd[-1])
 
 
 if __name__ == "__main__":

@@ -263,6 +263,7 @@ def show_help(session: Any):
     ("/write <path> [idx|all] / /save_code", "Write a code block or full response to a file"),
     ("/save_response <path> / /save_reply", "Save the entire last AI response to a file"),
     ("/show <path>", "Read and render a Markdown file beautifully in the terminal"),
+    ("/docker [command] / /container", "Execute a command (or inspect status) inside the Docker companion container"),
     ("/exit / /quit", "Exit the application"),
   ]
 
