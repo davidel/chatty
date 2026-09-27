@@ -94,7 +94,11 @@ def _create_completion(self, **kwargs) -> Any:
   litellm_kwargs["timeout"] = timeout
 
   logger.info(f"Sending API request to {self.provider} (model={actual_model}, timeout={timeout:.1f}s)...")
-  return litellm.completion(**litellm_kwargs)
+  resp = litellm.completion(**litellm_kwargs)
+  if kwargs.get("stream", False):
+    from chatty.utils import TimeoutStreamWrapper
+    return TimeoutStreamWrapper(resp, timeout=timeout)
+  return resp
 
 
 def _throttle_request(self):
@@ -129,9 +133,11 @@ def _format_api_error(self, e: Exception) -> str:
 def _is_retryable_exception(self, e: Exception) -> bool:
   """Checks if an API exception is transient or rate-limit related and should be retried."""
   err_msg = str(e).lower()
-  if isinstance(e, openai.APIConnectionError):
+  if isinstance(e, (TimeoutError, openai.APITimeoutError, openai.APIConnectionError)):
     return True
   if isinstance(e, openai.RateLimitError):
+    return True
+  if "timed out" in err_msg or "timeout" in err_msg:
     return True
   if isinstance(e, openai.APIStatusError):
     status_code = getattr(e, "status_code", None)

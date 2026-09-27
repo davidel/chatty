@@ -386,6 +386,60 @@ class TestDiscoveryAgent(unittest.TestCase):
     self.assertTrue(any("Query:\nhttpx timeout options\nand retry policy" in c for c in captured_contents))
     self.assertTrue(any("Investigation step 1/1" in c for c in captured_contents))
 
+  @patch("chatty.discovery.optional_live")
+  def test_run_discovery_retries_on_stream_timeout(self, mock_optional_live):
+    from types import SimpleNamespace
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    # First attempt raises TimeoutError during stream iteration, second attempt succeeds
+    def mock_failing_stream():
+      raise TimeoutError("Stream stalled: no chunk received for 60.0s")
+      yield None
+
+    mock_chunk = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Recovered dossier", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+
+    with patch("time.sleep"):
+      with patch.object(self.session, "_create_completion", side_effect=[mock_failing_stream(), [mock_chunk]]):
+        res = run_discovery(self.session, "Test task", max_loops=1)
+        self.assertEqual(res, "Recovered dossier")
+
+
+class TestTimeoutStreamWrapper(unittest.TestCase):
+
+  def test_wrapper_yields_all_items(self):
+    from chatty.utils import TimeoutStreamWrapper
+    items = [1, 2, 3, 4]
+    wrapper = TimeoutStreamWrapper(iter(items), timeout=5.0)
+    result = list(wrapper)
+    self.assertEqual(result, [1, 2, 3, 4])
+
+  def test_wrapper_raises_timeout_on_stall(self):
+    import time
+    from chatty.utils import TimeoutStreamWrapper
+
+    def stalling_generator():
+      yield "first"
+      time.sleep(1.0)
+      yield "second"
+
+    wrapper = TimeoutStreamWrapper(stalling_generator(), timeout=0.1)
+    self.assertEqual(next(wrapper), "first")
+    with self.assertRaises(TimeoutError):
+      next(wrapper)
+
+  def test_wrapper_close_calls_stream_close(self):
+    from chatty.utils import TimeoutStreamWrapper
+    mock_stream = MagicMock()
+    mock_stream.__iter__.return_value = iter([1, 2, 3])
+    wrapper = TimeoutStreamWrapper(mock_stream, timeout=5.0)
+    wrapper.close()
+    mock_stream.close.assert_called_once()
+
 
 if __name__ == "__main__":
   unittest.main()

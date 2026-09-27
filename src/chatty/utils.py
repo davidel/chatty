@@ -2,7 +2,9 @@ import datetime
 import json
 import logging
 import os
+import queue
 import re
+import threading
 import urllib.parse
 from typing import List, Dict, Any, Tuple, Optional
 from html.parser import HTMLParser
@@ -615,4 +617,54 @@ def copy_to_clipboard(text: str) -> bool:
       pass
 
   return False
+
+
+class TimeoutStreamWrapper:
+  """Wraps an iterator/stream with a per-chunk timeout and passes through close()."""
+
+  def __init__(self, stream: Any, timeout: float = 60.0):
+    self._stream = stream
+    self._timeout = max(0.01, timeout)
+    self._queue = queue.Queue(maxsize=16)
+    self._sentinel = object()
+    self._error: Optional[Exception] = None
+    self._stop_event = threading.Event()
+    self._thread = threading.Thread(target=self._worker, daemon=True)
+    self._thread.start()
+
+  def _worker(self) -> None:
+    try:
+      for chunk in self._stream:
+        if self._stop_event.is_set():
+          break
+        self._queue.put(chunk)
+    except Exception as e:
+      self._error = e
+    finally:
+      self._queue.put(self._sentinel)
+
+  def __iter__(self):
+    return self
+
+  def __next__(self):
+    if self._stop_event.is_set():
+      raise StopIteration
+    try:
+      item = self._queue.get(timeout=self._timeout)
+    except queue.Empty:
+      self.close()
+      raise TimeoutError(f"Stream chunk timed out: no chunk received for {self._timeout:.1f}s")
+    if item is self._sentinel:
+      if self._error:
+        raise self._error
+      raise StopIteration
+    return item
+
+  def close(self):
+    self._stop_event.set()
+    if hasattr(self._stream, "close") and callable(self._stream.close):
+      try:
+        self._stream.close()
+      except Exception:
+        pass
 
