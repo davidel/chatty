@@ -138,6 +138,47 @@ class TestDockerBackendUnit(unittest.TestCase):
     env = backend._get_docker_env()
     self.assertEqual(env["DOCKER_HOST"], "tcp://custom-host:2375")
 
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_skips_root_mount(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    backend = DockerBackend(
+      session_id="root_mount_test",
+      host_sandbox="/tmp/sandbox",
+      allowed_ro_paths=["/"],
+      allowed_rw_paths=["/"]
+    )
+    backend.initialize()
+
+    run_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "run"
+    ]
+    self.assertTrue(len(run_calls) > 0)
+    run_cmd = run_calls[0][0][0]
+    self.assertNotIn("/:/:ro", run_cmd)
+    self.assertNotIn("/:/:rw", run_cmd)
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_status_callback(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    messages = []
+    backend = DockerBackend(
+      session_id="status_test",
+      host_sandbox="/tmp/sandbox",
+      status_callback=messages.append
+    )
+    backend.initialize()
+
+    self.assertTrue(len(messages) >= 2)
+    self.assertTrue(any("Initializing Docker companion container" in m for m in messages))
+    self.assertTrue(any("Starting Docker companion container" in m for m in messages))
+
 
 class TestSessionBackendWiring(unittest.TestCase):
 

@@ -600,6 +600,11 @@ class ChatbotSession:
       ro_paths = list(self.allowed_ro_paths) + list(self.temp_allowed_ro_paths)
       rw_paths = list(self.allowed_rw_paths) + list(self.temp_allowed_rw_paths)
       session_id = str(uuid.uuid4())[:8]
+
+      def _docker_status(msg: str) -> None:
+        if not self.config.headless:
+          console.print(f"[cyan]{msg}[/cyan]")
+
       backend = DockerBackend(
         session_id=session_id,
         host_sandbox=self.sandbox,
@@ -608,7 +613,8 @@ class ChatbotSession:
         build_image=self.config.docker_build,
         docker_host=self.config.docker_host,
         allowed_ro_paths=ro_paths,
-        allowed_rw_paths=rw_paths
+        allowed_rw_paths=rw_paths,
+        status_callback=_docker_status
       )
       backend.initialize()
       if not self.config.headless:

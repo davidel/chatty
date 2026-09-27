@@ -135,7 +135,8 @@ class DockerBackend(ExecutionBackend):
     allowed_rw_paths: Optional[List[str]] = None,
     docker_bin: str = "docker",
     container_workspace: str = "/workspace",
-    docker_host: Optional[str] = None
+    docker_host: Optional[str] = None,
+    status_callback: Optional[Callable[[str], None]] = None
   ):
     self.session_id = session_id
     self.host_sandbox = os.path.abspath(host_sandbox)
@@ -147,9 +148,18 @@ class DockerBackend(ExecutionBackend):
     self.docker_bin = docker_bin
     self.container_workspace = container_workspace
     self.docker_host = docker_host
+    self.status_callback = status_callback
     self.container_name = f"chatty-{self.session_id}"
     self.is_running = False
     self._cleaned_up = False
+
+  def _notify(self, message: str) -> None:
+    logger.info(message)
+    if self.status_callback:
+      try:
+        self.status_callback(message)
+      except Exception:
+        pass
 
   def _get_docker_env(self) -> Dict[str, str]:
     env = os.environ.copy()
@@ -170,26 +180,30 @@ class DockerBackend(ExecutionBackend):
         "Ensure Docker is running and your user has permissions to access the Docker socket."
       )
 
+    self._notify(f"Initializing Docker companion container (image: {self.image})...")
     self._prune_stale_containers()
 
     if self.dockerfile or self.build_image:
+      self._notify(f"Building Docker companion image '{self.image}'...")
       self.build_companion_image(dockerfile=self.dockerfile, tag=self.image)
     else:
       if not self._image_exists(self.image):
         if self.image == "chatty-sandbox:latest":
-          logger.info("Default image 'chatty-sandbox:latest' not found. Auto-building from default Dockerfile...")
+          self._notify(f"Default image '{self.image}' not found. Building companion image (this may take a minute on first run)...")
           self.build_companion_image(dockerfile=get_default_dockerfile_path(), tag=self.image)
         else:
-          logger.info(f"Image '{self.image}' not found locally. Pulling...")
+          self._notify(f"Image '{self.image}' not found locally. Pulling companion image...")
           self._pull_image(self.image)
 
+    self._notify(f"Starting Docker companion container '{self.container_name}'...")
     self._start_container()
     atexit.register(self.cleanup)
 
   def _image_exists(self, tag: str) -> bool:
     res = subprocess.run(
       [self.docker_bin, "image", "inspect", tag],
-      capture_output=True
+      capture_output=True,
+      env=self._get_docker_env()
     )
     return res.returncode == 0
 
@@ -197,7 +211,8 @@ class DockerBackend(ExecutionBackend):
     res = subprocess.run(
       [self.docker_bin, "pull", tag],
       capture_output=True,
-      text=True
+      text=True,
+      env=self._get_docker_env()
     )
     if res.returncode != 0:
       raise RuntimeError(f"Failed to pull Docker image '{tag}': {res.stderr}")
@@ -215,7 +230,7 @@ class DockerBackend(ExecutionBackend):
       "-f", df_path,
       context_dir
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True, env=self._get_docker_env())
     if res.returncode != 0:
       raise RuntimeError(f"Docker build failed for image '{target_tag}':\n{res.stderr}\n{res.stdout}")
     logger.info(f"Successfully built Docker companion image '{target_tag}'.")
@@ -249,7 +264,7 @@ class DockerBackend(ExecutionBackend):
     return real_p
 
   def _start_container(self) -> None:
-    subprocess.run([self.docker_bin, "rm", "-f", self.container_name], capture_output=True)
+    subprocess.run([self.docker_bin, "rm", "-f", self.container_name], capture_output=True, env=self._get_docker_env())
 
     host_mount_dir = self._resolve_host_path(self.host_sandbox)
     cmd = [
@@ -266,18 +281,34 @@ class DockerBackend(ExecutionBackend):
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
       cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
 
+    mounted_destinations = {self.container_workspace}
+
     for p in self.allowed_ro_paths:
       resolved = self._resolve_host_path(p)
+      norm = os.path.normpath(resolved)
+      if not norm or norm == "/":
+        logger.warning(f"Skipping root '/' in Docker companion container volume mounts (destination '/' cannot be bound).")
+        continue
+      if norm in mounted_destinations:
+        continue
       cmd.extend(["-v", f"{resolved}:{resolved}:ro"])
+      mounted_destinations.add(norm)
 
     for p in self.allowed_rw_paths:
       resolved = self._resolve_host_path(p)
+      norm = os.path.normpath(resolved)
+      if not norm or norm == "/":
+        logger.warning(f"Skipping root '/' in Docker companion container volume mounts (destination '/' cannot be bound).")
+        continue
+      if norm in mounted_destinations:
+        continue
       cmd.extend(["-v", f"{resolved}:{resolved}:rw"])
+      mounted_destinations.add(norm)
 
     cmd.extend([self.image, "sleep", "infinity"])
 
     logger.info(f"Starting companion container '{self.container_name}' with image '{self.image}'...")
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True, env=self._get_docker_env())
     if res.returncode != 0:
       raise RuntimeError(f"Failed to start companion Docker container '{self.container_name}': {res.stderr}")
 
@@ -290,11 +321,11 @@ class DockerBackend(ExecutionBackend):
         self.docker_bin, "ps", "-q", "-a",
         "--filter", "label=chatty.managed=true"
       ]
-      res = subprocess.run(cmd, capture_output=True, text=True)
+      res = subprocess.run(cmd, capture_output=True, text=True, env=self._get_docker_env())
       if res.returncode == 0 and res.stdout.strip():
         ids = res.stdout.strip().split()
         for cid in ids:
-          subprocess.run([self.docker_bin, "rm", "-f", cid], capture_output=True)
+          subprocess.run([self.docker_bin, "rm", "-f", cid], capture_output=True, env=self._get_docker_env())
     except Exception as e:
       logger.debug(f"Failed to prune stale containers: {e}")
 
@@ -333,19 +364,22 @@ class DockerBackend(ExecutionBackend):
           [self.docker_bin, "exec", self.container_name, "cat", f"/tmp/{task_id}.pid"],
           capture_output=True,
           text=True,
-          timeout=2
+          timeout=2,
+          env=self._get_docker_env()
         )
         if pid_res.returncode == 0 and pid_res.stdout.strip().isdigit():
           inner_pid = pid_res.stdout.strip()
           subprocess.run(
             [self.docker_bin, "exec", self.container_name, "kill", "-9", inner_pid],
             capture_output=True,
-            timeout=2
+            timeout=2,
+            env=self._get_docker_env()
           )
         subprocess.run(
           [self.docker_bin, "exec", self.container_name, "rm", "-f", f"/tmp/{task_id}.pid"],
           capture_output=True,
-          timeout=2
+          timeout=2,
+          env=self._get_docker_env()
         )
       except Exception as e:
         logger.debug(f"Error terminating inner container process for task {task_id}: {e}")
@@ -369,7 +403,8 @@ class DockerBackend(ExecutionBackend):
         subprocess.run(
           [self.docker_bin, "stop", "-t", "2", self.container_name],
           capture_output=True,
-          timeout=10
+          timeout=10,
+          env=self._get_docker_env()
         )
       except Exception as e:
         logger.warning(f"Error stopping container '{self.container_name}': {e}")
