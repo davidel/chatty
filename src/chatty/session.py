@@ -170,6 +170,12 @@ class SessionConfig:
   repo_map_tokens: int = 1024
   discovery_model: Optional[str] = None
   discovery_loops: int = 50
+  backend: str = "auto"
+  docker_image: str = "chatty-sandbox:latest"
+  dockerfile: Optional[str] = None
+  docker_build: bool = False
+  docker_host: Optional[str] = None
+  sandbox_specified: bool = False
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
@@ -347,6 +353,12 @@ class ChatbotSession:
     repo_map_tokens: int = 1024,
     discovery_model: Optional[str] = None,
     discovery_loops: int = 50,
+    backend: Optional[str] = None,
+    docker_image: Optional[str] = None,
+    dockerfile: Optional[str] = None,
+    docker_build: bool = False,
+    docker_host: Optional[str] = None,
+    sandbox_specified: bool = False,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -389,7 +401,13 @@ class ChatbotSession:
         repo_map=repo_map,
         repo_map_tokens=repo_map_tokens,
         discovery_model=discovery_model,
-        discovery_loops=discovery_loops
+        discovery_loops=discovery_loops,
+        backend=backend or "auto",
+        docker_image=docker_image or "chatty-sandbox:latest",
+        dockerfile=dockerfile,
+        docker_build=docker_build,
+        docker_host=docker_host,
+        sandbox_specified=sandbox_specified
       )
 
     # Ensure static_skills defaults correctly if not provided
@@ -550,8 +568,68 @@ class ChatbotSession:
         if not self.config.headless:
           console.print(f"[bold green]Added Whitelisted Read-Write path:[/bold green] {abs_path}")
           
+    self.backend = self._init_backend()
+    self._finalizer = weakref.finalize(self, cleanup_resources, self.background_commands, self.sandbox, self.backend)
     self.load_skills()
-    logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}")
+    logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}, Backend: {self.backend.get_name()}")
+
+  def _init_backend(self):
+    backend_mode = self.config.backend
+    if backend_mode == "auto":
+      from chatty.backends import is_docker_available
+      in_pytest = "PYTEST_CURRENT_TEST" in os.environ
+      docker_ok = (not in_pytest or bool(self.config.docker_host)) and is_docker_available(docker_host=self.config.docker_host)
+
+      if self.config.dockerfile or self.config.docker_build or self.config.docker_host:
+        backend_mode = "docker"
+      elif docker_ok:
+        backend_mode = "docker"
+      elif sys.platform == "linux" and self.landlock_bin:
+        backend_mode = "landlock"
+      else:
+        if self.config.sandbox_specified:
+          raise RuntimeError(
+            "No sandboxing capabilities found (neither Docker nor Linux Landlock is available), "
+            "but a sandbox directory was specified. To allow commands to run directly on the host without sandboxing, "
+            "specify --backend none."
+          )
+        backend_mode = "none"
+
+    if backend_mode == "docker":
+      from chatty.backends import DockerBackend
+      ro_paths = list(self.allowed_ro_paths) + list(self.temp_allowed_ro_paths)
+      rw_paths = list(self.allowed_rw_paths) + list(self.temp_allowed_rw_paths)
+      session_id = str(uuid.uuid4())[:8]
+      backend = DockerBackend(
+        session_id=session_id,
+        host_sandbox=self.sandbox,
+        image=self.config.docker_image,
+        dockerfile=self.config.dockerfile,
+        build_image=self.config.docker_build,
+        docker_host=self.config.docker_host,
+        allowed_ro_paths=ro_paths,
+        allowed_rw_paths=rw_paths
+      )
+      backend.initialize()
+      if not self.config.headless:
+        console.print(f"[bold green]Docker Companion Container initialized:[/bold green] {backend.container_name} ({backend.image})")
+      return backend
+    elif backend_mode == "landlock":
+      if not self.landlock_bin:
+        raise RuntimeError("Landlock backend was requested, but Landlock is not supported or failed to compile on this system.")
+      from chatty.backends import LocalBackend
+      return LocalBackend(
+        sandbox=self.sandbox,
+        landlock_bin=self.landlock_bin,
+        allowed_rw_paths=lambda: list(self.allowed_rw_paths) + list(self.temp_allowed_rw_paths)
+      )
+    else:
+      from chatty.backends import LocalBackend
+      return LocalBackend(
+        sandbox=self.sandbox,
+        landlock_bin=None,
+        allowed_rw_paths=lambda: []
+      )
 
   @property
   def messages(self) -> List[Dict[str, Any]]:
@@ -1757,3 +1835,5 @@ class ChatbotSession:
   def __exit__(self, exc_type, exc_val, exc_tb):
     self.cleanup_scratch(prompt=False)
     self.cleanup_background_commands()
+    if hasattr(self, "backend") and self.backend:
+      self.backend.cleanup()

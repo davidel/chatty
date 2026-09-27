@@ -12,7 +12,7 @@ from chatty.utils import record_command_binaries, truncate_output
 logger = logging.getLogger("chatty")
 
 
-def cleanup_resources(background_commands: Dict[str, Any], sandbox: Optional[str] = None):
+def cleanup_resources(background_commands: Dict[str, Any], sandbox: Optional[str] = None, backend: Optional[Any] = None):
   """Kills all active background tasks and removes temporary files."""
   if background_commands:
     if logger is not None:
@@ -24,10 +24,16 @@ def cleanup_resources(background_commands: Dict[str, Any], sandbox: Optional[str
     proc = task.get("proc")
     status = task.get("status")
     if proc and status is None and proc.poll() is None:
-      try:
-        os.killpg(proc.pid, signal.SIGKILL)
-      except Exception:
-        pass
+      if backend:
+        try:
+          backend.terminate_task(task_id, proc)
+        except Exception:
+          pass
+      else:
+        try:
+          os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+          pass
     try:
       if task.get("stdout_file"):
         task["stdout_file"].close()
@@ -58,6 +64,11 @@ def cleanup_resources(background_commands: Dict[str, Any], sandbox: Optional[str
             logger.info("URL cache cleaned up.")
           except Exception:
             pass
+    except Exception:
+      pass
+  if backend:
+    try:
+      backend.cleanup()
     except Exception:
       pass
   if logger is not None:
@@ -236,7 +247,14 @@ class SubprocessRunner:
         stderr_f = tempfile.NamedTemporaryFile(delete=False, mode='w+t', prefix=f"chatty_{task_id}_stderr_")
       record_command_binaries(command, self.session)
 
-      if self.session.landlock_bin and self.session.sandbox:
+      if getattr(self.session, "backend", None):
+        cmd_args, shell_val, exec_cwd = self.session.backend.build_command_args(
+          command,
+          cwd=self.session.sandbox,
+          task_id=task_id
+        )
+        run_cwd = exec_cwd if exec_cwd is not None else self.session.sandbox
+      elif self.session.landlock_bin and self.session.sandbox:
         from chatty.landlock import wrap_command_with_landlock
         rw_whitelist = list(self.session.allowed_rw_paths) + list(self.session.temp_allowed_rw_paths)
         cmd_args = wrap_command_with_landlock(
@@ -246,14 +264,16 @@ class SubprocessRunner:
           rw_paths=rw_whitelist
         )
         shell_val = False
+        run_cwd = self.session.sandbox
       else:
         cmd_args = command
         shell_val = True
+        run_cwd = self.session.sandbox
 
       proc = subprocess.Popen(
         cmd_args,
         shell=shell_val,
-        cwd=self.session.sandbox,
+        cwd=run_cwd,
         stdout=stdout_f,
         stderr=subprocess.STDOUT if combine_stderr else stderr_f,
         start_new_session=True
@@ -499,12 +519,21 @@ class SubprocessRunner:
       if status is not None:
         task["status"] = status
     if status is None:
-      try:
-        os.killpg(proc.pid, signal.SIGKILL)
-        logger.info(f"Process group {proc.pid} terminated.")
-      except Exception as e:
-        logger.error(f"Failed to kill process group {proc.pid}: {e}")
-        return f"Error terminating process: {e}"
+      backend = getattr(self.session, "backend", None)
+      if backend:
+        try:
+          backend.terminate_task(task_id, proc)
+          logger.info(f"Task '{task_id}' terminated via backend.")
+        except Exception as e:
+          logger.error(f"Failed to terminate task {task_id}: {e}")
+          return f"Error terminating process: {e}"
+      else:
+        try:
+          os.killpg(proc.pid, signal.SIGKILL)
+          logger.info(f"Process group {proc.pid} terminated.")
+        except Exception as e:
+          logger.error(f"Failed to kill process group {proc.pid}: {e}")
+          return f"Error terminating process: {e}"
       message = f"Successfully terminated background task '{task_id}'."
     else:
       message = f"Background task '{task_id}' had already exited with code {status}. Cleaned up resources."
@@ -528,7 +557,7 @@ class SubprocessRunner:
 
   def cleanup_background_commands(self):
     """Kills all active background tasks and removes temporary files."""
-    cleanup_resources(self.session.background_commands, self.session.sandbox)
+    cleanup_resources(self.session.background_commands, self.session.sandbox, getattr(self.session, "backend", None))
 
   def _prune_background_commands(self):
     """Ensures we only keep the latest max_completed_tasks completed background task outputs, unlinking older ones."""

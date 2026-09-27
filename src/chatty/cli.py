@@ -48,7 +48,6 @@ def main():
   )
   parser.add_argument(
     "--sandbox", "-s",
-    default="./sandbox",
     help="Path to the sandboxed file system directory. Writes are strictly restricted here (default: ./sandbox)."
   )
   parser.add_argument(
@@ -200,6 +199,31 @@ def main():
     default=1024,
     help="Target token budget for repository map (default: 1024)."
   )
+  parser.add_argument(
+    "--backend", "-B",
+    choices=["auto", "docker", "landlock", "none"],
+    default="auto",
+    help="Execution backend for commands: 'auto' (default: landlock if on Linux, else local, or docker if configured), 'docker' (companion container), 'landlock' (Linux Landlock LSM), or 'none' (direct execution)."
+  )
+  parser.add_argument(
+    "--docker-image",
+    default="chatty-sandbox:latest",
+    help="Docker image tag to use for the companion container (default: 'chatty-sandbox:latest')."
+  )
+  parser.add_argument(
+    "--dockerfile",
+    help="Path to a custom Dockerfile to build and use for the companion container."
+  )
+  parser.add_argument(
+    "--docker-build",
+    action="store_true",
+    default=False,
+    help="Force building or rebuilding the Docker companion image on startup."
+  )
+  parser.add_argument(
+    "--docker-host",
+    help="Custom Docker host endpoint (e.g. 'tcp://127.0.0.1:2375' or 'unix:///run/user/1000/docker.sock'). Overrides DOCKER_HOST."
+  )
   
   args = parser.parse_args()
   
@@ -280,6 +304,9 @@ def main():
           
   model = models[0]
   
+  sandbox_specified = args.sandbox is not None
+  sandbox_dir = args.sandbox if sandbox_specified else "./sandbox"
+  
   # Initialize and execute chat session
   with ChatbotSession(
     provider=provider,
@@ -287,7 +314,8 @@ def main():
     models=models,
     oracle_model=args.oracle_model,
     context_size=args.context_size,
-    sandbox=args.sandbox,
+    sandbox=sandbox_dir,
+    sandbox_specified=sandbox_specified,
     api_key=args.api_key,
     url=args.url,
     max_loops=args.max_loops,
@@ -313,7 +341,12 @@ def main():
     repo_map=args.repo_map,
     repo_map_tokens=args.repo_map_tokens,
     discovery_model=args.discovery_model,
-    discovery_loops=args.discovery_loops
+    discovery_loops=args.discovery_loops,
+    backend=args.backend,
+    docker_image=args.docker_image,
+    dockerfile=args.dockerfile,
+    docker_build=args.docker_build,
+    docker_host=args.docker_host
   ) as chat_session:
     if not args.headless:
       chat_session.start_loop()
