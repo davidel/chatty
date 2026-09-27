@@ -1411,21 +1411,34 @@ def cmd_docker(session: Any, arg: str) -> bool:
     return True
 
   backend = session.backend
+  arg = arg.strip()
+
+  if arg in ("reset", "--reset"):
+    console.print(f"[yellow]Resetting companion container '{backend.container_name}'...[/yellow]")
+    try:
+      backend.reset_container()
+      console.print(f"[bold green]Companion container '{backend.container_name}' reset successfully.[/bold green]")
+    except Exception as e:
+      console.print(f"[bold red]Error resetting companion container: {e}[/bold red]")
+    return True
+
   if not getattr(backend, "is_running", False):
     console.print(f"[bold red]Error: Docker companion container '{backend.container_name}' is not currently running.[/bold red]")
     return True
 
-  arg = arg.strip()
   if not arg:
+    pers_str = "Yes (persistent per workspace)" if getattr(backend, "persistent", False) else "No (ephemeral)"
     console.print(Panel(
       f"[bold cyan]Container:[/bold cyan] {backend.container_name}\n"
       f"[bold cyan]Image:[/bold cyan] {backend.image}\n"
       f"[bold cyan]Status:[/bold cyan] [bold green]Running[/bold green]\n"
+      f"[bold cyan]Persistent:[/bold cyan] {pers_str}\n"
       f"[bold cyan]Workspace:[/bold cyan] {backend.container_workspace} ({backend.host_sandbox})\n"
       f"[bold cyan]Docker Host:[/bold cyan] {backend.docker_host or 'default (local socket)'}\n\n"
       f"[dim]Usage: /docker <command> (or /container <command>)[/dim]\n"
       f"[dim]Example: /docker pytest[/dim]\n"
       f"[dim]Example: /docker sudo apt update[/dim]\n"
+      f"[dim]Example: /docker reset (drops and recreates the container)[/dim]\n"
       f"[dim]Example: /docker bash[/dim]",
       title="[bold cyan]Docker Companion Container[/bold cyan]",
       border_style="cyan"

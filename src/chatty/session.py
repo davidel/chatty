@@ -175,6 +175,8 @@ class SessionConfig:
   dockerfile: Optional[str] = None
   docker_build: bool = False
   docker_host: Optional[str] = None
+  docker_reset: bool = False
+  docker_persistent: bool = True
   sandbox_specified: bool = False
 
 
@@ -358,6 +360,8 @@ class ChatbotSession:
     dockerfile: Optional[str] = None,
     docker_build: bool = False,
     docker_host: Optional[str] = None,
+    docker_reset: bool = False,
+    docker_persistent: bool = True,
     sandbox_specified: bool = False,
     config: Optional[SessionConfig] = None
   ):
@@ -407,6 +411,8 @@ class ChatbotSession:
         dockerfile=dockerfile,
         docker_build=docker_build,
         docker_host=docker_host,
+        docker_reset=docker_reset,
+        docker_persistent=docker_persistent,
         sandbox_specified=sandbox_specified
       )
 
@@ -614,7 +620,9 @@ class ChatbotSession:
         docker_host=self.config.docker_host,
         allowed_ro_paths=ro_paths,
         allowed_rw_paths=rw_paths,
-        status_callback=_docker_status
+        status_callback=_docker_status,
+        persistent=self.config.docker_persistent,
+        reset_container=self.config.docker_reset
       )
       backend.initialize()
       if not self.config.headless:

@@ -1,7 +1,9 @@
 import abc
 import atexit
+import hashlib
 import logging
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -148,7 +150,10 @@ class DockerBackend(ExecutionBackend):
     docker_bin: str = "docker",
     container_workspace: str = "/workspace",
     docker_host: Optional[str] = None,
-    status_callback: Optional[Callable[[str], None]] = None
+    status_callback: Optional[Callable[[str], None]] = None,
+    container_name: Optional[str] = None,
+    persistent: bool = True,
+    reset_container: bool = False
   ):
     self.session_id = session_id
     self.host_sandbox = os.path.abspath(host_sandbox)
@@ -161,7 +166,16 @@ class DockerBackend(ExecutionBackend):
     self.container_workspace = container_workspace
     self.docker_host = docker_host
     self.status_callback = status_callback
-    self.container_name = f"chatty-{self.session_id}"
+    self.persistent = persistent
+    self.reset_on_start = reset_container
+    if container_name:
+      self.container_name = container_name
+    elif not self.persistent:
+      self.container_name = f"chatty-{self.session_id}"
+    else:
+      workspace_hash = hashlib.sha256(self.host_sandbox.encode("utf-8")).hexdigest()[:12]
+      folder_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", os.path.basename(self.host_sandbox.rstrip("/")) or "root")
+      self.container_name = f"chatty-{folder_name}-{workspace_hash}"
     self.is_running = False
     self._cleaned_up = False
 
@@ -195,19 +209,24 @@ class DockerBackend(ExecutionBackend):
     self._notify(f"Initializing Docker companion container (image: {self.image})...")
     self._prune_stale_containers()
 
+    rebuilt_image = False
     if self.dockerfile or self.build_image:
       self._notify(f"Building Docker companion image '{self.image}'...")
       self.build_companion_image(dockerfile=self.dockerfile, tag=self.image)
+      rebuilt_image = True
     else:
       if not self._image_exists(self.image):
         if self.image.startswith("chatty-sandbox"):
           self._notify(f"Default image '{self.image}' not found. Building companion image (this may take a minute on first run)...")
           self.build_companion_image(dockerfile=get_default_dockerfile_path(), tag=self.image)
+          rebuilt_image = True
         else:
           self._notify(f"Image '{self.image}' not found locally. Pulling companion image...")
           self._pull_image(self.image)
 
-    self._notify(f"Starting Docker companion container '{self.container_name}'...")
+    if self.reset_on_start or rebuilt_image:
+      subprocess.run([self.docker_bin, "rm", "-f", self.container_name], capture_output=True, env=self._get_docker_env())
+
     self._start_container()
     atexit.register(self.cleanup)
 
@@ -286,20 +305,84 @@ class DockerBackend(ExecutionBackend):
         pass
     return real_p
 
+  def _get_container_status(self) -> Optional[str]:
+    try:
+      res = subprocess.run(
+        [self.docker_bin, "inspect", "-f", "{{.State.Status}}", self.container_name],
+        capture_output=True,
+        text=True,
+        env=self._get_docker_env()
+      )
+      if res.returncode == 0 and res.stdout.strip():
+        return res.stdout.strip().lower()
+    except Exception:
+      pass
+    return None
+
+  def reset_container(self) -> None:
+    self._notify(f"Resetting Docker companion container '{self.container_name}'...")
+    subprocess.run(
+      [self.docker_bin, "rm", "-f", self.container_name],
+      capture_output=True,
+      env=self._get_docker_env()
+    )
+    self.is_running = False
+    self._cleaned_up = False
+    self._start_container()
+
   def _start_container(self) -> None:
+    if self.is_running:
+      return
+
+    status = self._get_container_status()
+    if status == "running":
+      self.is_running = True
+      self._notify(f"Reusing running companion container '{self.container_name}'.")
+      return
+    elif status in ("exited", "created"):
+      self._notify(f"Starting existing companion container '{self.container_name}'...")
+      res = subprocess.run(
+        [self.docker_bin, "start", self.container_name],
+        capture_output=True,
+        text=True,
+        env=self._get_docker_env()
+      )
+      if res.returncode == 0:
+        self.is_running = True
+        logger.info(f"Companion container '{self.container_name}' started successfully.")
+        return
+      logger.warning(f"Failed to start existing container '{self.container_name}': {res.stderr}. Recreating...")
+      subprocess.run([self.docker_bin, "rm", "-f", self.container_name], capture_output=True, env=self._get_docker_env())
+    elif status == "paused":
+      subprocess.run([self.docker_bin, "unpause", self.container_name], capture_output=True, env=self._get_docker_env())
+      self.is_running = True
+      return
+
+    self._notify(f"Starting Docker companion container '{self.container_name}'...")
     subprocess.run([self.docker_bin, "rm", "-f", self.container_name], capture_output=True, env=self._get_docker_env())
 
     host_mount_dir = self._resolve_host_path(self.host_sandbox)
     cmd = [
       self.docker_bin, "run", "-d",
       "--name", self.container_name,
-      "--rm",
+    ]
+
+    if not self.persistent:
+      cmd.append("--rm")
+      cmd.extend(["--label", "chatty.ephemeral=true"])
+    else:
+      cmd.extend([
+        "--label", "chatty.persistent=true",
+        "--label", f"chatty.workspace={self.host_sandbox}"
+      ])
+
+    cmd.extend([
       "--init",
       "--label", "chatty.managed=true",
       "--label", f"chatty.session={self.session_id}",
       "-v", f"{host_mount_dir}:{self.container_workspace}:rw",
       "-w", self.container_workspace
-    ]
+    ])
 
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
       cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
@@ -355,7 +438,7 @@ class DockerBackend(ExecutionBackend):
     try:
       cmd = [
         self.docker_bin, "ps", "-q", "-a",
-        "--filter", "label=chatty.managed=true"
+        "--filter", "label=chatty.ephemeral=true"
       ]
       res = subprocess.run(cmd, capture_output=True, text=True, env=self._get_docker_env())
       if res.returncode == 0 and res.stdout.strip():

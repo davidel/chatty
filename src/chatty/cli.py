@@ -224,6 +224,18 @@ def main():
     "--docker-host",
     help="Custom Docker host endpoint (e.g. 'tcp://127.0.0.1:2375' or 'unix:///run/user/1000/docker.sock'). Overrides DOCKER_HOST."
   )
+  parser.add_argument(
+    "--docker-reset",
+    action="store_true",
+    default=False,
+    help="Reset (recreate) the Docker companion container for the current workspace."
+  )
+  parser.add_argument(
+    "--docker-ephemeral",
+    action="store_true",
+    default=False,
+    help="Run the companion container as ephemeral (destroy on session exit)."
+  )
   
   args = parser.parse_args()
   
@@ -346,7 +358,9 @@ def main():
     docker_image=args.docker_image,
     dockerfile=args.dockerfile,
     docker_build=args.docker_build,
-    docker_host=args.docker_host
+    docker_host=args.docker_host,
+    docker_reset=args.docker_reset,
+    docker_persistent=not args.docker_ephemeral
   ) as chat_session:
     if not args.headless:
       chat_session.start_loop()

@@ -93,7 +93,7 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertFalse(use_shell)
     self.assertIsNone(cwd)
     self.assertEqual(cmd_args[:5], ["docker", "exec", "-i", "-w", "/workspace"])
-    self.assertEqual(cmd_args[5], "chatty-s123")
+    self.assertEqual(cmd_args[5], backend.container_name)
     self.assertEqual(cmd_args[6:], ["/bin/sh", "-c", "ls -la"])
 
     # Verify task_id wrapping for background process tracking
@@ -189,6 +189,87 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertTrue(len(messages) >= 2)
     self.assertTrue(any("Initializing Docker companion container" in m for m in messages))
     self.assertTrue(any("Starting Docker companion container" in m for m in messages))
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_reuses_running_container(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="running\n", stderr="")
+
+    backend = DockerBackend(
+      session_id="running_test",
+      host_sandbox="/tmp/sandbox"
+    )
+    backend.initialize()
+
+    self.assertTrue(backend.is_running)
+    start_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] in ("run", "start")
+    ]
+    self.assertEqual(len(start_calls), 0)
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_starts_exited_container(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="exited\n", stderr="")
+
+    backend = DockerBackend(
+      session_id="exited_test",
+      host_sandbox="/tmp/sandbox"
+    )
+    backend.initialize()
+
+    self.assertTrue(backend.is_running)
+    start_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "start"
+    ]
+    self.assertEqual(len(start_calls), 1)
+    self.assertEqual(start_calls[0][0][0][2], backend.container_name)
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_reset_container(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    backend = DockerBackend(
+      session_id="reset_test",
+      host_sandbox="/tmp/sandbox"
+    )
+    backend.reset_container()
+
+    rm_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "rm"
+    ]
+    self.assertTrue(len(rm_calls) > 0)
+    self.assertIn(backend.container_name, rm_calls[0][0][0])
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_ephemeral_mode(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    backend = DockerBackend(
+      session_id="ephemeral123",
+      host_sandbox="/tmp/sandbox",
+      persistent=False
+    )
+    backend.initialize()
+
+    self.assertEqual(backend.container_name, "chatty-ephemeral123")
+    run_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "run"
+    ]
+    self.assertTrue(len(run_calls) > 0)
+    run_cmd = run_calls[0][0][0]
+    self.assertIn("--rm", run_cmd)
+    self.assertIn("chatty.ephemeral=true", run_cmd)
 
 
 class TestSessionBackendWiring(unittest.TestCase):

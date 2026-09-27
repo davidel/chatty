@@ -756,6 +756,17 @@ class TestDockerCommand(unittest.TestCase):
       self.assertIn("chatty-test", cmd)
       self.assertIn("pytest tests/", cmd[-1])
 
+  def test_docker_command_reset(self):
+    from unittest.mock import MagicMock, patch
+    session = MagicMock()
+    session.backend.get_name.return_value = "docker"
+    session.backend.container_name = "chatty-test"
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/docker"](session, "reset")
+      self.assertTrue(res)
+      session.backend.reset_container.assert_called_once()
+      self.assertTrue(any("reset successfully" in str(call) for call in mock_print.call_args_list))
+
 
 if __name__ == "__main__":
   unittest.main()
