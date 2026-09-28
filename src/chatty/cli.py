@@ -207,8 +207,8 @@ def main():
   )
   parser.add_argument(
     "--docker-image",
-    default="chatty-sandbox:latest",
-    help="Docker image tag to use for the companion container (default: 'chatty-sandbox:latest')."
+    default=None,
+    help="Docker image tag to use for the companion container (default: 'chatty-sandbox:<user>' or 'chatty-sandbox:latest')."
   )
   parser.add_argument(
     "--dockerfile",

@@ -767,6 +767,49 @@ class TestDockerCommand(unittest.TestCase):
       session.backend.reset_container.assert_called_once()
       self.assertTrue(any("reset successfully" in str(call) for call in mock_print.call_args_list))
 
+  def test_status_command_displays_docker_details(self):
+    from unittest.mock import MagicMock
+    from chatty.ui import show_status
+    session = MagicMock()
+    session.provider = "openrouter"
+    session.model = "test-model"
+    session.get_oracle_model.return_value = None
+    session.get_discovery_model.return_value = "test-scout"
+    session.discovery_loops = 50
+    session.sandbox = "/tmp/sandbox"
+    session.context_size = 8192
+    session.max_loops = 20
+    session.repo_map = True
+    session.repo_map_tokens = 1024
+    session.api_delay = 2.5
+    session.api_timeout = 60.0
+    session.messages = []
+    session.model_usage = {}
+    session.backend.get_name.return_value = "docker"
+    session.backend.container_name = "chatty-sandbox-12345"
+    session.backend.image = "chatty-sandbox:davide"
+    session.backend.docker_host = "tcp://127.0.0.1:2375"
+
+    show_status(session)
+    session._print.assert_called_once()
+    table = session._print.call_args[0][0]
+    row_data = [
+      (row[0].plain if hasattr(row[0], "plain") else str(row[0]),
+       row[1].plain if hasattr(row[1], "plain") else str(row[1]))
+      for row in table.columns[0]._cells
+    ]
+    # Check that rows were added for Backend, Docker Container, and Docker Image
+    col0_texts = [cell.plain if hasattr(cell, "plain") else str(cell) for cell in table.columns[0]._cells]
+    col1_texts = [cell.plain if hasattr(cell, "plain") else str(cell) for cell in table.columns[1]._cells]
+    self.assertIn("Execution Backend", col0_texts)
+    self.assertIn("Docker Container", col0_texts)
+    self.assertIn("Docker Image", col0_texts)
+    self.assertIn("Docker Host", col0_texts)
+    idx_img = col0_texts.index("Docker Image")
+    self.assertEqual(col1_texts[idx_img], "chatty-sandbox:davide")
+    idx_cnt = col0_texts.index("Docker Container")
+    self.assertEqual(col1_texts[idx_cnt], "chatty-sandbox-12345")
+
 
 if __name__ == "__main__":
   unittest.main()

@@ -287,6 +287,16 @@ def show_status(session: Any):
   table.add_row("Discovery Model", session.get_discovery_model() or "Not configured")
   table.add_row("Discovery Loops", f"{session.discovery_loops} loops")
   table.add_row("Sandbox Path", session.sandbox)
+
+  backend = getattr(session, "backend", None)
+  backend_name = backend.get_name() if backend else "none"
+  table.add_row("Execution Backend", backend_name)
+  if backend_name == "docker":
+    table.add_row("Docker Container", getattr(backend, "container_name", "Unknown"))
+    table.add_row("Docker Image", getattr(backend, "image", "Unknown"))
+    if getattr(backend, "docker_host", None):
+      table.add_row("Docker Host", backend.docker_host)
+
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
   table.add_row("Repo Map", f"{'Enabled' if session.repo_map else 'Disabled'} (budget: {session.repo_map_tokens} tokens)")
