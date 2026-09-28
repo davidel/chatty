@@ -11,6 +11,7 @@ from chatty.backends import (
   DockerBackend,
   LocalBackend,
   get_default_dockerfile_path,
+  get_host_git_config,
   is_docker_available
 )
 from chatty.session import ChatbotSession, SessionConfig
@@ -139,6 +140,18 @@ class TestDockerBackendUnit(unittest.TestCase):
     build_cmd = build_calls[0][0][0]
     self.assertEqual(build_cmd[3], "custom-image:v1")
     self.assertIn("--build-arg", build_cmd)
+    self.assertTrue(any("GIT_USER_NAME=" in arg for arg in build_cmd))
+    self.assertTrue(any("GIT_USER_EMAIL=" in arg for arg in build_cmd))
+
+  @patch("subprocess.run")
+  def test_get_host_git_config(self, mock_run):
+    mock_run.side_effect = [
+      MagicMock(returncode=0, stdout="Test User\n"),
+      MagicMock(returncode=0, stdout="test@example.com\n")
+    ]
+    name, email = get_host_git_config()
+    self.assertEqual(name, "Test User")
+    self.assertEqual(email, "test@example.com")
 
   def test_docker_host_env_handling(self):
     backend = DockerBackend(

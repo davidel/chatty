@@ -32,6 +32,24 @@ def get_default_image_tag() -> str:
   return "chatty-sandbox:latest"
 
 
+def get_host_git_config() -> Tuple[str, str]:
+  name = ""
+  email = ""
+  try:
+    res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, timeout=2)
+    if res.returncode == 0 and res.stdout.strip():
+      name = res.stdout.strip()
+  except Exception:
+    pass
+  try:
+    res = subprocess.run(["git", "config", "user.email"], capture_output=True, text=True, timeout=2)
+    if res.returncode == 0 and res.stdout.strip():
+      email = res.stdout.strip()
+  except Exception:
+    pass
+  return name, email
+
+
 def is_docker_available(docker_bin: str = "docker", docker_host: Optional[str] = None) -> bool:
   if not shutil.which(docker_bin):
     return False
@@ -263,12 +281,20 @@ class DockerBackend(ExecutionBackend):
     except Exception:
       username = "chatty"
 
+    git_name, git_email = get_host_git_config()
+    if not git_name:
+      git_name = username
+    if not git_email:
+      git_email = f"{username}@localhost"
+
     cmd = [
       self.docker_bin, "build",
       "-t", target_tag,
       "--build-arg", f"USER_ID={uid}",
       "--build-arg", f"GROUP_ID={gid}",
       "--build-arg", f"USER_NAME={username}",
+      "--build-arg", f"GIT_USER_NAME={git_name}",
+      "--build-arg", f"GIT_USER_EMAIL={git_email}",
       "-f", df_path,
       context_dir
     ]
