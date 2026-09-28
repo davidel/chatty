@@ -448,12 +448,23 @@ class DockerBackend(ExecutionBackend):
     except Exception as e:
       logger.debug(f"Failed to prune stale containers: {e}")
 
+  def ensure_running(self) -> None:
+    """Ensures the companion container is running, reviving it if exited or paused."""
+    if not self.is_running:
+      self._start_container()
+    else:
+      status = self._get_container_status()
+      if status != "running":
+        self.is_running = False
+        self._start_container()
+
   def build_command_args(
     self,
     command: str,
     cwd: Optional[str] = None,
     task_id: Optional[str] = None
   ) -> Tuple[Union[List[str], str], bool, Optional[str]]:
+    self.ensure_running()
     exec_cwd = self.container_workspace
     if cwd and cwd != self.host_sandbox:
       try:

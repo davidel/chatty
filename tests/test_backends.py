@@ -271,6 +271,34 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertIn("--rm", run_cmd)
     self.assertIn("chatty.ephemeral=true", run_cmd)
 
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_build_command_args_ensures_running(self, mock_run, mock_which, mock_avail):
+    # Simulate container inspection returning 'exited', so ensure_running starts it
+    mock_run.side_effect = [
+      MagicMock(returncode=0, stdout="exited\n", stderr=""), # inspect
+      MagicMock(returncode=0, stdout="", stderr=""),          # start
+    ]
+
+    backend = DockerBackend(
+      session_id="exited_cmd_test",
+      host_sandbox="/tmp/sandbox"
+    )
+    backend.is_running = False
+
+    cmd_args, use_shell, cwd = backend.build_command_args("pytest")
+    self.assertEqual(cmd_args[:2], ["docker", "exec"])
+    self.assertTrue(backend.is_running)
+
+    # Verify docker start was called
+    start_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "start"
+    ]
+    self.assertEqual(len(start_calls), 1)
+    self.assertEqual(start_calls[0][0][0][2], backend.container_name)
+
 
 class TestSessionBackendWiring(unittest.TestCase):
 

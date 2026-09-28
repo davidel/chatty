@@ -1422,6 +1422,13 @@ def cmd_docker(session: Any, arg: str) -> bool:
       console.print(f"[bold red]Error resetting companion container: {e}[/bold red]")
     return True
 
+  if hasattr(backend, "ensure_running"):
+    try:
+      backend.ensure_running()
+    except Exception as e:
+      console.print(f"[bold red]Error starting Docker companion container '{backend.container_name}': {e}[/bold red]")
+      return True
+
   if not getattr(backend, "is_running", False):
     console.print(f"[bold red]Error: Docker companion container '{backend.container_name}' is not currently running.[/bold red]")
     return True
