@@ -408,6 +408,81 @@ class TestDiscoveryAgent(unittest.TestCase):
         res = run_discovery(self.session, "Test task", max_loops=1)
         self.assertEqual(res, "Recovered dossier")
 
+  @patch("chatty.discovery.optional_live")
+  def test_turn_limit_triggers_streamed_synthesis(self, mock_optional_live):
+    from types import SimpleNamespace
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    # Loop turn 1: agent calls a tool (grep_files)
+    tc = SimpleNamespace(
+      id="tc1",
+      index=0,
+      function=SimpleNamespace(name="grep_files", arguments='{"pattern": "def login"}')
+    )
+    turn1_chunk = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Investigating auth", tool_calls=[tc]))],
+      usage=None,
+      model_extra=None
+    )
+
+    # Synthesis turn: agent synthesizes final briefing
+    synthesis_chunk = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Synthesized Dossier", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+
+    with patch("time.sleep"):
+      with patch("chatty.discovery.execute_tool", return_value="src/auth.py:10: def login"):
+        with patch.object(self.session, "_create_completion", side_effect=[[turn1_chunk], [synthesis_chunk]]) as mock_create:
+          res = run_discovery(self.session, "Find login function", max_loops=1)
+          self.assertEqual(res, "Synthesized Dossier")
+          self.assertEqual(mock_create.call_count, 2)
+          # Second call should have stream=True
+          synthesis_kwargs = mock_create.call_args_list[1].kwargs
+          self.assertTrue(synthesis_kwargs.get("stream"))
+
+    # Verify panel was updated to show synthesis message
+    captured_contents = []
+    for call in mock_optional_live.call_args_list:
+      layout = call.args[0] if call.args else call.kwargs.get("renderable")
+      if hasattr(layout, "panels"):
+        for p in layout.panels:
+          content = p.get("content")
+          text_str = content.plain if hasattr(content, "plain") else str(content)
+          captured_contents.append(text_str)
+
+    self.assertTrue(any("Investigation limit reached" in c for c in captured_contents))
+    self.assertTrue(any("Synthesizing final briefing" in c for c in captured_contents))
+
+  @patch("chatty.discovery.optional_live")
+  def test_turn_limit_synthesis_failure_falls_back_to_gathered_findings(self, mock_optional_live):
+    from types import SimpleNamespace
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    # Loop turn 1: agent calls a tool
+    tc = SimpleNamespace(
+      id="tc1",
+      index=0,
+      function=SimpleNamespace(name="read_file", arguments='{"file_path": "main.py"}')
+    )
+    turn1_chunk = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Reading main", tool_calls=[tc]))],
+      usage=None,
+      model_extra=None
+    )
+
+    # Synthesis fails repeatedly
+    with patch("time.sleep"):
+      with patch("chatty.discovery.execute_tool", return_value="import os\nimport sys\napp = create_app()"):
+        with patch.object(self.session, "_create_completion", side_effect=[[turn1_chunk], Exception("API timeout"), Exception("API timeout"), Exception("API timeout")]):
+          res = run_discovery(self.session, "Find entrypoint", max_loops=1)
+          self.assertIn("Investigation Findings (Turn Limit Reached)", res)
+          self.assertIn("read_file", res)
+          self.assertIn("create_app()", res)
+
 
 class TestTimeoutStreamWrapper(unittest.TestCase):
 

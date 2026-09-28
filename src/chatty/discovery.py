@@ -358,24 +358,107 @@ def _run_scout_loop(
 
   # If loop limit was reached without final output, request synthesis
   if not final_dossier:
-    try:
-      actual_model, extra_body = session._resolve_model_and_provider(discovery_model)
-      scout_messages.append({
-        "role": "user",
-        "content": "Investigation turn limit reached. Please synthesize all gathered context and information into the final Markdown briefing now."
-      })
-      kwargs = {
-        "model": actual_model,
-        "messages": scout_messages,
-        "stream": False,
-      }
-      if extra_body:
-        kwargs["extra_body"] = extra_body
-      resp = session._create_completion(**kwargs)
-      if resp.choices and resp.choices[0].message:
-        final_dossier = resp.choices[0].message.content or ""
-    except Exception as e:
-      logger.warning(f"Error requesting {log_label} synthesis: {e}")
+    panels[0]["content"] = _format_panel_content(
+      f"Investigation limit reached ([bold yellow]{loops_limit}/{loops_limit}[/bold yellow]). "
+      f"Synthesizing final briefing (model: {escape(discovery_model)})..."
+    )
+
+    actual_model, extra_body = session._resolve_model_and_provider(discovery_model)
+    scout_messages.append({
+      "role": "user",
+      "content": "Investigation turn limit reached. Please synthesize all gathered context and information into the final Markdown briefing now."
+    })
+
+    # Compress older tool results in scout_messages if needed to avoid context limit overflow
+    total_msgs = len(scout_messages)
+    for idx, msg in enumerate(scout_messages):
+      if msg.get("role") == "tool" and idx < total_msgs - 10:
+        c = msg.get("content") or ""
+        max_tool_chars = getattr(session.config, "max_history_tool_chars", 1000)
+        if len(c) > max_tool_chars:
+          half = max_tool_chars // 2
+          msg["content"] = f"{c[:half]}\n\n... [truncated] ...\n\n{c[-half:]}"
+
+    kwargs = {
+      "model": actual_model,
+      "messages": scout_messages,
+      "stream": True,
+    }
+    if extra_body:
+      kwargs["extra_body"] = extra_body
+
+    content_accumulated = ""
+    usage_metadata = None
+    for attempt in range(1, max_retries + 1):
+      session._throttle_request()
+      try:
+        with optional_live(
+          LiveScreenLayout(panels, None),
+          console=console,
+          enabled=not session.headless,
+          refresh_per_second=12,
+          transient=True
+        ) as live:
+          stream = session._create_completion(**kwargs)
+          for chunk in stream:
+            if hasattr(chunk, "usage") and chunk.usage:
+              usage_metadata = chunk.usage
+            elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+              usage_metadata = chunk.model_extra["usage"]
+
+            if not chunk.choices:
+              continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if delta.content:
+              content_accumulated += delta.content
+
+          final_dossier = content_accumulated.strip()
+          break
+      except Exception as e:
+        logger.warning(f"{log_label} synthesis API attempt {attempt} failed: {e}")
+        if attempt < max_retries:
+          time.sleep(2 ** attempt)
+        else:
+          logger.exception(f"{log_label} synthesis failed permanently.")
+          if not session.headless:
+            console.print(f"[bold red]Error in {log_label} synthesis:[/bold red] {e}")
+
+    # Track token usage
+    if content_accumulated:
+      p_tok = getattr(usage_metadata, "prompt_tokens", None) if usage_metadata else None
+      c_tok = getattr(usage_metadata, "completion_tokens", None) if usage_metadata else None
+      if p_tok is None:
+        p_tok = session._calculate_tokens_for_messages(scout_messages)
+      if c_tok is None:
+        c_tok = session.count_tokens_estimate(content_accumulated)
+
+      if discovery_model not in session.model_usage:
+        session.model_usage[discovery_model] = {"prompt_tokens": 0, "completion_tokens": 0}
+      session.model_usage[discovery_model]["prompt_tokens"] += p_tok
+      session.model_usage[discovery_model]["completion_tokens"] += c_tok
+
+    # Fallback if synthesis failed or returned empty: assemble findings from tools
+    if not final_dossier:
+      findings = []
+      for m in scout_messages:
+        if m.get("role") == "tool":
+          t_res = (m.get("content") or "").strip()
+          if t_res and not t_res.startswith("Error:"):
+            first_lines = [l for l in t_res.splitlines() if l.strip()][:6]
+            if first_lines:
+              t_n = m.get("name", "tool")
+              findings.append(f"**Evidence from `{t_n}`:**\n" + "\n".join(first_lines))
+      if findings:
+        final_dossier = (
+          f"### Investigation Findings (Turn Limit Reached)\n\n"
+          f"The {log_label.lower()} reached the maximum allowed turns ({loops_limit}). "
+          f"Here is the context gathered during exploration:\n\n"
+          + "\n\n".join(findings[-10:])
+        )
+      else:
+        final_dossier = f"Investigation reached the maximum turn limit ({loops_limit} turns) without completing synthesis."
 
   return final_dossier
 
