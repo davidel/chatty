@@ -179,10 +179,10 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/config` | `[key=value]` | List, view, or change configuration parameters live. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
 | `/compress` | `[N]` | Directs the model to summarize current conversational state using a structured format, resets older history, and keeps N (default 4) recent messages intact. |
-| `/copy` / `/clip` | `[index|all]` | Copy a code block or the full AI response to the clipboard. |
-| `/write` / `/save_code` | `<path> [index|all]` | Write a code block or the full AI response to a file. |
+| `/copy` / `/clip` | `[index\|all]` | Copy a code block or the full AI response to the clipboard. |
+| `/write` / `/save_code` | `<path> [index\|all]` | Write a code block or the full AI response to a file. |
 | `/save_response` / `/save_reply` | `<path>` | Save the entire last AI response to a file. |
-| `/docker` / `/container` | `[<command>|reset]` | Inspect companion container status, execute commands inside the container, or reset its state. |
+| `/docker` / `/container` | `[<command>\|reset]` | Inspect companion container status, execute commands inside the container, or reset its state. |
 | `/exit` / `/quit` | None | Cleanly terminates background processes and exits Chatty. |
 
 ### Model Discovery & Search Filters
@@ -471,21 +471,3 @@ Chatty comes with a comprehensive unittest suite located in `tests/`. You can ex
 ```bash
 python3 -m unittest discover tests
 ```
-
-The test suite validates the following components:
-- [test_backends.py](file:///tmp/chatty/tests/test_backends.py): Validates pluggable execution backends (Docker companion container and Linux Landlock), container lifecycle management, background task PID termination, and fallback behavior.
-- [test_caching_and_repeats.py](file:///tmp/chatty/tests/test_caching_and_repeats.py): Verifies prompt caching efficiency, EPHEMERAL headers, and handling of repeated prompts.
-- [test_commands.py](file:///tmp/chatty/tests/test_commands.py): Exercises interactive slash commands (switching provider, model, modifying context parameters, system prompts).
-- [test_cutoff.py](file:///tmp/chatty/tests/test_cutoff.py): Validation of message token truncation, history pruning, and prompt caching.
-- [test_format.py](file:///tmp/chatty/tests/test_format.py): Verification of json, yaml, and clang-format code styling tools.
-- [test_headless.py](file:///tmp/chatty/tests/test_headless.py): Validates running the chatbot session in headless mode.
-- [test_landlock.py](file:///tmp/chatty/tests/test_landlock.py): Unittests for the Landlock sandboxing mechanism on Linux.
-- [test_pdf_handling.py](file:///tmp/chatty/tests/test_pdf_handling.py): Validates PDF text extraction, encryption handling, scanned PDF detection, and OCR fallback logic.
-- [test_logging.py](file:///tmp/chatty/tests/test_logging.py): Checks for Google-style Logging (glog) file outputs.
-- [test_oracle.py](file:///tmp/chatty/tests/test_oracle.py): Tests the oracle query delegation logic, the `ask_oracle` tool, and oracle resolution.
-- [test_safety.py](file:///tmp/chatty/tests/test_safety.py): Ensures commands and processes are validated for sandboxing.
-- [test_sandbox_ops.py](file:///tmp/chatty/tests/test_sandbox_ops.py): Verification of file copy, move, delete, make-dir, search, and info tools.
-- [test_session_persist.py](file:///tmp/chatty/tests/test_session_persist.py): Verifies saving and loading session states to/from JSON.
-- [test_tool_stats.py](file:///tmp/chatty/tests/test_tool_stats.py): Checks tracking metrics for tool and external binary usage.
-- [test_tools_modularity.py](file:///tmp/chatty/tests/test_tools_modularity.py): Checks the registration and separation of modular sandbox tools.
-- [test_whitelist.py](file:///tmp/chatty/tests/test_whitelist.py): Asserts correct management of out-of-sandbox directory whitelisting (ro/rw permissions) and interactive whitelist prompts.
