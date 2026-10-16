@@ -513,6 +513,37 @@ class TestSessionBackendWiring(unittest.TestCase):
       self.assertEqual(session.backend.docker_host, "tcp://127.0.0.1:2375")
       session.cleanup_background_commands()
 
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("chatty.backends.DockerBackend.initialize")
+  def test_docker_backend_does_not_mount_default_temp_by_default(self, mock_init, mock_avail):
+    cfg = SessionConfig(
+      provider="ollama",
+      model="test-model",
+      backend="docker",
+      headless=True
+    )
+    with patch("chatty.session.ChatbotSession.init_client"):
+      session = ChatbotSession(config=cfg)
+      default_temp = os.path.realpath(tempfile.gettempdir())
+      self.assertNotIn(default_temp, session.backend.allowed_rw_paths)
+      session.cleanup_background_commands()
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("chatty.backends.DockerBackend.initialize")
+  def test_docker_backend_mounts_temp_when_explicitly_whitelisted(self, mock_init, mock_avail):
+    default_temp = os.path.realpath(tempfile.gettempdir())
+    cfg = SessionConfig(
+      provider="ollama",
+      model="test-model",
+      backend="docker",
+      whitelist=[f"{default_temp}:rw"],
+      headless=True
+    )
+    with patch("chatty.session.ChatbotSession.init_client"):
+      session = ChatbotSession(config=cfg)
+      self.assertIn(default_temp, session.backend.allowed_rw_paths)
+      session.cleanup_background_commands()
+
 
 class TestLiveDockerCompanionIntegration(unittest.TestCase):
 

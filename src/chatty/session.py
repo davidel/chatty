@@ -553,8 +553,8 @@ class ChatbotSession:
     self.temp_allowed_rw_paths: Set[str] = set()
     
     # Process initial whitelist from arguments or config
-    whitelist_paths = whitelist if whitelist is not None else (self.config.whitelist if hasattr(self.config, "whitelist") else [])
-    for val in whitelist_paths:
+    self.raw_whitelist = list(whitelist if whitelist is not None else (self.config.whitelist if hasattr(self.config, "whitelist") else []))
+    for val in self.raw_whitelist:
       mode = "ro"
       path = val
       if ":" in val:
@@ -605,6 +605,16 @@ class ChatbotSession:
       from chatty.backends import DockerBackend
       ro_paths = list(self.allowed_ro_paths) + list(self.temp_allowed_ro_paths)
       rw_paths = list(self.allowed_rw_paths) + list(self.temp_allowed_rw_paths)
+
+      # Docker containers have their own isolated /tmp; only mount host temp if explicitly whitelisted
+      default_temp = os.path.realpath(tempfile.gettempdir())
+      explicit_whitelist = {
+        os.path.realpath(val[:-3] if val.endswith(":ro") or val.endswith(":rw") else val)
+        for val in getattr(self, "raw_whitelist", [])
+      }
+      if default_temp not in explicit_whitelist:
+        rw_paths = [p for p in rw_paths if p != default_temp]
+
       session_id = str(uuid.uuid4())[:8]
 
       def _docker_status(msg: str) -> None:
