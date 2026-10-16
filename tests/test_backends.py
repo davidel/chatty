@@ -219,28 +219,46 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertNotIn("/tmp/sbox_tmp.davide:/tmp/sbox_tmp.davide:rw", run_cmd)
     self.assertNotIn("/home/davide_sbox/.cache:/home/davide_sbox/.cache:ro", run_cmd)
 
-  @patch("os.path.exists", return_value=True)
-  def test_resolve_host_path_mountinfo_translation(self, mock_exists):
-    mountinfo_content = (
-      "617 552 0:42 /sbox_tmp.user /tmp rw,nosuid,nodev master:85 - tmpfs tmpfs rw\n"
-      "629 552 259:3 /user_sbox /home/user rw,nosuid,nodev master:88 - ext4 /dev/nvme0n1p3 rw\n"
-      "687 629 259:3 /user/git-repos /home/user/git-repos ro,nosuid,nodev master:88 - ext4 /dev/nvme0n1p3 rw\n"
+  @patch.dict(os.environ, {"HOST_PATH_MAP": "/tmp=/tmp/sbox_tmp.user:/home/user=/home/user_sbox:/home/user/git-repos=/home/user/git-repos"})
+  def test_resolve_host_path_with_env_var(self):
+    backend = DockerBackend(session_id="test", host_sandbox="/tmp")
+
+    # Resolving under /tmp maps to /tmp/sbox_tmp.user
+    self.assertEqual(backend._resolve_host_path("/tmp/chatty"), "/tmp/sbox_tmp.user/chatty")
+    self.assertEqual(backend._resolve_host_path("/tmp"), "/tmp/sbox_tmp.user")
+
+    # Resolving under /home/user maps to /home/user_sbox
+    self.assertEqual(backend._resolve_host_path("/home/user/myproject"), "/home/user_sbox/myproject")
+
+    # Nested/more specific prefix takes precedence over parent prefix
+    self.assertEqual(backend._resolve_host_path("/home/user/git-repos/chatty"), "/home/user/git-repos/chatty")
+
+    # Path not matching any mapping returns itself
+    self.assertEqual(backend._resolve_host_path("/var/log"), "/var/log")
+
+  def test_resolve_host_path_direct_param_and_fallback(self):
+    backend = DockerBackend(
+      session_id="test",
+      host_sandbox="/tmp",
+      host_path_map={"/tmp": "/host/tmp"}
     )
-    with patch("builtins.open", mock_open(read_data=mountinfo_content)):
-      backend = DockerBackend(session_id="test", host_sandbox="/tmp")
+    self.assertEqual(backend._resolve_host_path("/tmp/code"), "/host/tmp/code")
+    self.assertEqual(backend._resolve_host_path("/other/path"), "/other/path")
 
-      # Resolving under /tmp maps to /tmp/sbox_tmp.user
-      self.assertEqual(backend._resolve_host_path("/tmp/chatty"), "/tmp/sbox_tmp.user/chatty")
-      self.assertEqual(backend._resolve_host_path("/tmp"), "/tmp/sbox_tmp.user")
+  def test_parse_host_path_map_formats(self):
+    # Comma-separated
+    parsed = DockerBackend._parse_host_path_map("/a=/host/a,/b=/host/b")
+    self.assertEqual(parsed, [("/a", "/host/a"), ("/b", "/host/b")])
 
-      # Resolving under /home/user maps to /home/user_sbox
-      self.assertEqual(backend._resolve_host_path("/home/user/myproject"), "/home/user_sbox/myproject")
+    # Colon-separated
+    parsed = DockerBackend._parse_host_path_map("/short=/h/s:/longer/path=/h/l")
+    # Longer prefix sorted first
+    self.assertEqual(parsed, [("/longer/path", "/h/l"), ("/short", "/h/s")])
 
-      # Nested/more specific mount takes precedence over parent
-      self.assertEqual(backend._resolve_host_path("/home/user/git-repos/chatty"), "/home/user/git-repos/chatty")
-
-      # Path not matching any bind mount returns itself
-      self.assertEqual(backend._resolve_host_path("/var/log"), "/var/log")
+    # Dict and List inputs
+    self.assertEqual(DockerBackend._parse_host_path_map({"/x": "/y"}), [("/x", "/y")])
+    self.assertEqual(DockerBackend._parse_host_path_map([("/x", "/y")]), [("/x", "/y")])
+    self.assertEqual(DockerBackend._parse_host_path_map(None), [])
 
   @patch("chatty.backends.is_docker_available", return_value=True)
   @patch("shutil.which", return_value="/usr/bin/docker")

@@ -171,7 +171,8 @@ class DockerBackend(ExecutionBackend):
     status_callback: Optional[Callable[[str], None]] = None,
     container_name: Optional[str] = None,
     persistent: bool = True,
-    reset_container: bool = False
+    reset_container: bool = False,
+    host_path_map: Optional[Union[str, Dict[str, str], List[Tuple[str, str]]]] = None
   ):
     self.session_id = session_id
     self.host_sandbox = os.path.abspath(host_sandbox)
@@ -186,6 +187,9 @@ class DockerBackend(ExecutionBackend):
     self.status_callback = status_callback
     self.persistent = persistent
     self.reset_on_start = reset_container
+    self.host_path_map = self._parse_host_path_map(
+      host_path_map or os.environ.get("HOST_PATH_MAP") or os.environ.get("CHATTY_HOST_PATH_MAP")
+    )
     if container_name:
       self.container_name = container_name
     elif not self.persistent:
@@ -303,6 +307,46 @@ class DockerBackend(ExecutionBackend):
       raise RuntimeError(f"Docker build failed for image '{target_tag}':\n{res.stderr}\n{res.stdout}")
     logger.info(f"Successfully built Docker companion image '{target_tag}'.")
 
+  @staticmethod
+  def _parse_host_path_map(mapping_val: Optional[Union[str, Dict[str, str], List[Tuple[str, str]]]]) -> List[Tuple[str, str]]:
+    """Parses a host path map specification into a sorted list of prefix pairs.
+
+    Accepts:
+      - A string of key=value pairs separated by comma, semicolon, or colon:
+        e.g., "/tmp=/tmp/sbox_tmp.davide:/home/davide=/home/davide_sbox"
+      - A dictionary mapping sandbox prefixes to host prefixes.
+      - A list of (sandbox_prefix, host_prefix) tuples.
+
+    Returns:
+      A list of (sandbox_prefix, host_prefix) tuples sorted by sandbox prefix length
+      descending so that more specific prefixes take precedence.
+    """
+    if not mapping_val:
+      return []
+
+    items: List[Tuple[str, str]] = []
+    if isinstance(mapping_val, dict):
+      items = list(mapping_val.items())
+    elif isinstance(mapping_val, list):
+      items = [(str(s), str(h)) for s, h in mapping_val]
+    elif isinstance(mapping_val, str):
+      for entry in re.split(r"[,;:]", mapping_val):
+        entry = entry.strip()
+        if "=" in entry:
+          s_prefix, h_prefix = entry.split("=", 1)
+          items.append((s_prefix.strip(), h_prefix.strip()))
+
+    parsed: List[Tuple[str, str]] = []
+    for s_p, h_p in items:
+      s_clean = os.path.normpath(s_p)
+      h_clean = os.path.normpath(h_p)
+      if s_clean and h_clean:
+        parsed.append((s_clean, h_clean))
+
+    # Sort by sandbox prefix length descending so nested paths match before parent paths
+    parsed.sort(key=lambda m: len(m[0]), reverse=True)
+    return parsed
+
   def _resolve_host_path(self, path: str) -> str:
     """Translates a sandbox namespace path to its underlying physical path on the host.
 
@@ -310,50 +354,26 @@ class DockerBackend(ExecutionBackend):
     and connects to a Docker daemon running on the host, volume mount sources must be
     specified using the host's filesystem paths rather than sandbox-internal paths.
 
-    This method inspects `/proc/self/mountinfo` to identify active bind mounts where a host
-    directory is mounted into the sandbox. If the target path falls within a bind-mounted
-    tree, the path is translated to the corresponding host location. More specific
-    (nested) mount points take precedence over enclosing parent mounts.
+    If path mappings are configured via the `HOST_PATH_MAP` environment variable
+    (format: `/sandbox/path=/host/path:/other/sandbox=/other/host`) or passed directly
+    to DockerBackend, matching sandbox path prefixes are translated to their corresponding
+    host prefixes. More specific (longer) prefixes take precedence.
+
+    If no mapping matches, the path is returned as-is (canonicalized via realpath).
 
     Args:
       path: The sandbox-relative or absolute filesystem path to resolve.
 
     Returns:
-      The resolved path on the host filesystem if a bind mount translation applies,
+      The mapped host path if a matching prefix exists in HOST_PATH_MAP,
       otherwise the canonical realpath on the local filesystem.
     """
     real_p = os.path.realpath(path)
-    if not os.path.exists("/proc/self/mountinfo"):
-      return real_p
-
-    mounts: List[Tuple[str, str]] = []
-    try:
-      with open("/proc/self/mountinfo", "r") as f:
-        for line in f:
-          parts = line.strip().split()
-          if len(parts) >= 5:
-            root_mount = parts[3]
-            target_mount = parts[4]
-            if root_mount != "/" and not root_mount.startswith("/.."):
-              mounts.append((target_mount, root_mount))
-    except Exception as e:
-      logger.debug(f"Failed to read /proc/self/mountinfo: {e}")
-      return real_p
-
-    # Sort by target mount depth descending so nested mounts match before parent mounts
-    mounts.sort(key=lambda m: len(m[0]), reverse=True)
-
-    for target_mount, root_mount in mounts:
-      target_clean = target_mount.rstrip("/")
-      if real_p == target_mount or real_p.startswith(target_clean + "/"):
-        rel = os.path.relpath(real_p, target_mount)
-        top_dir = "/" + target_mount.strip("/").split("/")[0] if target_mount.strip("/") else "/"
-        if root_mount == top_dir or root_mount.startswith(top_dir + "/"):
-          host_base = root_mount
-        else:
-          host_base = f"{top_dir}{root_mount}"
-        return os.path.normpath(os.path.join(host_base, rel)) if rel != "." else host_base
-
+    for sandbox_prefix, host_prefix in self.host_path_map:
+      s_clean = sandbox_prefix.rstrip("/")
+      if real_p == sandbox_prefix or real_p.startswith(s_clean + "/"):
+        rel = os.path.relpath(real_p, sandbox_prefix)
+        return os.path.normpath(os.path.join(host_prefix, rel)) if rel != "." else host_prefix
     return real_p
 
   def _get_container_status(self) -> Optional[str]:
