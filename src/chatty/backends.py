@@ -426,29 +426,23 @@ class DockerBackend(ExecutionBackend):
       "-e", f"PATH={container_path}"
     ])
 
-    mounted_destinations = {self.container_workspace}
+    mounted_destinations = {
+      os.path.normpath(self.container_workspace),
+      os.path.normpath(self.host_sandbox)
+    }
 
-    for p in self.allowed_ro_paths:
-      resolved = self._resolve_host_path(p)
-      norm = os.path.normpath(resolved)
-      if not norm or norm == "/":
-        logger.warning(f"Skipping root '/' in Docker companion container volume mounts (destination '/' cannot be bound).")
-        continue
-      if norm in mounted_destinations:
-        continue
-      cmd.extend(["-v", f"{resolved}:{resolved}:ro"])
-      mounted_destinations.add(norm)
-
-    for p in self.allowed_rw_paths:
-      resolved = self._resolve_host_path(p)
-      norm = os.path.normpath(resolved)
-      if not norm or norm == "/":
-        logger.warning(f"Skipping root '/' in Docker companion container volume mounts (destination '/' cannot be bound).")
-        continue
-      if norm in mounted_destinations:
-        continue
-      cmd.extend(["-v", f"{resolved}:{resolved}:rw"])
-      mounted_destinations.add(norm)
+    # Mount RW paths first (RW takes precedence if overlapping), then RO
+    for paths, mode in ((self.allowed_rw_paths, "rw"), (self.allowed_ro_paths, "ro")):
+      for p in paths:
+        dest = os.path.normpath(p)
+        if not dest or dest == "/":
+          logger.warning("Skipping root '/' in Docker companion container volume mounts (destination '/' cannot be bound).")
+          continue
+        if dest in mounted_destinations:
+          continue
+        resolved = self._resolve_host_path(p)
+        cmd.extend(["-v", f"{resolved}:{dest}:{mode}"])
+        mounted_destinations.add(dest)
 
     cmd.extend([self.image, "sleep", "infinity"])
 

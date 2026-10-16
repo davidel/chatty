@@ -188,6 +188,71 @@ class TestDockerBackendUnit(unittest.TestCase):
   @patch("chatty.backends.is_docker_available", return_value=True)
   @patch("shutil.which", return_value="/usr/bin/docker")
   @patch("subprocess.run")
+  def test_docker_backend_resolves_and_mounts_correct_container_destination(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    backend = DockerBackend(
+      session_id="dest_map_test",
+      host_sandbox="/tmp/sandbox",
+      allowed_ro_paths=["/home/davide/.cache"],
+      allowed_rw_paths=["/tmp"]
+    )
+
+    mapping = {
+      "/tmp": "/tmp/sbox_tmp.davide",
+      "/home/davide/.cache": "/home/davide_sbox/.cache",
+      "/tmp/sandbox": "/tmp/sbox_tmp.davide/sandbox"
+    }
+    with patch.object(backend, "_resolve_host_path", side_effect=lambda p: mapping.get(p, p)):
+      backend.initialize()
+
+    run_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "run"
+    ]
+    self.assertTrue(len(run_calls) > 0)
+    run_cmd = run_calls[0][0][0]
+
+    # Verify that the container destination is the sandbox path, not the resolved host path
+    self.assertIn("/tmp/sbox_tmp.davide:/tmp:rw", run_cmd)
+    self.assertIn("/home/davide_sbox/.cache:/home/davide/.cache:ro", run_cmd)
+    self.assertNotIn("/tmp/sbox_tmp.davide:/tmp/sbox_tmp.davide:rw", run_cmd)
+    self.assertNotIn("/home/davide_sbox/.cache:/home/davide_sbox/.cache:ro", run_cmd)
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_mount_priority_and_sandbox_dedup(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    backend = DockerBackend(
+      session_id="priority_test",
+      host_sandbox="/tmp/sandbox",
+      allowed_ro_paths=["/tmp/overlap", "/tmp/sandbox"],
+      allowed_rw_paths=["/tmp/overlap", "/tmp/sandbox"]
+    )
+    backend.initialize()
+
+    run_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "run"
+    ]
+    self.assertTrue(len(run_calls) > 0)
+    run_cmd = run_calls[0][0][0]
+
+    # RW should take precedence over RO for /tmp/overlap
+    resolved_overlap = backend._resolve_host_path("/tmp/overlap")
+    self.assertIn(f"{resolved_overlap}:/tmp/overlap:rw", run_cmd)
+    self.assertNotIn(f"{resolved_overlap}:/tmp/overlap:ro", run_cmd)
+
+    # Sandbox dir is already mounted at /workspace, so it should not be mounted again at /tmp/sandbox
+    resolved_sandbox = backend._resolve_host_path("/tmp/sandbox")
+    self.assertNotIn(f"{resolved_sandbox}:/tmp/sandbox:rw", run_cmd)
+    self.assertNotIn(f"{resolved_sandbox}:/tmp/sandbox:ro", run_cmd)
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
   def test_docker_backend_status_callback(self, mock_run, mock_which, mock_avail):
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
