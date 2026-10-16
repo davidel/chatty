@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
@@ -218,6 +218,29 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertIn("/home/davide_sbox/.cache:/home/davide/.cache:ro", run_cmd)
     self.assertNotIn("/tmp/sbox_tmp.davide:/tmp/sbox_tmp.davide:rw", run_cmd)
     self.assertNotIn("/home/davide_sbox/.cache:/home/davide_sbox/.cache:ro", run_cmd)
+
+  @patch("os.path.exists", return_value=True)
+  def test_resolve_host_path_mountinfo_translation(self, mock_exists):
+    mountinfo_content = (
+      "617 552 0:42 /sbox_tmp.user /tmp rw,nosuid,nodev master:85 - tmpfs tmpfs rw\n"
+      "629 552 259:3 /user_sbox /home/user rw,nosuid,nodev master:88 - ext4 /dev/nvme0n1p3 rw\n"
+      "687 629 259:3 /user/git-repos /home/user/git-repos ro,nosuid,nodev master:88 - ext4 /dev/nvme0n1p3 rw\n"
+    )
+    with patch("builtins.open", mock_open(read_data=mountinfo_content)):
+      backend = DockerBackend(session_id="test", host_sandbox="/tmp")
+
+      # Resolving under /tmp maps to /tmp/sbox_tmp.user
+      self.assertEqual(backend._resolve_host_path("/tmp/chatty"), "/tmp/sbox_tmp.user/chatty")
+      self.assertEqual(backend._resolve_host_path("/tmp"), "/tmp/sbox_tmp.user")
+
+      # Resolving under /home/user maps to /home/user_sbox
+      self.assertEqual(backend._resolve_host_path("/home/user/myproject"), "/home/user_sbox/myproject")
+
+      # Nested/more specific mount takes precedence over parent
+      self.assertEqual(backend._resolve_host_path("/home/user/git-repos/chatty"), "/home/user/git-repos/chatty")
+
+      # Path not matching any bind mount returns itself
+      self.assertEqual(backend._resolve_host_path("/var/log"), "/var/log")
 
   @patch("chatty.backends.is_docker_available", return_value=True)
   @patch("shutil.which", return_value="/usr/bin/docker")

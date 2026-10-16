@@ -304,31 +304,56 @@ class DockerBackend(ExecutionBackend):
     logger.info(f"Successfully built Docker companion image '{target_tag}'.")
 
   def _resolve_host_path(self, path: str) -> str:
-    env_override = os.environ.get("CHATTY_HOST_SANDBOX_DIR")
-    if env_override and path.startswith(self.host_sandbox):
-      rel = os.path.relpath(path, self.host_sandbox)
-      return os.path.normpath(os.path.join(env_override, rel)) if rel != "." else env_override
+    """Translates a sandbox namespace path to its underlying physical path on the host.
 
+    When Chatty runs inside an outer container or sandbox namespace (such as Bubblewrap)
+    and connects to a Docker daemon running on the host, volume mount sources must be
+    specified using the host's filesystem paths rather than sandbox-internal paths.
+
+    This method inspects `/proc/self/mountinfo` to identify active bind mounts where a host
+    directory is mounted into the sandbox. If the target path falls within a bind-mounted
+    tree, the path is translated to the corresponding host location. More specific
+    (nested) mount points take precedence over enclosing parent mounts.
+
+    Args:
+      path: The sandbox-relative or absolute filesystem path to resolve.
+
+    Returns:
+      The resolved path on the host filesystem if a bind mount translation applies,
+      otherwise the canonical realpath on the local filesystem.
+    """
     real_p = os.path.realpath(path)
-    if os.path.exists("/proc/self/mountinfo"):
-      try:
-        with open("/proc/self/mountinfo", "r") as f:
-          for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 5:
-              root_mount = parts[3]
-              target_mount = parts[4]
-              if root_mount != "/" and not root_mount.startswith("/.."):
-                if target_mount == "/tmp" and root_mount.startswith("/sbox_tmp"):
-                  if real_p == "/tmp" or real_p.startswith("/tmp/"):
-                    rel = os.path.relpath(real_p, "/tmp")
-                    return os.path.normpath(os.path.join(f"/tmp{root_mount}", rel)) if rel != "." else f"/tmp{root_mount}"
-                elif target_mount.startswith("/home/") and root_mount.endswith("_sbox"):
-                  if real_p == target_mount or real_p.startswith(target_mount + "/"):
-                    rel = os.path.relpath(real_p, target_mount)
-                    return os.path.normpath(os.path.join(f"/home{root_mount}", rel)) if rel != "." else f"/home{root_mount}"
-      except Exception:
-        pass
+    if not os.path.exists("/proc/self/mountinfo"):
+      return real_p
+
+    mounts: List[Tuple[str, str]] = []
+    try:
+      with open("/proc/self/mountinfo", "r") as f:
+        for line in f:
+          parts = line.strip().split()
+          if len(parts) >= 5:
+            root_mount = parts[3]
+            target_mount = parts[4]
+            if root_mount != "/" and not root_mount.startswith("/.."):
+              mounts.append((target_mount, root_mount))
+    except Exception as e:
+      logger.debug(f"Failed to read /proc/self/mountinfo: {e}")
+      return real_p
+
+    # Sort by target mount depth descending so nested mounts match before parent mounts
+    mounts.sort(key=lambda m: len(m[0]), reverse=True)
+
+    for target_mount, root_mount in mounts:
+      target_clean = target_mount.rstrip("/")
+      if real_p == target_mount or real_p.startswith(target_clean + "/"):
+        rel = os.path.relpath(real_p, target_mount)
+        top_dir = "/" + target_mount.strip("/").split("/")[0] if target_mount.strip("/") else "/"
+        if root_mount == top_dir or root_mount.startswith(top_dir + "/"):
+          host_base = root_mount
+        else:
+          host_base = f"{top_dir}{root_mount}"
+        return os.path.normpath(os.path.join(host_base, rel)) if rel != "." else host_base
+
     return real_p
 
   def _get_container_status(self) -> Optional[str]:
