@@ -15,7 +15,13 @@ from chatty.tools import (
   tool_list_file_backups,
   tool_read_file_backup
 )
-from chatty.backup import list_backups, restore_backup
+from chatty.backup import (
+  list_backups,
+  restore_backup,
+  backup_file,
+  get_backups_dir,
+  get_file_backups_dir
+)
 
 
 class TestBackupAndRestore(unittest.TestCase):
@@ -131,6 +137,43 @@ v3
     # 5. Read with line numbers
     read_res_ln = tool_read_file_backup(self.sandbox_dir, "backup_test.txt", ts, line_numbers=True)
     self.assertEqual(read_res_ln.strip(), "1: v1")
+
+  def test_outside_sandbox_file_backup_stay_in_backups_dir(self):
+    from unittest.mock import MagicMock
+    from chatty.safety import active_session_var
+
+    session = MagicMock()
+    session.has_path_permission.return_value = True
+    token = active_session_var.set(session)
+
+    try:
+      outside_dir = self.enterContext(tempfile.TemporaryDirectory())
+      outside_file = os.path.join(outside_dir, "outside.txt")
+      with open(outside_file, "w", encoding="utf-8") as f:
+        f.write("initial outside content")
+
+      rel_outside = os.path.relpath(outside_file, self.sandbox_dir)
+      self.assertTrue(rel_outside.startswith(".."))
+
+      backup_file(self.sandbox_dir, rel_outside)
+
+      backups_dir = get_backups_dir(self.sandbox_dir)
+      file_backups_dir = get_file_backups_dir(self.sandbox_dir, rel_outside)
+      self.assertTrue(file_backups_dir.startswith(backups_dir))
+      self.assertFalse(os.path.exists(os.path.join(self.sandbox_dir, ".chatty", "outside.txt")))
+
+      backups = list_backups(self.sandbox_dir, rel_outside)
+      self.assertEqual(len(backups), 1)
+
+      with open(outside_file, "w", encoding="utf-8") as f:
+        f.write("modified outside content")
+
+      res = restore_backup(self.sandbox_dir, rel_outside)
+      self.assertIn("Successfully restored", res)
+      with open(outside_file, "r", encoding="utf-8") as f:
+        self.assertEqual(f.read(), "initial outside content")
+    finally:
+      active_session_var.reset(token)
 
 
 if __name__ == "__main__":

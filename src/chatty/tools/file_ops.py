@@ -1609,9 +1609,9 @@ def tool_read_file_backup(
   try:
     safe_p = get_safe_path(sandbox_dir, path)
     rel_path = os.path.relpath(safe_p, sandbox_dir)
-    
-    from chatty.backup import get_backups_dir
-    backup_file_path = os.path.join(get_backups_dir(sandbox_dir), rel_path, f"{timestamp}.bak")
+
+    from chatty.backup import get_file_backups_dir
+    backup_file_path = os.path.join(get_file_backups_dir(sandbox_dir, rel_path), f"{timestamp}.bak")
     
     if not os.path.exists(backup_file_path):
       return f"Error: Backup with timestamp '{timestamp}' for '{rel_path}' does not exist."

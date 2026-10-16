@@ -10,6 +10,26 @@ def get_backups_dir(sandbox_dir: str) -> str:
   return os.path.join(sandbox_dir, ".chatty", "backups")
 
 
+def get_file_backups_dir(sandbox_dir: str, rel_path: str) -> str:
+  """Returns the directory under .chatty/backups/ storing backups for rel_path, preventing path traversal."""
+  backups_dir = os.path.abspath(get_backups_dir(sandbox_dir))
+  if os.path.isabs(rel_path):
+    try:
+      rel_path = os.path.relpath(rel_path, sandbox_dir)
+    except ValueError:
+      pass
+
+  norm_rel = os.path.normpath(rel_path)
+  parts = [p for p in norm_rel.replace('\\', '/').split('/') if p and p != '..' and p != '.']
+  safe_rel = os.path.join(*parts) if parts else ""
+
+  file_backups_dir = os.path.normpath(os.path.join(backups_dir, safe_rel))
+  if not file_backups_dir.startswith(backups_dir):
+    file_backups_dir = os.path.join(backups_dir, os.path.basename(rel_path))
+
+  return file_backups_dir
+
+
 def ensure_gitignore_ignores_chatty(sandbox_dir: str) -> None:
   """Ensures .chatty/ is present in .gitignore so backups are not committed to git."""
   gitignore_path = os.path.join(sandbox_dir, ".gitignore")
@@ -33,29 +53,36 @@ def ensure_gitignore_ignores_chatty(sandbox_dir: str) -> None:
 def backup_file(sandbox_dir: str, rel_path: str) -> None:
   """Creates a timestamped backup of the file under .chatty/backups/path/to/file/timestamp.bak."""
   from chatty.safety import get_safe_path, load_ignore_patterns, is_path_ignored
-  
+
   try:
     ignore_patterns = load_ignore_patterns(sandbox_dir)
     if is_path_ignored(rel_path, ignore_patterns):
       return
-      
+
     abs_path = get_safe_path(sandbox_dir, rel_path)
     if not os.path.exists(abs_path) or not os.path.isfile(abs_path):
       return
-      
+
     ensure_gitignore_ignores_chatty(sandbox_dir)
-    file_backups_dir = os.path.join(get_backups_dir(sandbox_dir), rel_path)
+    file_backups_dir = get_file_backups_dir(sandbox_dir, rel_path)
     os.makedirs(file_backups_dir, exist_ok=True)
-    
+
+    orig_path_file = os.path.join(file_backups_dir, ".orig_path")
+    try:
+      with open(orig_path_file, 'w', encoding='utf-8') as f:
+        f.write(abs_path)
+    except Exception:
+      pass
+
     timestamp = int(time.time() * 1000)
     backup_path = os.path.join(file_backups_dir, f"{timestamp}.bak")
     while os.path.exists(backup_path):
       timestamp += 1
       backup_path = os.path.join(file_backups_dir, f"{timestamp}.bak")
-    
+
     import shutil
     shutil.copy2(abs_path, backup_path)
-      
+
     logger.info(f"Created backup of '{rel_path}' at '{os.path.relpath(backup_path, sandbox_dir)}'")
     prune_backups(file_backups_dir, max_backups=10)
   except Exception as e:
@@ -91,10 +118,10 @@ def prune_backups(file_backups_dir: str, max_backups: int = 10) -> None:
 
 def list_backups(sandbox_dir: str, rel_path: str) -> List[Tuple[int, str]]:
   """Returns a list of tuples (timestamp, format_time_str) of available backups for the given file."""
-  file_backups_dir = os.path.join(get_backups_dir(sandbox_dir), rel_path)
+  file_backups_dir = get_file_backups_dir(sandbox_dir, rel_path)
   if not os.path.isdir(file_backups_dir):
     return []
-    
+
   backups = []
   for f in os.listdir(file_backups_dir):
     path = os.path.join(file_backups_dir, f)
@@ -106,7 +133,7 @@ def list_backups(sandbox_dir: str, rel_path: str) -> List[Tuple[int, str]]:
         backups.append((ts, time_str))
       except ValueError:
         pass
-        
+
   backups.sort(key=lambda x: x[0], reverse=True)
   return backups
 
@@ -114,28 +141,46 @@ def list_backups(sandbox_dir: str, rel_path: str) -> List[Tuple[int, str]]:
 def restore_backup(sandbox_dir: str, rel_path: str, timestamp: int = None) -> str:
   """Restores a backup for the given file. If timestamp is None, restores the latest backup."""
   from chatty.safety import get_safe_path
-  
-  file_backups_dir = os.path.join(get_backups_dir(sandbox_dir), rel_path)
+
+  file_backups_dir = get_file_backups_dir(sandbox_dir, rel_path)
   if not os.path.isdir(file_backups_dir):
     return f"Error: No backups found for file '{rel_path}'."
-    
+
   backups = list_backups(sandbox_dir, rel_path)
   if not backups:
     return f"Error: No backups found for file '{rel_path}'."
-    
+
   target_ts = timestamp
   if target_ts is None:
     target_ts = backups[0][0]
-    
+
   backup_file_path = os.path.join(file_backups_dir, f"{target_ts}.bak")
   if not os.path.exists(backup_file_path):
     return f"Error: Backup file with timestamp '{target_ts}' not found for '{rel_path}'."
-    
-  abs_path = get_safe_path(sandbox_dir, rel_path, write=True)
+
+  abs_path = None
+  try:
+    abs_path = get_safe_path(sandbox_dir, rel_path, write=True)
+  except Exception:
+    pass
+
+  orig_path_file = os.path.join(file_backups_dir, ".orig_path")
+  if os.path.exists(orig_path_file):
+    try:
+      with open(orig_path_file, 'r', encoding='utf-8') as f:
+        stored_orig = f.read().strip()
+      if stored_orig and (abs_path is None or not os.path.exists(abs_path)):
+        abs_path = get_safe_path(sandbox_dir, stored_orig, write=True)
+    except Exception:
+      pass
+
+  if abs_path is None:
+    abs_path = get_safe_path(sandbox_dir, rel_path, write=True)
+
   os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-  
+
   import shutil
   shutil.copy2(backup_file_path, abs_path)
-    
+
   time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(target_ts / 1000.0))
   return f"Successfully restored '{rel_path}' to backup version from {time_str}."
