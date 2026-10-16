@@ -285,20 +285,12 @@ class DockerBackend(ExecutionBackend):
     except Exception:
       username = "chatty"
 
-    git_name, git_email = get_host_git_config()
-    if not git_name:
-      git_name = username
-    if not git_email:
-      git_email = f"{username}@localhost"
-
     cmd = [
       self.docker_bin, "build",
       "-t", target_tag,
       "--build-arg", f"USER_ID={uid}",
       "--build-arg", f"GROUP_ID={gid}",
       "--build-arg", f"USER_NAME={username}",
-      "--build-arg", f"GIT_USER_NAME={git_name}",
-      "--build-arg", f"GIT_USER_EMAIL={git_email}",
       "-f", df_path,
       context_dir
     ]
@@ -466,9 +458,19 @@ class DockerBackend(ExecutionBackend):
 
     user_home = f"/home/{username}"
     container_path = f"/workspace/.venv/bin:{user_home}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    git_name, git_email = get_host_git_config()
+    if not git_name:
+      git_name = username
+    if not git_email:
+      git_email = f"{username}@localhost"
+
     cmd.extend([
       "-e", f"HOME={user_home}",
-      "-e", f"PATH={container_path}"
+      "-e", f"PATH={container_path}",
+      "-e", f"GIT_AUTHOR_NAME={git_name}",
+      "-e", f"GIT_AUTHOR_EMAIL={git_email}",
+      "-e", f"GIT_COMMITTER_NAME={git_name}",
+      "-e", f"GIT_COMMITTER_EMAIL={git_email}"
     ])
 
     mounted_destinations = {
@@ -498,6 +500,19 @@ class DockerBackend(ExecutionBackend):
 
     self.is_running = True
     logger.info(f"Companion container '{self.container_name}' started successfully.")
+
+    if git_name:
+      subprocess.run(
+        [self.docker_bin, "exec", self.container_name, "git", "config", "--global", "user.name", git_name],
+        capture_output=True,
+        env=self._get_docker_env()
+      )
+    if git_email:
+      subprocess.run(
+        [self.docker_bin, "exec", self.container_name, "git", "config", "--global", "user.email", git_email],
+        capture_output=True,
+        env=self._get_docker_env()
+      )
 
   def _prune_stale_containers(self) -> None:
     try:
@@ -564,10 +579,17 @@ class DockerBackend(ExecutionBackend):
         )
         if pid_res.returncode == 0 and pid_res.stdout.strip().isdigit():
           inner_pid = pid_res.stdout.strip()
+          kill_script = (
+            f"kill -TERM -{inner_pid} 2>/dev/null || kill -TERM {inner_pid} 2>/dev/null; "
+            f"pkill -TERM -P {inner_pid} 2>/dev/null || true; "
+            f"sleep 0.05; "
+            f"kill -KILL -{inner_pid} 2>/dev/null || kill -KILL {inner_pid} 2>/dev/null; "
+            f"pkill -KILL -P {inner_pid} 2>/dev/null || true"
+          )
           subprocess.run(
-            [self.docker_bin, "exec", self.container_name, "kill", "-9", inner_pid],
+            [self.docker_bin, "exec", self.container_name, "/bin/sh", "-c", kill_script],
             capture_output=True,
-            timeout=2,
+            timeout=5,
             env=self._get_docker_env()
           )
         subprocess.run(

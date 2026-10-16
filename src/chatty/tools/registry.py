@@ -133,7 +133,7 @@ def handle_format_file(arguments: Dict[str, Any], session: Any) -> str:
   config_path = arguments.get("config_path")
   if not path:
     return "Error: Missing parameter 'path'."
-  return tool_format_file(session.sandbox, path, formatter, config_path)
+  return tool_format_file(session.sandbox, path, formatter, config_path, session=session)
 
 
 def handle_search_grep(arguments: Dict[str, Any], session: Any) -> str:

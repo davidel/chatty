@@ -3,6 +3,7 @@ import time
 import shutil
 import json
 import subprocess
+import shlex
 import re
 import difflib
 from typing import List, Dict, Any, Tuple, Optional, Union
@@ -1052,7 +1053,44 @@ def _detect_formatter_and_config(ext: str, search_dirs: List[str]) -> Tuple[Opti
   return (None, None)
 
 
-def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_path: str = None) -> str:
+def _is_tool_available(tool: str, session: Any = None) -> bool:
+  backend = getattr(session, "backend", None)
+  if backend and getattr(backend, "get_name", lambda: "")() == "docker":
+    try:
+      backend.ensure_running()
+      res = subprocess.run(
+        [backend.docker_bin, "exec", backend.container_name, "which", tool],
+        capture_output=True,
+        text=True,
+        env=backend._get_docker_env() if hasattr(backend, "_get_docker_env") else None
+      )
+      return res.returncode == 0
+    except Exception:
+      pass
+  return shutil.which(tool) is not None
+
+
+def _run_formatter_cmd(cmd_list: List[str], sandbox_dir: str, session: Any = None) -> Tuple[int, str, str]:
+  record_command_binaries(cmd_list, session)
+  cmd_str = " ".join(shlex.quote(arg) for arg in cmd_list)
+  backend = getattr(session, "backend", None)
+  if backend:
+    cmd_args, use_shell, cwd = backend.build_command_args(cmd_str, cwd=sandbox_dir)
+    env = backend._get_docker_env() if hasattr(backend, "_get_docker_env") else None
+    res = subprocess.run(cmd_args, capture_output=True, text=True, shell=use_shell, cwd=cwd, env=env)
+    return res.returncode, res.stdout, res.stderr
+  elif session and getattr(session, "landlock_bin", None) and sandbox_dir:
+    from chatty.landlock import wrap_command_with_landlock
+    rw_whitelist = list(session.allowed_rw_paths) + list(session.temp_allowed_rw_paths)
+    landlock_args = wrap_command_with_landlock(session.landlock_bin, sandbox_dir, cmd_str, rw_paths=rw_whitelist)
+    res = subprocess.run(landlock_args, capture_output=True, text=True, cwd=sandbox_dir)
+    return res.returncode, res.stdout, res.stderr
+  else:
+    res = subprocess.run(cmd_list, capture_output=True, text=True, cwd=sandbox_dir)
+    return res.returncode, res.stdout, res.stderr
+
+
+def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_path: str = None, session: Any = None) -> str:
   """Automatically format a source code file using the appropriate formatter."""
   try:
     safe_p = get_safe_path(sandbox_dir, path, write=True)
@@ -1082,7 +1120,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
 
     if formatter:
       formatter_lower = formatter.lower()
-      if not shutil.which(formatter_lower):
+      if not _is_tool_available(formatter_lower, session):
         if formatter_lower in ("built-in-json", "built-in-yaml", "built-in"):
           chosen_formatter = formatter_lower
         else:
@@ -1097,7 +1135,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       # Auto-detect formatter and configuration file from repository configs
       detected_formatter, detected_config = _detect_formatter_and_config(ext, search_dirs)
       if detected_formatter:
-        if not shutil.which(detected_formatter):
+        if not _is_tool_available(detected_formatter, session):
           rel_cfg = os.path.relpath(detected_config, sandbox_dir) if detected_config else "repo config"
           return f"Error: Formatter '{detected_formatter}' detected from configuration file '{rel_cfg}' is not installed on the system."
         chosen_formatter = detected_formatter
@@ -1107,28 +1145,28 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
         # Fall back to auto-select based on file extension
         if ext == ".py":
           for tool in ["black", "ruff", "yapf", "autopep8"]:
-            if shutil.which(tool):
+            if _is_tool_available(tool, session):
               chosen_formatter = tool
               break
           if not chosen_formatter:
             return "Error: No Python formatter found (black, ruff, yapf, or autopep8)."
         elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java", ".sv", ".svh", ".v"):
-          if shutil.which("clang-format"):
+          if _is_tool_available("clang-format", session):
             chosen_formatter = "clang-format"
           else:
             return "Error: clang-format is not installed on the system."
         elif ext == ".go":
-          if shutil.which("gofmt"):
+          if _is_tool_available("gofmt", session):
             chosen_formatter = "gofmt"
           else:
             return "Error: gofmt is not installed on the system."
         elif ext in (".rs", ".rlib"):
-          if shutil.which("rustfmt"):
+          if _is_tool_available("rustfmt", session):
             chosen_formatter = "rustfmt"
           else:
             return "Error: rustfmt is not installed on the system."
         elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md", ".json", ".yaml", ".yml"):
-          if shutil.which("prettier"):
+          if _is_tool_available("prettier", session):
             chosen_formatter = "prettier"
           elif ext == ".json":
             chosen_formatter = "built-in-json"
@@ -1142,67 +1180,85 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
     # 3. Run the chosen formatter command
     formatted_content = None
     formatter_used = chosen_formatter
+    target_rel = os.path.relpath(safe_p, sandbox_dir)
+    config_rel = os.path.relpath(config_abs_path, sandbox_dir) if config_abs_path else None
 
     if chosen_formatter == "black":
       cmd_args = ["black", "-q"]
-      if config_abs_path:
-        cmd_args.extend(["--config", config_abs_path])
-      cmd_args.append(safe_p)
-      record_command_binaries(cmd_args, None) # wait, record_command_binaries signature? We will check.
-      subprocess.run(cmd_args, capture_output=True, text=True)
+      if config_rel:
+        cmd_args.extend(["--config", config_rel])
+      cmd_args.append(target_rel)
+      retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
+      if retcode != 0:
+        err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
+        return f"Error running {chosen_formatter}: {err_msg}"
 
     elif chosen_formatter == "ruff":
       cmd_args = ["ruff", "format"]
-      if config_abs_path:
-        cmd_args.extend(["--config", config_abs_path])
-      cmd_args.append(safe_p)
-      record_command_binaries(cmd_args, None)
-      subprocess.run(cmd_args, capture_output=True, text=True)
+      if config_rel:
+        cmd_args.extend(["--config", config_rel])
+      cmd_args.append(target_rel)
+      retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
+      if retcode != 0:
+        err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
+        return f"Error running {chosen_formatter}: {err_msg}"
 
     elif chosen_formatter == "clang-format":
       cmd_args = ["clang-format", "-i"]
-      if config_abs_path:
-        cmd_args.append(f"-style=file:{config_abs_path}")
-      cmd_args.append(safe_p)
-      record_command_binaries(cmd_args, None)
-      subprocess.run(cmd_args, capture_output=True, text=True)
+      if config_rel:
+        cmd_args.append(f"-style=file:{config_rel}")
+      cmd_args.append(target_rel)
+      retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
+      if retcode != 0:
+        err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
+        return f"Error running {chosen_formatter}: {err_msg}"
 
     elif chosen_formatter == "prettier":
       cmd_args = ["prettier", "--write"]
-      if config_abs_path:
-        cmd_args.extend(["--config", config_abs_path])
-      cmd_args.append(safe_p)
-      record_command_binaries(cmd_args, None)
-      subprocess.run(cmd_args, capture_output=True, text=True)
+      if config_rel:
+        cmd_args.extend(["--config", config_rel])
+      cmd_args.append(target_rel)
+      retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
+      if retcode != 0:
+        err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
+        return f"Error running {chosen_formatter}: {err_msg}"
 
     elif chosen_formatter == "gofmt":
-      cmd_args = ["gofmt", "-w", safe_p]
-      record_command_binaries(cmd_args, None)
-      subprocess.run(cmd_args, capture_output=True, text=True)
+      cmd_args = ["gofmt", "-w", target_rel]
+      retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
+      if retcode != 0:
+        err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
+        return f"Error running {chosen_formatter}: {err_msg}"
 
     elif chosen_formatter == "rustfmt":
       cmd_args = ["rustfmt"]
-      if config_abs_path:
-        cmd_args.extend(["--config-path", config_abs_path])
-      cmd_args.append(safe_p)
-      record_command_binaries(cmd_args, None)
-      subprocess.run(cmd_args, capture_output=True, text=True)
+      if config_rel:
+        cmd_args.extend(["--config-path", config_rel])
+      cmd_args.append(target_rel)
+      retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
+      if retcode != 0:
+        err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
+        return f"Error running {chosen_formatter}: {err_msg}"
 
     elif chosen_formatter == "yapf":
       cmd_args = ["yapf", "-i"]
-      if config_abs_path:
-        cmd_args.extend(["--style", config_abs_path])
-      cmd_args.append(safe_p)
-      record_command_binaries(cmd_args, None)
-      subprocess.run(cmd_args, capture_output=True, text=True)
+      if config_rel:
+        cmd_args.extend(["--style", config_rel])
+      cmd_args.append(target_rel)
+      retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
+      if retcode != 0:
+        err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
+        return f"Error running {chosen_formatter}: {err_msg}"
 
     elif chosen_formatter == "autopep8":
       cmd_args = ["autopep8", "-i"]
-      if config_abs_path:
-        cmd_args.extend(["--global-config", config_abs_path])
-      cmd_args.append(safe_p)
-      record_command_binaries(cmd_args, None)
-      subprocess.run(cmd_args, capture_output=True, text=True)
+      if config_rel:
+        cmd_args.extend(["--global-config", config_rel])
+      cmd_args.append(target_rel)
+      retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
+      if retcode != 0:
+        err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
+        return f"Error running {chosen_formatter}: {err_msg}"
 
     elif chosen_formatter in ("built-in-json", "built-in"):
       try:

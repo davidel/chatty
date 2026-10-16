@@ -138,10 +138,34 @@ class TestDockerBackendUnit(unittest.TestCase):
     ]
     self.assertTrue(len(build_calls) > 0)
     build_cmd = build_calls[0][0][0]
-    self.assertEqual(build_cmd[3], "custom-image:v1")
-    self.assertIn("--build-arg", build_cmd)
-    self.assertTrue(any("GIT_USER_NAME=" in arg for arg in build_cmd))
-    self.assertTrue(any("GIT_USER_EMAIL=" in arg for arg in build_cmd))
+    self.assertTrue(any("USER_ID=" in arg for arg in build_cmd))
+    self.assertTrue(any("USER_NAME=" in arg for arg in build_cmd))
+    self.assertFalse(any("GIT_USER_NAME=" in arg for arg in build_cmd))
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("chatty.backends.get_host_git_config", return_value=("Git Dev", "dev@example.com"))
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_injects_git_identity_at_runtime(self, mock_run, mock_which, mock_git, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    backend = DockerBackend(
+      session_id="git_env_test",
+      host_sandbox="/tmp/sandbox"
+    )
+    backend.initialize()
+
+    run_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "run"
+    ]
+    self.assertTrue(len(run_calls) > 0)
+    run_cmd = run_calls[0][0][0]
+    self.assertIn("-e", run_cmd)
+    self.assertIn("GIT_AUTHOR_NAME=Git Dev", run_cmd)
+    self.assertIn("GIT_AUTHOR_EMAIL=dev@example.com", run_cmd)
+    self.assertIn("GIT_COMMITTER_NAME=Git Dev", run_cmd)
+    self.assertIn("GIT_COMMITTER_EMAIL=dev@example.com", run_cmd)
 
   @patch("subprocess.run")
   def test_get_host_git_config(self, mock_run):
@@ -421,10 +445,20 @@ class TestDockerBackendUnit(unittest.TestCase):
 
 class TestSessionBackendWiring(unittest.TestCase):
 
+  def setUp(self):
+    self.orig_cwd = os.getcwd()
+    self.temp_dir = tempfile.mkdtemp()
+    os.chdir(self.temp_dir)
+
+  def tearDown(self):
+    os.chdir(self.orig_cwd)
+    shutil.rmtree(self.temp_dir, ignore_errors=True)
+
   def test_session_backend_none(self):
     cfg = SessionConfig(
       provider="ollama",
       model="test-model",
+      sandbox=self.temp_dir,
       backend="none",
       headless=True
     )
@@ -443,21 +477,21 @@ class TestSessionBackendWiring(unittest.TestCase):
     cfg = SessionConfig(
       provider="ollama",
       model="test-model",
+      sandbox=self.temp_dir,
       backend="auto",
       headless=True
     )
-    with patch.dict(os.environ, {}, clear=False):
-      os.environ.pop("PYTEST_CURRENT_TEST", None)
-      with patch("chatty.session.ChatbotSession.init_client"):
-        session = ChatbotSession(config=cfg)
-        self.assertEqual(session.backend.get_name(), "docker")
-        session.cleanup_background_commands()
+    with patch("chatty.session.ChatbotSession.init_client"):
+      session = ChatbotSession(config=cfg)
+      self.assertEqual(session.backend.get_name(), "docker")
+      session.cleanup_background_commands()
 
   @patch("chatty.backends.is_docker_available", return_value=False)
   def test_auto_backend_selects_landlock_when_docker_unavailable(self, mock_avail):
     cfg = SessionConfig(
       provider="ollama",
       model="test-model",
+      sandbox=self.temp_dir,
       backend="auto",
       headless=True
     )
@@ -473,6 +507,7 @@ class TestSessionBackendWiring(unittest.TestCase):
     cfg = SessionConfig(
       provider="ollama",
       model="test-model",
+      sandbox=self.temp_dir,
       backend="auto",
       sandbox_specified=True,
       headless=True
@@ -504,6 +539,7 @@ class TestSessionBackendWiring(unittest.TestCase):
     cfg = SessionConfig(
       provider="ollama",
       model="test-model",
+      sandbox=self.temp_dir,
       docker_host="tcp://127.0.0.1:2375",
       headless=True
     )
@@ -519,6 +555,7 @@ class TestSessionBackendWiring(unittest.TestCase):
     cfg = SessionConfig(
       provider="ollama",
       model="test-model",
+      sandbox=self.temp_dir,
       backend="docker",
       headless=True
     )
@@ -535,6 +572,7 @@ class TestSessionBackendWiring(unittest.TestCase):
     cfg = SessionConfig(
       provider="ollama",
       model="test-model",
+      sandbox=self.temp_dir,
       backend="docker",
       whitelist=[f"{default_temp}:rw"],
       headless=True
@@ -543,6 +581,31 @@ class TestSessionBackendWiring(unittest.TestCase):
       session = ChatbotSession(config=cfg)
       self.assertIn(default_temp, session.backend.allowed_rw_paths)
       session.cleanup_background_commands()
+
+  def test_format_file_delegates_to_backend(self):
+    from chatty.tools.file_ops import tool_format_file
+    with tempfile.TemporaryDirectory() as td:
+      src_file = os.path.join(td, "main.cpp")
+      with open(src_file, "w") as f:
+        f.write("int main(){return 0;}")
+
+      mock_backend = MagicMock()
+      mock_backend.get_name.return_value = "docker"
+      mock_backend.build_command_args.return_value = (["echo", "formatted"], False, None)
+      mock_backend._get_docker_env.return_value = {}
+
+      mock_session = MagicMock()
+      mock_session.backend = mock_backend
+
+      with patch("chatty.tools.file_ops._is_tool_available", return_value=True):
+        with patch("subprocess.run") as mock_subproc:
+          mock_subproc.return_value = subprocess.CompletedProcess(args=["echo"], returncode=0, stdout="", stderr="")
+          tool_format_file(td, "main.cpp", formatter="clang-format", session=mock_session)
+
+          mock_backend.build_command_args.assert_called_once()
+          called_cmd = mock_backend.build_command_args.call_args[0][0]
+          self.assertIn("clang-format", called_cmd)
+          self.assertIn("main.cpp", called_cmd)
 
 
 class TestLiveDockerCompanionIntegration(unittest.TestCase):

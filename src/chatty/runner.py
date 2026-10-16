@@ -114,48 +114,36 @@ class SubprocessRunner:
     """
     if pid is None or not isinstance(pid, int):
       return None
+
+    # When running under Docker companion container, the host PID is just the docker exec wrapper
+    backend = getattr(self.session, "backend", None)
+    if backend and backend.get_name() == "docker":
+      return None
+
     try:
       import psutil
-      pgid = os.getpgid(pid)
+      parent = psutil.Process(pid)
+      procs = [parent] + parent.children(recursive=True)
     except Exception:
       return None
 
     total_rss = 0
-    total_cpu_time = 0.0
     active_processes = 0
+    total_cpu = 0.0
 
-    pids_found = []
-    for proc in psutil.process_iter(['pid']):
+    for proc in procs:
       try:
-        p_pid = proc.info['pid']
-        if os.getpgid(p_pid) == pgid:
-          pids_found.append(p_pid)
-          total_rss += proc.memory_info().rss
-          cpu_t = proc.cpu_times()
-          total_cpu_time += (cpu_t.user + cpu_t.system)
-          active_processes += 1
-      except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
+        total_rss += proc.memory_info().rss
+        total_cpu += proc.cpu_percent(interval=None)
+        active_processes += 1
+      except (psutil.NoSuchProcess, psutil.AccessDenied):
         continue
 
-    if not pids_found:
+    if active_processes == 0:
       return None
 
-    time.sleep(0.1)
-
-    total_cpu_time_2 = 0.0
-    for p_pid in pids_found:
-      try:
-        proc = psutil.Process(p_pid)
-        cpu_t = proc.cpu_times()
-        total_cpu_time_2 += (cpu_t.user + cpu_t.system)
-      except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
-        continue
-
-    cpu_diff = total_cpu_time_2 - total_cpu_time
-    cpu_percent = (cpu_diff / 0.1) * 100.0 if cpu_diff >= 0 else 0.0
-
     return {
-      "cpu_percent": cpu_percent,
+      "cpu_percent": total_cpu,
       "ram_bytes": total_rss,
       "active_processes": active_processes
     }

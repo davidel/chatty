@@ -583,8 +583,7 @@ class ChatbotSession:
     backend_mode = self.config.backend
     if backend_mode == "auto":
       from chatty.backends import is_docker_available
-      in_pytest = "PYTEST_CURRENT_TEST" in os.environ
-      docker_ok = (not in_pytest or bool(self.config.docker_host)) and is_docker_available(docker_host=self.config.docker_host)
+      docker_ok = is_docker_available(docker_host=self.config.docker_host)
 
       if self.config.dockerfile or self.config.docker_build or self.config.docker_host:
         backend_mode = "docker"
