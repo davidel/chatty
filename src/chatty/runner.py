@@ -1,6 +1,8 @@
+import contextlib
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -12,70 +14,56 @@ from chatty.utils import record_command_binaries, truncate_output
 logger = logging.getLogger("chatty")
 
 
+def _close_and_unlink_task(task: Dict[str, Any]) -> None:
+  """Closes open output file streams and removes temporary files for a task."""
+  for file_key in ("stdout_file", "stderr_file"):
+    f = task.get(file_key)
+    if f:
+      with contextlib.suppress(Exception):
+        f.close()
+  for path_key in ("stdout_path", "stderr_path"):
+    path = task.get(path_key)
+    if path:
+      with contextlib.suppress(FileNotFoundError, OSError):
+        os.unlink(path)
+
+
 def cleanup_resources(background_commands: Dict[str, Any], sandbox: Optional[str] = None, backend: Optional[Any] = None):
   """Kills all active background tasks and removes temporary files."""
-  if background_commands:
-    if logger is not None:
-      try:
-        logger.info(f"Cleaning up {len(background_commands)} background commands...")
-      except Exception:
-        pass
+  if background_commands and logger:
+    with contextlib.suppress(Exception):
+      logger.info(f"Cleaning up {len(background_commands)} background commands...")
+
   for task_id, task in list(background_commands.items()):
     proc = task.get("proc")
     status = task.get("status")
     if proc and status is None and proc.poll() is None:
       if backend:
-        try:
+        with contextlib.suppress(Exception):
           backend.terminate_task(task_id, proc)
-        except Exception:
-          pass
       else:
-        try:
+        with contextlib.suppress(ProcessLookupError, OSError):
           os.killpg(proc.pid, signal.SIGKILL)
-        except Exception:
-          pass
-    try:
-      if task.get("stdout_file"):
-        task["stdout_file"].close()
-      if task.get("stderr_file"):
-        task["stderr_file"].close()
-    except Exception:
-      pass
-    try:
-      if os is not None and task.get("stdout_path"):
-        os.unlink(task["stdout_path"])
-    except Exception:
-      pass
-    try:
-      if os is not None and task.get("stderr_path"):
-        os.unlink(task["stderr_path"])
-    except Exception:
-      pass
+
+    _close_and_unlink_task(task)
+
   background_commands.clear()
+
   if sandbox:
-    try:
-      import os as local_os
-      cache_dir = local_os.path.join(sandbox, ".url_cache")
-      if local_os.path.exists(cache_dir):
-        import shutil
+    cache_dir = os.path.join(sandbox, ".url_cache")
+    if os.path.exists(cache_dir):
+      with contextlib.suppress(OSError):
         shutil.rmtree(cache_dir)
-        if logger is not None:
-          try:
-            logger.info("URL cache cleaned up.")
-          except Exception:
-            pass
-    except Exception:
-      pass
+        if logger:
+          logger.info("URL cache cleaned up.")
+
   if backend:
-    try:
+    with contextlib.suppress(Exception):
       backend.cleanup()
-    except Exception:
-      pass
-  if logger is not None:
-    try:
+
+  if logger:
+    with contextlib.suppress(Exception):
       logger.info("Background commands cleanup finished.")
-    except Exception:
-      pass
 
 
 class SubprocessRunner:
@@ -278,15 +266,10 @@ class SubprocessRunner:
             stderr = f.read()
         else:
           stderr = ""
-        try:
-          os.unlink(stdout_f.name)
-        except Exception:
-          pass
-        if stderr_f:
-          try:
-            os.unlink(stderr_f.name)
-          except Exception:
-            pass
+        for f in (stdout_f, stderr_f):
+          if f:
+            with contextlib.suppress(FileNotFoundError, OSError):
+              os.unlink(f.name)
 
         if output_filter or tail_lines is not None or head_lines is not None:
           stdout = self.session._apply_output_filters(stdout, output_filter, head_lines, tail_lines)
@@ -328,18 +311,12 @@ class SubprocessRunner:
           f"You must NOT block. Instead, check its output later by calling the 'check_background_command' tool.{resource_msg}"
         )
     except Exception as e:
-      if stdout_f:
-        stdout_f.close()
-        try:
-          os.unlink(stdout_f.name)
-        except Exception:
-          pass
-      if stderr_f:
-        stderr_f.close()
-        try:
-          os.unlink(stderr_f.name)
-        except Exception:
-          pass
+      for f in (stdout_f, stderr_f):
+        if f:
+          with contextlib.suppress(Exception):
+            f.close()
+          with contextlib.suppress(FileNotFoundError, OSError):
+            os.unlink(f.name)
       return f"Error executing command: {str(e)}"
 
   def tool_check_background_command(
@@ -526,19 +503,7 @@ class SubprocessRunner:
     else:
       message = f"Background task '{task_id}' had already exited with code {status}. Cleaned up resources."
 
-    try:
-      if task.get("stdout_file"):
-        task["stdout_file"].close()
-      if task.get("stderr_file"):
-        task["stderr_file"].close()
-    except Exception:
-      pass
-    try:
-      os.unlink(task["stdout_path"])
-      if task.get("stderr_path"):
-        os.unlink(task["stderr_path"])
-    except Exception:
-      pass
+    _close_and_unlink_task(task)
 
     del self.session.background_commands[task_id]
     return message
@@ -573,18 +538,5 @@ class SubprocessRunner:
       for task_id in tasks_to_prune:
         task = self.session.background_commands[task_id]
         logger.info(f"Pruning old completed background task: '{task_id}'")
-        try:
-          if task.get("stdout_file"):
-            task["stdout_file"].close()
-          if task.get("stderr_file"):
-            task["stderr_file"].close()
-        except Exception:
-          pass
-        try:
-          if task.get("stdout_path"):
-            os.unlink(task["stdout_path"])
-          if task.get("stderr_path"):
-            os.unlink(task["stderr_path"])
-        except Exception:
-          pass
+        _close_and_unlink_task(task)
         del self.session.background_commands[task_id]
