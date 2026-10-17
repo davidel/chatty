@@ -441,6 +441,7 @@ class DockerBackend(ExecutionBackend):
 
     cmd.extend([
       "--init",
+      "--shm-size=2g",
       "--label", "chatty.managed=true",
       "--label", f"chatty.session={self.session_id}",
       "-v", f"{host_mount_dir}:{self.container_workspace}:rw",
@@ -560,7 +561,7 @@ class DockerBackend(ExecutionBackend):
       wrapped_cmd = command
 
     cmd_args = [
-      self.docker_bin, "exec", "-i",
+      self.docker_bin, "exec",
       "-w", exec_cwd,
       self.container_name,
       "/bin/sh", "-c", wrapped_cmd

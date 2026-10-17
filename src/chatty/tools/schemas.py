@@ -372,7 +372,7 @@ TOOLS_SCHEMA = [
           },
           "timeout": {
             "type": "number",
-            "description": "Optional. The number of seconds to wait/block for the background task to complete. If the task is still running after this timeout, the status will show that it is still running."
+            "description": "Optional. The number of seconds to wait/block for the background task to complete (maximum 60 seconds; values above 60 are capped). If the task is still running after this timeout, the status will show that it is still running."
           },
           "output_filter": {
             "type": "string",

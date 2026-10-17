@@ -250,6 +250,7 @@ class SubprocessRunner:
         cmd_args,
         shell=shell_val,
         cwd=run_cwd,
+        stdin=subprocess.DEVNULL,
         stdout=stdout_f,
         stderr=subprocess.STDOUT if combine_stderr else stderr_f,
         start_new_session=True
@@ -337,15 +338,18 @@ class SubprocessRunner:
 
     status = task.get("status")
     timed_out_while_waiting = False
+    effective_timeout = None
     if status is None:
       if timeout is not None and timeout > 0:
+        max_timeout = 60.0
+        effective_timeout = min(timeout, max_timeout)
         start_time = time.time()
         while proc.poll() is None:
           elapsed = time.time() - start_time
-          if elapsed >= timeout:
+          if elapsed >= effective_timeout:
             timed_out_while_waiting = True
             break
-          time.sleep(min(0.2, timeout - elapsed))
+          time.sleep(min(0.2, effective_timeout - elapsed))
       status = proc.poll()
       if status is not None:
         task["status"] = status
@@ -390,7 +394,10 @@ class SubprocessRunner:
       logger.info(f"Task '{task_id}' is STILL RUNNING.")
       status_msg = f"Status: Task '{task_id}' is STILL RUNNING"
       if timeout is not None and timeout > 0 and timed_out_while_waiting:
-        status_msg += f" (the check timed out after {timeout} seconds)"
+        if effective_timeout is not None and timeout > effective_timeout:
+          status_msg += f" (the check timed out after {effective_timeout:.1f}s, capped from requested {timeout}s)"
+        else:
+          status_msg += f" (the check timed out after {timeout} seconds)"
       resource_usage = self.session._format_pgroup_resources(getattr(proc, "pid", None))
       if resource_usage:
         status_msg += f" ({resource_usage})"

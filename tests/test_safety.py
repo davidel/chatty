@@ -283,15 +283,21 @@ class TestCommandSafety(unittest.TestCase):
     mock_proc.pid = 12345
     mock_proc.poll.return_value = None
 
-    with mock.patch("subprocess.Popen", return_value=mock_proc):
+    with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
       res = self.session.tool_run_command("long_running")
       self.assertIn("Task ID: task_1", res)
+      self.assertEqual(mock_popen.call_args[1].get("stdin"), subprocess.DEVNULL)
 
       # Check status with timeout=0.1
       # Since poll.return_value is always None, it will time out
       status_res = self.session.tool_check_background_command("task_1", timeout=0.1)
       self.assertIn("STILL RUNNING", status_res)
       self.assertIn("timed out after 0.1 seconds", status_res)
+
+      # Check that excessive timeouts are capped
+      with mock.patch("time.time", side_effect=[0.0, 0.0, 65.0]), mock.patch("time.sleep"):
+        capped_res = self.session.tool_check_background_command("task_1", timeout=300)
+        self.assertIn("capped from requested 300s", capped_res)
 
       # Now, let's test where it finishes during the wait
       # We can mock poll() to return None first, then 0

@@ -92,13 +92,15 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertTrue(any(arg.startswith("HOME=") for arg in run_cmd))
     self.assertTrue(any(arg.startswith("PATH=") and ".local/bin" in arg for arg in run_cmd))
 
+    self.assertIn("--shm-size=2g", run_cmd)
+
     # Verify command execution wrapper
     cmd_args, use_shell, cwd = backend.build_command_args("ls -la", cwd="/tmp/sandbox")
     self.assertFalse(use_shell)
     self.assertIsNone(cwd)
-    self.assertEqual(cmd_args[:5], ["docker", "exec", "-i", "-w", "/workspace"])
-    self.assertEqual(cmd_args[5], backend.container_name)
-    self.assertEqual(cmd_args[6:], ["/bin/sh", "-c", "ls -la"])
+    self.assertEqual(cmd_args[:4], ["docker", "exec", "-w", "/workspace"])
+    self.assertEqual(cmd_args[4], backend.container_name)
+    self.assertEqual(cmd_args[5:], ["/bin/sh", "-c", "ls -la"])
 
     # Verify task_id wrapping for background process tracking
     task_args, _, _ = backend.build_command_args("sleep 20", task_id="task_42")
