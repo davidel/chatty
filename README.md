@@ -348,6 +348,11 @@ When the Docker backend is active, Chatty manages the entire lifecycle of an iso
   > ```bash
   > chatty --docker-host tcp://127.0.0.1:2375
   > ```
+* **Host Path Translation (`HOST_PATH_MAP`)**: When Chatty runs inside an outer container or sandbox namespace (such as Bubblewrap) and connects to a Docker daemon running on the host, volume mount sources must be specified using the host's physical paths rather than sandbox-internal paths. Set the `HOST_PATH_MAP` (or `CHATTY_HOST_PATH_MAP`) environment variable to translate prefixes:
+  ```bash
+  export HOST_PATH_MAP="/sandbox/path=/host/path:/other/sandbox=/other/host"
+  ```
+  Multiple mappings can be delimited by colons (`:`), semicolons (`;`), or commas (`,`). Longer and more specific prefixes automatically take precedence over parent paths.
 * **Container Lifecycle & Pruning**: Ephemeral containers are tagged with `chatty.ephemeral=true` and pruned automatically on startup, while persistent workspace containers are retained until explicitly reset.
 
 ### 4. Kernel-Level Linux Landlock Sandboxing
