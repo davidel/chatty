@@ -532,7 +532,7 @@ class ChatbotSession(LLMMixin):
     ensure_gitignore_ignores_chatty(self.sandbox)
     
     # Initialize RepoMap
-    self.repo_map = RepoMap(self.sandbox, max_tokens=self.config.repo_map_tokens)
+    self._repo_map = RepoMap(self.sandbox, max_tokens=self.config.repo_map_tokens)
     
     # Initialize client
     self.available_models = []
@@ -906,11 +906,13 @@ class ChatbotSession(LLMMixin):
     """Generates or retrieves the cached Tree-Sitter / PageRank repository map."""
     if not getattr(self.config, "repo_map", True):
       return ""
-    if not hasattr(self, "repo_map"):
-      self.repo_map = RepoMap(self.sandbox, max_tokens=getattr(self.config, "repo_map_tokens", 1024))
+    if getattr(self, "_repo_map", None) is None or self._repo_map.sandbox_dir != os.path.abspath(self.sandbox):
+      self._repo_map = RepoMap(self.sandbox, max_tokens=getattr(self.config, "repo_map_tokens", 1024))
+    else:
+      self._repo_map.max_tokens = getattr(self.config, "repo_map_tokens", 1024)
     if refresh:
-      self.repo_map.cache.clear()
-    return self.repo_map.generate_map()
+      self._repo_map.cache.clear()
+    return self._repo_map.generate_map()
 
 
   def update_available_models_async(self, force_refresh=False):

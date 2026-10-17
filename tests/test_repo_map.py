@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../s
 
 from chatty.repo_map import RepoMap
 from chatty.session import ChatbotSession
-from chatty.commands import cmd_repo_map
+from chatty.commands import cmd_repo_map, cmd_config
 
 
 class TestRepoMap(unittest.TestCase):
@@ -183,6 +183,41 @@ void run_engine() {
 
     res_refresh = cmd_repo_map(session, "refresh")
     self.assertTrue(res_refresh)
+
+  def test_cmd_config_repo_map(self):
+    session = ChatbotSession(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.temp_dir,
+      headless=True,
+      repo_map=True
+    )
+    self.assertIsInstance(session.repo_map, bool)
+    self.assertTrue(session.repo_map)
+    self.assertTrue(session.config.repo_map)
+
+    cmd_config(session, "repo_map=false")
+    self.assertIsInstance(session.repo_map, bool)
+    self.assertFalse(session.repo_map)
+    self.assertFalse(session.config.repo_map)
+
+    cmd_config(session, "repo_map=true")
+    self.assertIsInstance(session.repo_map, bool)
+    self.assertTrue(session.repo_map)
+    self.assertTrue(session.config.repo_map)
+    self.assertIsInstance(session.get_repo_map(refresh=True), str)
+
+  def test_session_repo_map_disabled_init(self):
+    session = ChatbotSession(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.temp_dir,
+      headless=True,
+      repo_map=False
+    )
+    self.assertIsInstance(session.repo_map, bool)
+    self.assertFalse(session.repo_map)
+    self.assertFalse(session.config.repo_map)
 
 
 if __name__ == "__main__":
