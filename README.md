@@ -109,6 +109,8 @@ python3 -m chatty [options]
 | `--docker-reset` | *None* | flag | `False` | Reset (recreate) the Docker companion container for the current workspace. |
 | `--docker-ephemeral` | *None* | flag | `False` | Run the companion container as ephemeral (destroy on session exit). |
 | `--docker-host` | *None* | string | *None* | Custom Docker host endpoint (e.g. `tcp://127.0.0.1:2375` or `unix:///run/user/1000/docker.sock`). Overrides `DOCKER_HOST`. |
+| `--mcp-config` | *None* | string | *None* | Path to an MCP (Model Context Protocol) JSON configuration file. |
+| `--mcp / --no-mcp` | *None* | flag | `True` | Enable or disable Model Context Protocol (MCP) server integration. |
 
 
 ---
@@ -179,6 +181,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/repo_map` / `/map` | `[refresh]` | Displays the Tree-Sitter / PageRank repository map. |
 | `/config` | `[key=value]` | List, view, or change configuration parameters live (including `auto_approve=true\|false`). |
 | `/auto_approve` | `[on\|off]` | Toggle or explicitly enable/disable interactive diff review before file modifications. |
+| `/mcp` | `[list\|reload]` | Inspect status and tools of connected Model Context Protocol (MCP) servers, or reload server processes. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
 | `/compress` | `[N]` | Directs the model to summarize current conversational state using a structured format, resets older history, and keeps N (default 4) recent messages intact. |
 | `/copy` / `/clip` | `[index\|all]` | Copy a code block or the full AI response to the clipboard. |
@@ -271,6 +274,47 @@ Chatty provides human-in-the-loop review before files are modified on disk (`wri
 - **Command-Line & Headless Options**:
   - `--auto-approve`: Start Chatty with auto-approval enabled from the command line.
   - In `--headless` mode, auto-approval is enabled by default to allow unattended execution.
+
+### Model Context Protocol (MCP) Integration
+
+Chatty natively supports the **Model Context Protocol (MCP)** standard over `stdio`, allowing you to connect external tool servers (databases, web scrapers, APIs, custom scripts) directly to Chatty:
+
+#### 1. Configuration & Server Setup
+Chatty automatically detects MCP server definitions from any of the following standard locations:
+- `.chatty/mcp.json` (workspace or current working directory)
+- `mcp.json` or `.mcp.json`
+- `~/.config/chatty/mcp.json`
+- Or explicitly via `--mcp-config <path>`
+
+The configuration syntax follows the standard `mcpServers` format:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
+      }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+    }
+  }
+}
+```
+
+#### 2. Automatic Tool Discovery & Execution
+- **Dynamic Tool Schema**: On session startup, Chatty initializes each server, retrieves its exposed tools, and registers them directly into the LLM's function schema with a server identifier tag (`[MCP: server_name]`).
+- **Conflict-Free Namespacing**: If tool names are unique across servers, the LLM can call them directly by name (e.g. `get_issue`). If multiple servers provide a tool with the same name, Chatty provides namespaced routing (`mcp__<server>__<tool>`).
+- **Seamless Execution**: When the LLM decides to call an MCP tool, Chatty dispatches the JSON-RPC request to the server process over `stdio`, collects the resulting text or image content, and feeds it back to the conversation.
+
+#### 3. In-Session Inspection (`/mcp`)
+- `/mcp` or `/mcp list`: Displays a formatted status table of all connected MCP servers, commands, connection health, and registered tools.
+- `/mcp reload`: Hot-reloads configuration files and restarts MCP server subprocesses without restarting Chatty.
+- `--no-mcp`: Disable MCP server discovery and execution for lightweight sessions.
 
 ### Scratchpad & Workspace Cleanliness (`.chatty/scratch/`)
 Chatty instructs the agent to store all temporary test scripts, one-off execution snippets, scratchpad notes, and intermediate debug files inside `.chatty/scratch/` (relative to the sandbox root) to prevent workspace clutter and avoid polluting `git status`. When exiting Chatty, if any files exist in `.chatty/scratch/`, the CLI interactively prompts whether you want to clean them up or preserve them.

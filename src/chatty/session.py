@@ -162,6 +162,8 @@ class SessionConfig:
   docker_reset: bool = False
   docker_persistent: bool = True
   sandbox_specified: bool = False
+  mcp_config: Optional[str] = None
+  enable_mcp: bool = True
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
@@ -348,6 +350,8 @@ class ChatbotSession(LLMMixin):
     docker_reset: bool = False,
     docker_persistent: bool = True,
     sandbox_specified: bool = False,
+    mcp_config: Optional[str] = None,
+    enable_mcp: bool = True,
     config: Optional[SessionConfig] = None
   ):
     ChatbotSession._active_session = self
@@ -399,7 +403,9 @@ class ChatbotSession(LLMMixin):
         docker_host=docker_host,
         docker_reset=docker_reset,
         docker_persistent=docker_persistent,
-        sandbox_specified=sandbox_specified
+        sandbox_specified=sandbox_specified,
+        mcp_config=mcp_config,
+        enable_mcp=enable_mcp
       )
 
     # In headless mode, auto-approve is implicitly True
@@ -423,6 +429,16 @@ class ChatbotSession(LLMMixin):
     self.max_completed_tasks = 10
     self._active_live = None
     
+    if self.config.enable_mcp:
+      from chatty.mcp import MCPManager
+      self.mcp_manager = MCPManager(sandbox=self.config.sandbox, config_path=self.config.mcp_config)
+      try:
+        self.mcp_manager.load_and_connect()
+      except Exception as e:
+        logger.warning(f"Error initializing MCP servers: {e}")
+    else:
+      self.mcp_manager = None
+
     self.runner = SubprocessRunner(session=self)
     # Register weakref finalizer for automatic cleanup on garbage collection or program exit
     self._finalizer = weakref.finalize(self, cleanup_resources, self.background_commands, self.sandbox)
@@ -1192,6 +1208,13 @@ class ChatbotSession(LLMMixin):
         )
       tools.append(t_copy)
 
+    if hasattr(self, "mcp_manager") and self.mcp_manager:
+      try:
+        mcp_tools = self.mcp_manager.get_tools_schema()
+        tools.extend(mcp_tools)
+      except Exception as e:
+        logger.warning(f"Error fetching MCP tools: {e}")
+
     if self.prompt_caching:
       if tools:
         tools[-1] = dict(tools[-1])
@@ -1823,3 +1846,5 @@ class ChatbotSession(LLMMixin):
     self.cleanup_background_commands()
     if hasattr(self, "backend") and self.backend:
       self.backend.cleanup()
+    if hasattr(self, "mcp_manager") and self.mcp_manager:
+      self.mcp_manager.close()

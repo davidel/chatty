@@ -1497,6 +1497,43 @@ def cmd_auto_approve(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_mcp(session: Any, arg: str) -> bool:
+  arg = arg.strip().lower()
+  manager = getattr(session, "mcp_manager", None)
+
+  if arg in ("reload", "refresh", "restart"):
+    if manager:
+      console.print("[dim]Reloading MCP configurations and reconnecting servers...[/dim]")
+      manager.reload()
+      console.print("[bold green]MCP servers reloaded.[/bold green]")
+    else:
+      console.print("[yellow]MCP is not enabled for this session.[/yellow]")
+    return True
+
+  if not manager or not manager.clients:
+    console.print("[yellow]No MCP servers connected.[/yellow]")
+    console.print("Configure servers by adding an 'mcpServers' object to '.chatty/mcp.json' or use '--mcp-config <path>'.")
+    return True
+
+  from rich.table import Table
+  table = Table(title="Model Context Protocol (MCP) Servers", show_header=True, header_style="bold magenta")
+  table.add_column("Server", style="bold cyan")
+  table.add_column("Command", style="white")
+  table.add_column("Status", style="green")
+  table.add_column("Tools", style="yellow")
+
+  for status in manager.get_servers_status():
+    s_name = status["name"]
+    cmd_str = f"{status['command']} {' '.join(status['args'])}".strip()
+    is_conn = status["connected"]
+    status_str = "[bold green]Connected[/bold green]" if is_conn else f"[bold red]Failed: {status['error'] or 'Disconnected'}[/bold red]"
+    tools_list = ", ".join(status["tools"]) if status["tools"] else "[dim]None[/dim]"
+    table.add_row(s_name, cmd_str, status_str, tools_list)
+
+  console.print(table)
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -1537,6 +1574,7 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/config": cmd_config,
   "/auto_approve": cmd_auto_approve,
   "/autoapprove": cmd_auto_approve,
+  "/mcp": cmd_mcp,
   "/backups": cmd_backups,
   "/restore": cmd_restore,
   "/copy": cmd_copy,

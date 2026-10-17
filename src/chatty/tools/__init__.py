@@ -45,4 +45,8 @@ def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
   handler = TOOL_REGISTRY.get(name)
   if handler:
     return handler(arguments, session)
+
+  if hasattr(session, "mcp_manager") and session.mcp_manager and session.mcp_manager.has_tool(name):
+    return session.mcp_manager.call_tool(name, arguments)
+
   return f"Error: Tool '{name}' is not recognized."

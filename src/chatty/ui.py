@@ -258,6 +258,7 @@ def show_help(session: Any):
     ("/skill [NAME...|clear]", "Load skill(s) on-demand or clear explicitly loaded skills"),
     ("/config [key=value]", "List, view, or change configuration parameters live"),
     ("/auto_approve [on|off]", "Toggle or set interactive file change approval"),
+    ("/mcp [list|reload]", "Inspect or reload Model Context Protocol (MCP) servers and tools"),
     ("/clear / /reset", "Clear conversation memory"),
     ("/compress [N]", "Summarize history, clear context, reload summary, keeping N (default 4) recent messages"),
     ("/copy [index|all] / /clip", "Copy a code block or full response to clipboard"),
@@ -301,6 +302,9 @@ def show_status(session: Any):
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
   table.add_row("Auto Approve", "Enabled" if getattr(session, "auto_approve", False) else "Disabled")
+  mcp_manager = getattr(session, "mcp_manager", None)
+  mcp_count = len(mcp_manager.clients) if mcp_manager else 0
+  table.add_row("MCP Servers", f"{mcp_count} configured" if mcp_count else "None")
   table.add_row("Repo Map", f"{'Enabled' if session.repo_map else 'Disabled'} (budget: {session.repo_map_tokens} tokens)")
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
   table.add_row("API Request Timeout", f"{session.api_timeout} seconds")
@@ -375,6 +379,13 @@ def show_tools(session: Any):
   for tool in sorted_tools:
     func = tool["function"]
     table.add_row(func["name"], func["description"])
+
+  if hasattr(session, "mcp_manager") and session.mcp_manager:
+    mcp_tools = sorted(session.mcp_manager.get_tools_schema(), key=lambda t: t["function"]["name"])
+    for tool in mcp_tools:
+      func = tool["function"]
+      table.add_row(func["name"], func["description"])
+
   session._print(table)
 
 

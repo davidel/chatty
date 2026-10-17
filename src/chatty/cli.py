@@ -170,6 +170,17 @@ def main():
     help="Automatically approve file changes without interactive prompt."
   )
   parser.add_argument(
+    "--mcp-config",
+    default=None,
+    help="Path to an MCP (Model Context Protocol) JSON configuration file."
+  )
+  parser.add_argument(
+    "--mcp",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Enable or disable Model Context Protocol (MCP) server integration (default: True)."
+  )
+  parser.add_argument(
     "--max-thinking-chars",
     type=int,
     default=12000,
@@ -367,7 +378,9 @@ def main():
     docker_build=args.docker_build,
     docker_host=args.docker_host,
     docker_reset=args.docker_reset,
-    docker_persistent=not args.docker_ephemeral
+    docker_persistent=not args.docker_ephemeral,
+    mcp_config=args.mcp_config,
+    enable_mcp=args.mcp
   ) as chat_session:
     if not args.headless:
       chat_session.start_loop()
