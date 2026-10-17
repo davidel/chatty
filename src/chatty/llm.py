@@ -25,522 +25,6 @@ console = Console()
 
 from chatty.providers import LiteLLMClientStub
 
-def _invalidate_token_cache(self):
-  self._cached_history_tokens = None
-
-
-def count_tokens_estimate(self, text: str) -> int:
-  """Estimates the token count of a string using the dynamic token_to_char_ratio."""
-  ratio = getattr(self, "token_to_char_ratio", 0.25)
-  return int(len(text) * ratio)
-
-
-def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
-  total_tokens = 0
-  if messages:
-    sys_msg = messages[0]
-    total_tokens += self.count_tokens_estimate(sys_msg.get("content") or "")
-    for msg in messages[1:]:
-      content = msg.get("content") or ""
-      if msg.get("tool_calls"):
-        content += json.dumps(msg["tool_calls"])
-      if msg.get("tool_call_id"):
-        content += msg["tool_call_id"]
-      for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
-        if msg.get(field):
-          content += str(msg[field])
-      total_tokens += self.count_tokens_estimate(content) + 12
-  return total_tokens
-
-
-def init_client(self):
-  """Initializes or updates the OpenAI client based on active settings."""
-  self.client = self.provider_instance.init_client(self.url, self.api_key)
-
-
-def _create_completion(self, **kwargs) -> Any:
-  """Intercepts and routes chat completion requests to litellm."""
-  # If the client is mocked (e.g. in unit tests), bypass LiteLLM and call the mock directly
-  client_type = type(self.client).__name__
-  if client_type in ("MagicMock", "Mock") or hasattr(self.client, "_mock_name"):
-    return self.client.chat.completions.create(**kwargs)
-
-  import litellm
-  litellm.set_verbose = False
-  litellm.suppress_logging = True
-  litellm.suppress_debug_info = True
-  logging.getLogger("LiteLLM").setLevel(logging.WARNING)
-
-  actual_model = kwargs["model"]
-  
-  # Resolve the correct LiteLLM model prefix based on the provider
-  litellm_model = self.provider_instance.get_litellm_model_prefix(actual_model)
-
-  # Build litellm arguments
-  litellm_kwargs = dict(kwargs)
-  litellm_kwargs["model"] = litellm_model
-  
-  # Map standard client parameters
-  if getattr(self.client, "api_key", None):
-    litellm_kwargs["api_key"] = self.client.api_key
-  
-  if getattr(self.client, "base_url", None):
-    litellm_kwargs["api_base"] = self.client.base_url
-
-  if getattr(self.client, "default_headers", None):
-    litellm_kwargs["headers"] = self.client.default_headers
-
-  timeout = getattr(self.client, "timeout", None) or getattr(self.config, "api_timeout", 60.0)
-  litellm_kwargs["timeout"] = timeout
-
-  logger.info(f"Sending API request to {self.provider} (model={actual_model}, timeout={timeout:.1f}s)...")
-  resp = litellm.completion(**litellm_kwargs)
-  if kwargs.get("stream", False):
-    from chatty.utils import TimeoutStreamWrapper
-    return TimeoutStreamWrapper(resp, timeout=timeout)
-  return resp
-
-
-def _throttle_request(self):
-  """Ensures at least api_delay seconds have elapsed since the last API request or response."""
-  now = time.time()
-  elapsed = now - self.last_api_call_time
-  min_delay = getattr(self, "api_delay", 2.5)
-  if elapsed < min_delay:
-    sleep_needed = min_delay - elapsed
-    logger.info(f"Pacing API requests: sleeping for {sleep_needed:.2f}s...")
-    time.sleep(sleep_needed)
-  self.last_api_call_time = time.time()
-
-
-def _format_api_error(self, e: Exception) -> str:
-  """Formats an API exception, appending rate-limit headers if available."""
-  err_msg = str(e)
-  response = getattr(e, "response", None)
-  if response is not None:
-    headers = getattr(response, "headers", None)
-    if headers:
-      rate_limit_info = []
-      for header_name in ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after"]:
-        val = headers.get(header_name)
-        if val is not None:
-          rate_limit_info.append(f"{header_name}: {val}")
-      if rate_limit_info:
-        err_msg += f" | Headers: ({', '.join(rate_limit_info)})"
-  return err_msg
-
-
-def _is_retryable_exception(self, e: Exception) -> bool:
-  """Checks if an API exception is transient or rate-limit related and should be retried."""
-  err_msg = str(e).lower()
-  if isinstance(e, (TimeoutError, openai.APITimeoutError, openai.APIConnectionError)):
-    return True
-  if isinstance(e, openai.RateLimitError):
-    return True
-  if "timed out" in err_msg or "timeout" in err_msg:
-    return True
-  if isinstance(e, openai.APIStatusError):
-    status_code = getattr(e, "status_code", None)
-    if status_code is not None:
-      if status_code >= 500 or status_code == 429:
-        return True
-      if status_code == 400:
-        indicators = [
-          "high-frequency", "non-compliant", "rate limit", "rate-limit",
-          "rate_limited", "rate-limited", "too many requests", "comply with the platform",
-          "usage agreement", "appeal, contact", "provider returned error",
-          "risk_control", "risk control"
-        ]
-        if any(ind in err_msg for ind in indicators):
-          return True
-  if isinstance(e, openai.APIError):
-    indicators = [
-      "high-frequency", "non-compliant", "rate limit", "rate-limit",
-      "rate_limited", "rate-limited", "too many requests", "comply with the platform",
-      "usage agreement", "appeal, contact", "provider returned error",
-      "risk_control", "risk control"
-    ]
-    if any(ind in err_msg for ind in indicators):
-      return True
-  return False
-
-
-def _resolve_model_and_provider(self, model_name: str) -> Tuple[str, Optional[Dict[str, Any]]]:
-  """Resolves model name and provider preferences (if colon syntax is present)."""
-  actual_model = model_name
-  extra_body: Dict[str, Any] = {}
-
-  if hasattr(self, "provider_instance") and hasattr(self.provider_instance, "get_extra_body"):
-    prov_extra = self.provider_instance.get_extra_body(model_name)
-    if prov_extra:
-      extra_body.update(prov_extra)
-  elif getattr(self, "provider", None) == "openrouter":
-    extra_body["include_reasoning"] = True
-
-  if model_name and ":" in model_name:
-    parts = model_name.rsplit(":", 1)
-    base_model = parts[0]
-    suffix = parts[1]
-    if suffix not in ("free", "nitro", "floor"):
-      actual_model = base_model
-      extra_body["provider"] = {
-        "order": [suffix],
-        "allow_fallbacks": False
-      }
-
-  return actual_model, extra_body if extra_body else None
-
-
-def get_oracle_model(self) -> Optional[str]:
-  """Returns the configured oracle model, or None if not configured."""
-  return getattr(self.config, "oracle_model", None)
-
-
-def _expand_query_files(self, query: str) -> str:
-  """
-  Finds @PATH references in the query, resolves them within the sandbox,
-  and replaces them with the file's content (if the file exists and is readable).
-  """
-  from chatty.safety import get_safe_path
-  pattern = re.compile(r'(?<![a-zA-Z0-9_])@([a-zA-Z0-9_\-\.\/]*[a-zA-Z0-9_\-])')
-
-  def replace_match(match):
-    path = match.group(1)
-    try:
-      if not getattr(self, "sandbox", None):
-        return match.group(0)
-      safe_path = get_safe_path(self.sandbox, path, write=False)
-      if os.path.isfile(safe_path):
-        with open(safe_path, 'r', encoding='utf-8', errors='replace') as f:
-          content = f.read()
-        return f"\n--- START OF FILE {path} ---\n{content}\n--- END OF FILE {path} ---\n"
-    except Exception as e:
-      return f"\n[Error reading file {path}: {str(e)}]\n"
-    return match.group(0)
-
-  return pattern.sub(replace_match, query)
-
-
-def consult_oracle(self, query: str) -> str:
-  """Consults an oracle model for suggestions/assistance."""
-  oracle_model = self.get_oracle_model()
-  if not oracle_model:
-    return "Oracle is not configured. Ask the user to configure an oracle model."
-  expanded_query = _expand_query_files(self, query)
-  messages = [
-    {
-      "role": "system",
-      "content": (
-        "You are an AI oracle. You are assisting another AI agent that is currently "
-        "stuck or needs advice on a difficult logic, programming, or reasoning step. "
-        "Provide clear, concise, and highly accurate suggestions, code, or solutions "
-        "to help the agent proceed."
-      )
-    },
-    {
-      "role": "user",
-      "content": expanded_query
-    }
-  ]
-  logger.info(f"Consulting oracle (model={oracle_model}) with query: {query}")
-  content_accumulated = ""
-  panels = [{"title": "🔮 Oracle", "content": "Connecting to Oracle LLM...", "border_style": "purple"}]
-  max_retries = 3
-  for attempt in range(1, max_retries + 1):
-    try:
-      with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
-        actual_model, extra_body = self._resolve_model_and_provider(oracle_model)
-        self._throttle_request()
-        kwargs = {
-          "model": actual_model,
-          "messages": messages,
-          "stream": True
-        }
-        if extra_body:
-          kwargs["extra_body"] = extra_body
-        stream = self._create_completion(**kwargs)
-        usage_metadata = None
-        for chunk in stream:
-          if hasattr(chunk, "usage") and chunk.usage:
-            usage_metadata = chunk.usage
-          elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
-            usage_metadata = chunk.model_extra["usage"]
-          if not chunk.choices:
-            continue
-          choice = chunk.choices[0]
-          delta = choice.delta
-          if delta.content:
-            content_accumulated += delta.content
-            panels[0]["content"] = content_accumulated
-            live.update(LiveScreenLayout(panels, None))
-      
-      # Update cumulative token counts for Oracle
-      p_tok = None
-      c_tok = None
-      if usage_metadata:
-        p_tok = getattr(usage_metadata, "prompt_tokens", None)
-        if p_tok is None and isinstance(usage_metadata, dict):
-          p_tok = usage_metadata.get("prompt_tokens")
-        c_tok = getattr(usage_metadata, "completion_tokens", None)
-        if c_tok is None and isinstance(usage_metadata, dict):
-          c_tok = usage_metadata.get("completion_tokens")
-
-      if p_tok is None:
-        p_tok = self._calculate_tokens_for_messages(messages)
-      else:
-        # Refine token_to_char_ratio using Moving Average
-        prompt_chars = len(json.dumps(messages))
-        if prompt_chars > 0:
-          current_ratio = p_tok / prompt_chars
-          self.token_to_char_ratio = 0.8 * self.token_to_char_ratio + 0.2 * current_ratio
-
-      if c_tok is None:
-        c_tok = self.count_tokens_estimate(content_accumulated)
-
-      self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
-      self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
-
-      # Model specific usage update
-      oracle_model = self.get_oracle_model() or self.model
-      if not hasattr(self, "model_usage"):
-        self.model_usage = {}
-      if oracle_model not in self.model_usage:
-        self.model_usage[oracle_model] = {"prompt_tokens": 0, "completion_tokens": 0}
-      self.model_usage[oracle_model]["prompt_tokens"] += p_tok
-      self.model_usage[oracle_model]["completion_tokens"] += c_tok
-
-      self.last_api_call_time = time.time()
-      if content_accumulated:
-        self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
-      else:
-        self._print("[bold red]Oracle returned an empty response.[/bold red]")
-      break
-    except Exception as e:
-      self.last_api_call_time = time.time()
-      logger.exception("Error during oracle consultation")
-      if attempt < max_retries and self._is_retryable_exception(e):
-        err_msg = str(e).lower()
-        is_rate_limit = any(ind in err_msg for ind in [
-          "rate limit", "rate-limit", "rate_limited", "rate-limited",
-          "too many requests", "high-frequency", "risk_control", "risk control"
-        ])
-        backoff_time = 5 * (2 ** attempt) if is_rate_limit else 2 ** attempt
-        formatted_err = self._format_api_error(e)
-        self._print(f"[bold yellow]⚠️  Error calling Oracle API: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
-        time.sleep(backoff_time)
-        content_accumulated = ""
-        continue
-      else:
-        formatted_err = self._format_api_error(e)
-        err_msg = f"Error during oracle consultation: {formatted_err}"
-        self._print(f"[bold red]{err_msg}[/bold red]")
-        return err_msg
-  return content_accumulated or "Error: Oracle returned an empty response."
-
-
-def _clean_assistant_message(self, msg: Dict[str, Any]) -> None:
-  """Strips verbose thinking/reasoning metadata from the assistant message before sending to the LLM API."""
-  self.provider_instance.clean_assistant_message(msg)
-
-
-def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
-  """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
-  sys_prompt = self.get_active_system_prompt()
-  system_msg = {"role": "system", "content": sys_prompt}
-  if self.prompt_caching:
-    system_msg["cache_control"] = {"type": "ephemeral"}
-  sys_tokens = self.count_tokens_estimate(sys_prompt)
-  
-  if sys_tokens >= self.context_size:
-    return [system_msg]
-    
-  processed_messages = []
-  total_msgs = len(self.messages)
-  
-  for idx, msg in enumerate(self.messages):
-    cloned_msg = dict(msg)
-    # Compress tool outputs that are not part of the active window
-    if cloned_msg.get("role") == "tool" and idx < total_msgs - self.history_keep_messages:
-      content = cloned_msg.get("content") or ""
-      if len(content) > self.max_history_tool_chars:
-        half = self.max_history_tool_chars // 2
-        truncated_len = len(content) - self.max_history_tool_chars
-        cloned_msg["content"] = (
-          f"{content[:half]}\n\n"
-          f"... [TRUNCATED {truncated_len} CHARACTERS OF HISTORICAL TOOL OUTPUT] ...\n\n"
-          f"{content[-half:]}"
-        )
-    if cloned_msg.get("role") == "assistant":
-      self._clean_assistant_message(cloned_msg)
-    processed_messages.append(cloned_msg)
-    
-  pruned = []
-  accumulated_tokens = sys_tokens
-  
-  # Process from newest to oldest
-  for msg in reversed(processed_messages):
-    content = msg.get("content") or ""
-    # Estimate tool call tokens
-    if msg.get("tool_calls"):
-      content += json.dumps(msg["tool_calls"])
-    if msg.get("tool_call_id"):
-      content += msg["tool_call_id"]
-      
-    msg_tokens = self.count_tokens_estimate(content) + 12  # add safety overhead per message structure
-    
-    if accumulated_tokens + msg_tokens > self.context_size:
-      break
-      
-    pruned.insert(0, msg)
-    accumulated_tokens += msg_tokens
-    
-  if log:
-    logger.info(f"Pruning history: kept {len(pruned)} out of {total_msgs} messages (accumulated tokens: {accumulated_tokens})")
-    pruned_count = total_msgs - len(pruned)
-    if pruned_count > 0:
-      logger.warning(f"Context window limit reached. Pruned {pruned_count} messages from history.")
-      self._print(
-        f"\n[bold yellow]⚠️  Context Warning: {pruned_count} older message(s) were pruned from history "
-        f"to fit the context size limit ({self.context_size} tokens).[/bold yellow]"
-      )
-      # If the very first user prompt is no longer in the pruned message history
-      if self.messages and self.messages[0] not in pruned:
-        self._print(
-          "[bold red]⚠️  Critical: Your initial prompt/instructions have been pruned from context! "
-          "The AI may lose track of the overall goal. Consider running '/compress' to reload a summary recap.[/bold red]\n"
-        )
-  # Filter orphaned tool messages
-  defined_ids = set()
-  for msg in pruned:
-    if msg.get("role") == "assistant" and msg.get("tool_calls"):
-      for tc in msg["tool_calls"]:
-        defined_ids.add(tc.get("id"))
-        
-  final_pruned = []
-  for msg in pruned:
-    if msg.get("role") == "tool":
-      t_id = msg.get("tool_call_id")
-      if t_id not in defined_ids:
-        continue
-    final_pruned.append(msg)
-    
-  if self.prompt_caching and final_pruned:
-    final_pruned = [dict(msg) for msg in final_pruned]
-    final_pruned[-1]["cache_control"] = {"type": "ephemeral"}
-    if len(final_pruned) >= 2:
-      final_pruned[-2]["cache_control"] = {"type": "ephemeral"}
-      
-  return [system_msg] + final_pruned
-
-
-def _log_llm_request(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None) -> None:
-  """Logs detailed information about the LLM request in DEBUG mode."""
-  if not logger.isEnabledFor(logging.DEBUG):
-    return
-
-  # Mask headers
-  headers = getattr(self.client, "default_headers", {})
-  masked_headers = {}
-  for k, v in headers.items():
-    if k.lower() in ("authorization", "api-key", "x-api-key"):
-      if isinstance(v, str):
-        if len(v) > 12:
-          masked_headers[k] = v[:8] + "..." + v[-4:]
-        else:
-          masked_headers[k] = "..."
-      else:
-        masked_headers[k] = "..."
-    else:
-      masked_headers[k] = v
-
-  # Mask API key
-  api_key = getattr(self.client, "api_key", None)
-  masked_key = "None"
-  if api_key:
-    if len(api_key) > 12:
-      masked_key = api_key[:8] + "..." + api_key[-4:]
-    else:
-      masked_key = "..."
-
-  logger.debug("=== LLM Request Details ===")
-  logger.debug(f"Provider: {self.provider}")
-  logger.debug(f"Model: {self.model}")
-  logger.debug(f"Base URL: {getattr(self.client, 'base_url', 'Unknown')}")
-  logger.debug(f"API Key: {masked_key}")
-  logger.debug(f"Default Headers: {masked_headers}")
-  logger.debug(f"Timeout: {getattr(self.client, 'timeout', 'Default')}")
-  logger.debug(f"Max Retries: {getattr(self.client, 'max_retries', 'Default')}")
-  logger.debug(f"Request Messages ({len(messages)}):")
-  try:
-    logger.debug(json.dumps(messages, indent=2, default=str))
-  except Exception as e:
-    logger.debug(f"Error serializing request messages: {e}")
-    logger.debug(str(messages))
-
-  if tools:
-    logger.debug(f"Request Tools ({len(tools)}):")
-    try:
-      logger.debug(json.dumps(tools, indent=2, default=str))
-    except Exception as e:
-      logger.debug(f"Error serializing request tools: {e}")
-      logger.debug(str(tools))
-  else:
-    logger.debug("Request Tools: None")
-  logger.debug("===========================")
-
-
-def _log_llm_response_summary(
-  self,
-  content_accumulated: str,
-  tool_calls_accumulated: List[Dict[str, Any]],
-  extra_fields_accumulated: Dict[str, Any],
-  finish_reason: Optional[str] = None,
-  usage: Optional[Any] = None,
-  response_model: Optional[str] = None,
-  system_fingerprint: Optional[str] = None,
-  chunk_id: Optional[str] = None
-) -> None:
-  """Logs detailed summary of the LLM response in DEBUG mode."""
-  if not logger.isEnabledFor(logging.DEBUG):
-    return
-
-  logger.debug("=== LLM Response Details ===")
-  logger.debug(f"Chunk ID: {chunk_id}")
-  logger.debug(f"Response Model: {response_model}")
-  logger.debug(f"System Fingerprint: {system_fingerprint}")
-  logger.debug(f"Finish Reason: {finish_reason}")
-
-  if usage:
-    if hasattr(usage, "prompt_tokens"):
-      logger.debug(f"Usage: prompt_tokens={usage.prompt_tokens}, completion_tokens={usage.completion_tokens}, total_tokens={usage.total_tokens}")
-    elif isinstance(usage, dict):
-      logger.debug(f"Usage: prompt_tokens={usage.get('prompt_tokens')}, completion_tokens={usage.get('completion_tokens')}, total_tokens={usage.get('total_tokens')}")
-    else:
-      logger.debug(f"Usage: {usage}")
-  else:
-    logger.debug("Usage: Not provided/available")
-
-  for field, val in extra_fields_accumulated.items():
-    if val is not None:
-      logger.debug(f"Extra Field ({field}): {val}")
-
-  if content_accumulated:
-    logger.debug(f"Assistant response content ({len(content_accumulated)} chars):")
-    logger.debug(content_accumulated)
-  else:
-    logger.debug("Assistant response content: None")
-
-  if tool_calls_accumulated:
-    logger.debug(f"Assistant response tool calls ({len(tool_calls_accumulated)}):")
-    try:
-      logger.debug(json.dumps(tool_calls_accumulated, indent=2, default=str))
-    except Exception as e:
-      logger.debug(f"Error serializing tool calls: {e}")
-      logger.debug(str(tool_calls_accumulated))
-  else:
-    logger.debug("Assistant response tool calls: None")
-  logger.debug("============================")
-
 
 def is_safe_to_interrupt(text: str) -> bool:
   """Checks if the accumulated text is at a safe sentence/markdown boundary to interrupt."""
@@ -579,7 +63,6 @@ def is_safe_to_interrupt(text: str) -> bool:
 
   return False
 
-
 def detect_repetition_loop(text: str) -> bool:
   """Detects if the streaming text suffix contains repeating blocks indicating an infinite loop."""
   n = len(text)
@@ -599,7 +82,6 @@ def detect_repetition_loop(text: str) -> bool:
         return True
   return False
 
-
 class ThinkingBudgetExceeded(RuntimeError):
   """Raised when the LLM's internal thinking stream exceeds the configured limit."""
   def __init__(self, message: str, accumulated_thinking: str):
@@ -607,364 +89,248 @@ class ThinkingBudgetExceeded(RuntimeError):
     self.accumulated_thinking = accumulated_thinking
 
 
-def run_llm_cycle(self):
-  """Executes a full inference cycle, resolving tool calls recursively."""
-  self.load_skills()
-  max_tool_loops = self.max_loops
-  loop_count = 0
-  logger.info(f"Starting LLM cycle. Max sequential tool loops: {max_tool_loops}")
-  whitelist_thinking_this_turn = False
-  
-  while loop_count < max_tool_loops:
-    self.current_loop = loop_count + 1
-    max_retries = 3
-    api_succeeded = False
-    finish_reason = None
-    
-    last_aborted_thinking = None
-    for attempt in range(1, max_retries + 1):
-      # Prepare message payloads based on limit settings
-      active_messages = self.prune_history()
-      
-      # If this is a retry and the last message in active_messages is a tool message,
-      # append a temporary user message nudge to bypass trailing tool message chat template issues
-      if attempt > 1 and active_messages and active_messages[-1].get("role") == "tool":
-        active_messages.append({
-          "role": "user",
-          "content": "Please continue the task using the tool output above."
-        })
-      
-      # If the previous attempt was aborted due to an internal thinking loop, feed it back
-      if last_aborted_thinking:
-        nudge_content = (
-          "⚠️ The system aborted your previous attempt because you got stuck in an internal thinking loop. "
-          "Review your thinking path below, identify the repetition/deadlock, and use a completely different approach or respond directly:\n\n"
-          f"--- ABORTED THINKING PATH ---\n{last_aborted_thinking}\n------------------------------"
-        )
-        if active_messages and active_messages[-1].get("role") == "user":
-          last_msg = active_messages[-1]
-          if last_msg.get("content"):
-            last_msg["content"] = f"{last_msg['content']}\n\n{nudge_content}"
-          else:
-            last_msg["content"] = nudge_content
-        else:
-          active_messages.append({
-            "role": "user",
-            "content": nudge_content
-          })
-        last_aborted_thinking = None
-      
-      # Cache token count for the status bar during streaming
-      self._cached_history_tokens = self._calculate_tokens_for_messages(active_messages)
+class LLMMixin:
+  """Mixin providing LLM inference, token accounting, and streaming execution for ChatbotSession."""
 
-      # Start LLM stream call
-      tool_calls_accumulated = []
-      content_accumulated = ""
-      reasoning_accumulated = ""
-      extra_fields_accumulated = {
-        "reasoning": None,
-        "reasoning_content": None,
-        "reasoning_details": None,
-        "thought_signature": None
-      }
-      
-      logger.info(f"Loop {loop_count + 1}/{max_tool_loops} (Attempt {attempt}/{max_retries}): Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
+  def _invalidate_token_cache(self):
+    self._cached_history_tokens = None
+
+  def count_tokens_estimate(self, text: str) -> int:
+    """Estimates the token count of a string using the dynamic token_to_char_ratio."""
+    ratio = getattr(self, "token_to_char_ratio", 0.25)
+    return int(len(text) * ratio)
+
+  def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
+    total_tokens = 0
+    if messages:
+      sys_msg = messages[0]
+      total_tokens += self.count_tokens_estimate(sys_msg.get("content") or "")
+      for msg in messages[1:]:
+        content = msg.get("content") or ""
+        if msg.get("tool_calls"):
+          content += json.dumps(msg["tool_calls"])
+        if msg.get("tool_call_id"):
+          content += msg["tool_call_id"]
+        for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
+          if msg.get(field):
+            content += str(msg[field])
+        total_tokens += self.count_tokens_estimate(content) + 12
+    return total_tokens
+
+  def init_client(self):
+    """Initializes or updates the OpenAI client based on active settings."""
+    self.client = self.provider_instance.init_client(self.url, self.api_key)
+
+  def _create_completion(self, **kwargs) -> Any:
+    """Intercepts and routes chat completion requests to litellm."""
+    # If the client is mocked (e.g. in unit tests), bypass LiteLLM and call the mock directly
+    client_type = type(self.client).__name__
+    if client_type in ("MagicMock", "Mock") or hasattr(self.client, "_mock_name"):
+      return self.client.chat.completions.create(**kwargs)
+
+    import litellm
+    litellm.set_verbose = False
+    litellm.suppress_logging = True
+    litellm.suppress_debug_info = True
+    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+
+    actual_model = kwargs["model"]
+
+    # Resolve the correct LiteLLM model prefix based on the provider
+    litellm_model = self.provider_instance.get_litellm_model_prefix(actual_model)
+
+    # Build litellm arguments
+    litellm_kwargs = dict(kwargs)
+    litellm_kwargs["model"] = litellm_model
+
+    # Map standard client parameters
+    if getattr(self.client, "api_key", None):
+      litellm_kwargs["api_key"] = self.client.api_key
+
+    if getattr(self.client, "base_url", None):
+      litellm_kwargs["api_base"] = self.client.base_url
+
+    if getattr(self.client, "default_headers", None):
+      litellm_kwargs["headers"] = self.client.default_headers
+
+    timeout = getattr(self.client, "timeout", None) or getattr(self.config, "api_timeout", 60.0)
+    litellm_kwargs["timeout"] = timeout
+
+    logger.info(f"Sending API request to {self.provider} (model={actual_model}, timeout={timeout:.1f}s)...")
+    resp = litellm.completion(**litellm_kwargs)
+    if kwargs.get("stream", False):
+      from chatty.utils import TimeoutStreamWrapper
+      return TimeoutStreamWrapper(resp, timeout=timeout)
+    return resp
+
+  def _throttle_request(self):
+    """Ensures at least api_delay seconds have elapsed since the last API request or response."""
+    now = time.time()
+    elapsed = now - self.last_api_call_time
+    min_delay = getattr(self, "api_delay", 2.5)
+    if elapsed < min_delay:
+      sleep_needed = min_delay - elapsed
+      logger.info(f"Pacing API requests: sleeping for {sleep_needed:.2f}s...")
+      time.sleep(sleep_needed)
+    self.last_api_call_time = time.time()
+
+  def _format_api_error(self, e: Exception) -> str:
+    """Formats an API exception, appending rate-limit headers if available."""
+    err_msg = str(e)
+    response = getattr(e, "response", None)
+    if response is not None:
+      headers = getattr(response, "headers", None)
+      if headers:
+        rate_limit_info = []
+        for header_name in ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after"]:
+          val = headers.get(header_name)
+          if val is not None:
+            rate_limit_info.append(f"{header_name}: {val}")
+        if rate_limit_info:
+          err_msg += f" | Headers: ({', '.join(rate_limit_info)})"
+    return err_msg
+
+  def _is_retryable_exception(self, e: Exception) -> bool:
+    """Checks if an API exception is transient or rate-limit related and should be retried."""
+    err_msg = str(e).lower()
+    if isinstance(e, (TimeoutError, openai.APITimeoutError, openai.APIConnectionError)):
+      return True
+    if isinstance(e, openai.RateLimitError):
+      return True
+    if "timed out" in err_msg or "timeout" in err_msg:
+      return True
+    if isinstance(e, openai.APIStatusError):
+      status_code = getattr(e, "status_code", None)
+      if status_code is not None:
+        if status_code >= 500 or status_code == 429:
+          return True
+        if status_code == 400:
+          indicators = [
+            "high-frequency", "non-compliant", "rate limit", "rate-limit",
+            "rate_limited", "rate-limited", "too many requests", "comply with the platform",
+            "usage agreement", "appeal, contact", "provider returned error",
+            "risk_control", "risk control"
+          ]
+          if any(ind in err_msg for ind in indicators):
+            return True
+    if isinstance(e, openai.APIError):
+      indicators = [
+        "high-frequency", "non-compliant", "rate limit", "rate-limit",
+        "rate_limited", "rate-limited", "too many requests", "comply with the platform",
+        "usage agreement", "appeal, contact", "provider returned error",
+        "risk_control", "risk control"
+      ]
+      if any(ind in err_msg for ind in indicators):
+        return True
+    return False
+
+  def _resolve_model_and_provider(self, model_name: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Resolves model name and provider preferences (if colon syntax is present)."""
+    actual_model = model_name
+    extra_body: Dict[str, Any] = {}
+
+    if hasattr(self, "provider_instance") and hasattr(self.provider_instance, "get_extra_body"):
+      prov_extra = self.provider_instance.get_extra_body(model_name)
+      if prov_extra:
+        extra_body.update(prov_extra)
+    elif getattr(self, "provider", None) == "openrouter":
+      extra_body["include_reasoning"] = True
+
+    if model_name and ":" in model_name:
+      parts = model_name.rsplit(":", 1)
+      base_model = parts[0]
+      suffix = parts[1]
+      if suffix not in ("free", "nitro", "floor"):
+        actual_model = base_model
+        extra_body["provider"] = {
+          "order": [suffix],
+          "allow_fallbacks": False
+        }
+
+    return actual_model, extra_body if extra_body else None
+
+  def get_oracle_model(self) -> Optional[str]:
+    """Returns the configured oracle model, or None if not configured."""
+    return getattr(self.config, "oracle_model", None)
+
+  def _expand_query_files(self, query: str) -> str:
+    """
+    Finds @PATH references in the query, resolves them within the sandbox,
+    and replaces them with the file's content (if the file exists and is readable).
+    """
+    from chatty.safety import get_safe_path
+    pattern = re.compile(r'(?<![a-zA-Z0-9_])@([a-zA-Z0-9_\-\.\/]*[a-zA-Z0-9_\-])')
+
+    def replace_match(match):
+      path = match.group(1)
       try:
-        # Live rendering console helper
-        panels = [{"title": "Assistant", "content": "Connecting to LLM...", "border_style": "green"}]
-        with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), 
-                           console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
-          self._active_live = live
-          # Log request details in DEBUG mode
-          self._log_llm_request(active_messages, self.get_tools())
-          
-          # Resolve model and provider
-          actual_model, extra_body = self._resolve_model_and_provider(self.model)
-          
+        if not getattr(self, "sandbox", None):
+          return match.group(0)
+        safe_path = get_safe_path(self.sandbox, path, write=False)
+        if os.path.isfile(safe_path):
+          with open(safe_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+          return f"\n--- START OF FILE {path} ---\n{content}\n--- END OF FILE {path} ---\n"
+      except Exception as e:
+        return f"\n[Error reading file {path}: {str(e)}]\n"
+      return match.group(0)
+
+    return pattern.sub(replace_match, query)
+
+  def consult_oracle(self, query: str) -> str:
+    """Consults an oracle model for suggestions/assistance."""
+    oracle_model = self.get_oracle_model()
+    if not oracle_model:
+      return "Oracle is not configured. Ask the user to configure an oracle model."
+    expanded_query = self._expand_query_files(query)
+    messages = [
+      {
+        "role": "system",
+        "content": (
+          "You are an AI oracle. You are assisting another AI agent that is currently "
+          "stuck or needs advice on a difficult logic, programming, or reasoning step. "
+          "Provide clear, concise, and highly accurate suggestions, code, or solutions "
+          "to help the agent proceed."
+        )
+      },
+      {
+        "role": "user",
+        "content": expanded_query
+      }
+    ]
+    logger.info(f"Consulting oracle (model={oracle_model}) with query: {query}")
+    content_accumulated = ""
+    panels = [{"title": "🔮 Oracle", "content": "Connecting to Oracle LLM...", "border_style": "purple"}]
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+      try:
+        with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
+          actual_model, extra_body = self._resolve_model_and_provider(oracle_model)
           self._throttle_request()
-          # Try calling with stream_options={"include_usage": True}
-          try:
-            kwargs = {
-              "model": actual_model,
-              "messages": active_messages,
-              "tools": self.get_tools(),
-              "stream": True,
-              "stream_options": {"include_usage": True}
-            }
-            if extra_body:
-              kwargs["extra_body"] = extra_body
-            stream = self._create_completion(**kwargs)
-          except Exception as e:
-            if self._is_retryable_exception(e):
-              raise
-            logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
-            self._throttle_request()
-            kwargs = {
-              "model": actual_model,
-              "messages": active_messages,
-              "tools": self.get_tools(),
-              "stream": True
-            }
-            try:
-              stream = self._create_completion(**kwargs)
-            except Exception as e2:
-              if self._is_retryable_exception(e2):
-                raise
-              if extra_body and "include_reasoning" in extra_body:
-                logger.debug(f"Failed with extra_body: {e2}. Retrying without include_reasoning.")
-                self._throttle_request()
-                fallback_extra = {k: v for k, v in extra_body.items() if k != "include_reasoning"}
-                if fallback_extra:
-                  kwargs["extra_body"] = fallback_extra
-                else:
-                  kwargs.pop("extra_body", None)
-                stream = self._create_completion(**kwargs)
-              else:
-                raise
-          
-          first_metadata_chunk = True
-          first_chunk = True
-          finish_reason = None
-          usage_metadata = None
-          chunk_id = None
-          resp_model = None
-          sys_fp = None
-          last_extra_fields = {
-            "reasoning": None,
-            "reasoning_content": None,
-            "reasoning_details": None,
-            "thought_signature": None
+          kwargs = {
+            "model": actual_model,
+            "messages": messages,
+            "stream": True
           }
-          current_max_thinking = getattr(self.config, "max_thinking_chars", 12000)
+          if extra_body:
+            kwargs["extra_body"] = extra_body
+          stream = self._create_completion(**kwargs)
+          usage_metadata = None
           for chunk in stream:
-            # Capture usage if present
             if hasattr(chunk, "usage") and chunk.usage:
               usage_metadata = chunk.usage
             elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
               usage_metadata = chunk.model_extra["usage"]
-
-            # Log metadata on first chunk
-            if first_metadata_chunk:
-              chunk_id = getattr(chunk, "id", None)
-              resp_model = getattr(chunk, "model", None)
-              sys_fp = getattr(chunk, "system_fingerprint", None)
-              logger.debug(
-                f"LLM response started. Chunk ID: {chunk_id}, Model: {resp_model}, System Fingerprint: {sys_fp}"
-              )
-              first_metadata_chunk = False
-
             if not chunk.choices:
               continue
             choice = chunk.choices[0]
             delta = choice.delta
-            if hasattr(choice, "finish_reason") and choice.finish_reason:
-              finish_reason = choice.finish_reason
-            
-            # Extract any OpenRouter extra fields for reasoning/thought
-            extra_fields = ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]
-            has_new_reasoning = False
-            for field in extra_fields:
-              val = getattr(delta, field, None)
-              if val is None and hasattr(delta, "model_extra") and delta.model_extra:
-                val = delta.model_extra.get(field)
-              if val is None and isinstance(delta, dict):
-                val = delta.get(field)
-                
-              if val is not None:
-                has_new_reasoning = True
-                
-                # Determine if we should append or replace to prevent duplicate metadata / emoji bloat
-                if field in ("reasoning", "reasoning_content"):
-                  if isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
-                    if val.startswith(extra_fields_accumulated[field]):
-                      # val is the full accumulated reasoning string so far
-                      extra_fields_accumulated[field] = val
-                    else:
-                      # val is a delta chunk. Check duplicate detection to avoid metadata/emoji bloat
-                      is_duplicate = (val == last_extra_fields[field])
-                      is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
-                      if not (is_duplicate and is_metadata_like):
-                        extra_fields_accumulated[field] += val
-                  else:
-                    extra_fields_accumulated[field] = val
-                else:
-                  extra_fields_accumulated[field] = val
-                  
-                last_extra_fields[field] = val
-            
-            # Process streaming content
             if delta.content:
               content_accumulated += delta.content
+              panels[0]["content"] = content_accumulated
+              live.update(LiveScreenLayout(panels, None))
 
-            # Process streaming reasoning/thought
-            reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
-                                     extra_fields_accumulated.get("reasoning") or "")
-            
-            # Guard against endless internal thinking loops
-            max_thinking_chars = getattr(self.config, "max_thinking_chars", 12000)
-            leeway = getattr(self.config, "max_thinking_leeway_chars", 2000)
-            
-            exceeded_budget = len(reasoning_accumulated) > current_max_thinking
-            exceeded_hard_limit = len(reasoning_accumulated) > (current_max_thinking + leeway)
-            
-            should_abort = False
-            if exceeded_hard_limit:
-              should_abort = True
-            elif exceeded_budget:
-              if is_safe_to_interrupt(reasoning_accumulated):
-                should_abort = True
-
-            if should_abort:
-              if whitelist_thinking_this_turn:
-                should_abort = False
-              elif not self.headless:
-                with self._pause_live():
-                  self._print("\n[bold yellow]⚠️  LLM exceeded internal thinking budget.[/bold yellow]")
-                  self._print(f"Accumulated thinking: {len(reasoning_accumulated)} characters (limit: {current_max_thinking} chars).")
-                  self._print("What would you like to do?")
-                  self._print(
-                    "  [bold red]\\[s][/bold red]top (abort thinking stream) / "
-                    "  [bold green]\\[l][/bold green]et this go (increase budget by another 12000 chars) / "
-                    "  [bold cyan]\\[w][/bold cyan]hitelist for the current turn: ",
-                    end=""
-                  )
-                  try:
-                    if sys.stdin.isatty():
-                      ready, _, _ = select.select([sys.stdin], [], [], 30.0)
-                      if ready:
-                        response = sys.stdin.readline().strip().lower()
-                      else:
-                        self._print("\n[bold red]⚠️  Timeout: No response received within 30 seconds. Aborting thinking stream to save tokens.[/bold red]")
-                        response = "s"
-                    else:
-                      response = input().strip().lower()
-                  except (KeyboardInterrupt, EOFError):
-                    response = "s"
-                  except Exception as e:
-                    logger.warning(f"Error during timed input select: {e}. Falling back to standard input.")
-                    try:
-                      response = input().strip().lower()
-                    except (KeyboardInterrupt, EOFError):
-                      response = "s"
-                  
-                  if response in ("l", "let"):
-                    current_max_thinking = len(reasoning_accumulated) + max_thinking_chars
-                    if hasattr(self, "config") and self.config is not None:
-                      self.config.max_thinking_chars = current_max_thinking
-                    should_abort = False
-                    logger.info(f"User allowed thinking to continue. New budget: {current_max_thinking} chars.")
-                  elif response in ("w", "whitelist"):
-                    whitelist_thinking_this_turn = True
-                    should_abort = False
-                    logger.info("User whitelisted thinking for the current turn.")
-                  else:
-                    should_abort = True
-                    logger.info("User decided to stop thinking. Aborting stream.")
-
-            # Check for repetition loops or exceeding absolute high ceiling
-            is_repeating = detect_repetition_loop(reasoning_accumulated)
-            exceeded_absolute_ceiling = len(reasoning_accumulated) > 48000
-            
-            if (is_repeating or exceeded_absolute_ceiling) and not content_accumulated and not delta.content and not tool_calls_accumulated and not delta.tool_calls:
-              logger.warning(f"Aborting stream: LLM got stuck in a repetitive loop or exceeded absolute thinking ceiling (len={len(reasoning_accumulated)}, repeating={is_repeating}).")
-              if not self.headless:
-                with self._pause_live():
-                  if is_repeating:
-                    self._print("\n[bold red]⚠️  LLM got stuck in an infinite thinking loop. Aborting attempt to self-correct...[/bold red]")
-                  else:
-                    self._print("\n[bold red]⚠️  LLM exceeded absolute thinking limit (48k chars). Aborting attempt to self-correct...[/bold red]")
-              if hasattr(stream, "close"):
-                try:
-                  stream.close()
-                except Exception:
-                  pass
-              raise ThinkingBudgetExceeded(
-                "LLM got stuck in an infinite thinking loop." if is_repeating else "LLM exceeded absolute thinking limit.",
-                reasoning_accumulated
-              )
-
-            if (should_abort 
-                and not content_accumulated 
-                and not delta.content 
-                and not tool_calls_accumulated 
-                and not delta.tool_calls):
-              logger.warning(f"Aborting stream: LLM exceeded maximum internal thinking budget of {current_max_thinking} chars (accumulated: {len(reasoning_accumulated)}).")
-              if hasattr(stream, "close"):
-                try:
-                  stream.close()
-                except Exception:
-                  pass
-              raise ThinkingBudgetExceeded(
-                "LLM exceeded maximum internal thinking budget.",
-                reasoning_accumulated
-              )
-            
-            if delta.content or has_new_reasoning:
-              first_chunk = False
-              panels = []
-              if reasoning_accumulated.strip():
-                panels.append({
-                  "title": "Thinking",
-                  "content": reasoning_accumulated,
-                  "border_style": "yellow"
-                })
-              if content_accumulated:
-                panels.append({
-                  "title": "Assistant",
-                  "content": content_accumulated,
-                  "border_style": "green"
-                })
-              
-              if panels:
-                live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
-                
-            # Process streaming tool calls
-            if delta.tool_calls:
-              first_chunk = False
-              for tc in delta.tool_calls:
-                idx = tc.index
-                while len(tool_calls_accumulated) <= idx:
-                  tool_calls_accumulated.append({
-                    "id": None,
-                    "type": "function",
-                    "function": {"name": "", "arguments": ""}
-                  })
-                
-                item = tool_calls_accumulated[idx]
-                if tc.id:
-                  item["id"] = tc.id
-                if tc.function:
-                  if tc.function.name:
-                    item["function"]["name"] += tc.function.name
-                  if tc.function.arguments:
-                    item["function"]["arguments"] += tc.function.arguments
-                      
-                # Render loading indicator
-                panels = [{
-                  "title": "System",
-                  "content": f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))",
-                  "border_style": "yellow"
-                }]
-                live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
-          # Remove status bar before exiting Live context
-          live.update(LiveScreenLayout(panels, None))
-        
-        # Reconstruct and print the final panels permanently to console
-        final_panels = []
-        if reasoning_accumulated.strip():
-          disp_reasoning = truncate_thinking_by_line(reasoning_accumulated)
-          final_panels.append(Panel(Markdown(disp_reasoning), title="Thinking", border_style="yellow"))
-        if content_accumulated:
-          final_panels.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
-        
-        if final_panels:
-          self._print(Group(*final_panels))
-        
-        if finish_reason == "length":
-          logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")
-          self._print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
-        
-        # Update cumulative token counts
+        # Update cumulative token counts for Oracle
         p_tok = None
         c_tok = None
         if usage_metadata:
@@ -976,64 +342,38 @@ def run_llm_cycle(self):
             c_tok = usage_metadata.get("completion_tokens")
 
         if p_tok is None:
-          p_tok = self._calculate_tokens_for_messages(active_messages)
+          p_tok = self._calculate_tokens_for_messages(messages)
         else:
           # Refine token_to_char_ratio using Moving Average
-          prompt_chars = len(json.dumps(active_messages))
+          prompt_chars = len(json.dumps(messages))
           if prompt_chars > 0:
             current_ratio = p_tok / prompt_chars
             self.token_to_char_ratio = 0.8 * self.token_to_char_ratio + 0.2 * current_ratio
 
         if c_tok is None:
-          out_content = content_accumulated or ""
-          reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
-                                   extra_fields_accumulated.get("reasoning") or "")
-          c_tok = self.count_tokens_estimate(out_content) + self.count_tokens_estimate(reasoning_accumulated)
+          c_tok = self.count_tokens_estimate(content_accumulated)
 
         self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
         self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
 
         # Model specific usage update
+        oracle_model = self.get_oracle_model() or self.model
         if not hasattr(self, "model_usage"):
           self.model_usage = {}
-        if self.model not in self.model_usage:
-          self.model_usage[self.model] = {"prompt_tokens": 0, "completion_tokens": 0}
-        self.model_usage[self.model]["prompt_tokens"] += p_tok
-        self.model_usage[self.model]["completion_tokens"] += c_tok
+        if oracle_model not in self.model_usage:
+          self.model_usage[oracle_model] = {"prompt_tokens": 0, "completion_tokens": 0}
+        self.model_usage[oracle_model]["prompt_tokens"] += p_tok
+        self.model_usage[oracle_model]["completion_tokens"] += c_tok
 
-        logger.info(
-          f"LLM call succeeded. Content size: {len(content_accumulated)} chars, "
-          f"Tool calls: {len(tool_calls_accumulated)}, "
-          f"Tokens this call: {p_tok} prompt, {c_tok} completion. "
-          f"Session cumulative: {self.cumulative_prompt_tokens} prompt, {self.cumulative_completion_tokens} completion."
-        )
-
-        self._log_llm_response_summary(
-          content_accumulated=content_accumulated,
-          tool_calls_accumulated=tool_calls_accumulated,
-          extra_fields_accumulated=extra_fields_accumulated,
-          finish_reason=finish_reason,
-          usage=usage_metadata,
-          response_model=resp_model,
-          system_fingerprint=sys_fp,
-          chunk_id=chunk_id
-        )
         self.last_api_call_time = time.time()
-      except ThinkingBudgetExceeded as e:
-        self.last_api_call_time = time.time()
-        logger.warning(f"Thinking budget exceeded on attempt {attempt}")
-        last_aborted_thinking = e.accumulated_thinking
-        if attempt < max_retries:
-          self._print(f"[bold yellow]⚠️  LLM exceeded internal thinking budget. Retrying with self-correction nudge (attempt {attempt}/{max_retries})...[/bold yellow]")
-          time.sleep(1)
-          continue
+        if content_accumulated:
+          self._print(Panel(Markdown(content_accumulated), title="🔮 Oracle", border_style="purple"))
         else:
-          self._print("[bold red]Error: LLM repeatedly exceeded internal thinking budget without producing output.[/bold red]")
-          break
+          self._print("[bold red]Oracle returned an empty response.[/bold red]")
+        break
       except Exception as e:
         self.last_api_call_time = time.time()
-        logger.exception("Error calling LLM API")
-        formatted_err = self._format_api_error(e)
+        logger.exception("Error during oracle consultation")
         if attempt < max_retries and self._is_retryable_exception(e):
           err_msg = str(e).lower()
           is_rate_limit = any(ind in err_msg for ind in [
@@ -1041,174 +381,838 @@ def run_llm_cycle(self):
             "too many requests", "high-frequency", "risk_control", "risk control"
           ])
           backoff_time = 5 * (2 ** attempt) if is_rate_limit else 2 ** attempt
-          self._print(f"[bold yellow]⚠️  Error calling API: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
+          formatted_err = self._format_api_error(e)
+          self._print(f"[bold yellow]⚠️  Error calling Oracle API: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
           time.sleep(backoff_time)
+          content_accumulated = ""
           continue
         else:
-          self._print(f"[bold red]Error calling API:[/bold red] {formatted_err}")
-          break
-      finally:
-        self._active_live = None
-          
-      # If we didn't receive structured tool calls, try to extract them from text content
-      if not tool_calls_accumulated and content_accumulated:
-        parsed_calls = self.extract_tool_calls_from_text(content_accumulated)
-        if parsed_calls:
-          tool_calls_accumulated = parsed_calls
-          content_accumulated = ""
-          
-      # Check if response was empty (no content, no tool calls)
-      is_empty_response = (not tool_calls_accumulated) and (not content_accumulated or not content_accumulated.strip())
-      
-      if not is_empty_response:
-        api_succeeded = True
+          formatted_err = self._format_api_error(e)
+          err_msg = f"Error during oracle consultation: {formatted_err}"
+          self._print(f"[bold red]{err_msg}[/bold red]")
+          return err_msg
+    return content_accumulated or "Error: Oracle returned an empty response."
+
+  def _clean_assistant_message(self, msg: Dict[str, Any]) -> None:
+    """Strips verbose thinking/reasoning metadata from the assistant message before sending to the LLM API."""
+    self.provider_instance.clean_assistant_message(msg)
+
+  def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
+    """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
+    sys_prompt = self.get_active_system_prompt()
+    system_msg = {"role": "system", "content": sys_prompt}
+    if self.prompt_caching:
+      system_msg["cache_control"] = {"type": "ephemeral"}
+    sys_tokens = self.count_tokens_estimate(sys_prompt)
+
+    if sys_tokens >= self.context_size:
+      return [system_msg]
+
+    processed_messages = []
+    total_msgs = len(self.messages)
+
+    for idx, msg in enumerate(self.messages):
+      cloned_msg = dict(msg)
+      # Compress tool outputs that are not part of the active window
+      if cloned_msg.get("role") == "tool" and idx < total_msgs - self.history_keep_messages:
+        content = cloned_msg.get("content") or ""
+        if len(content) > self.max_history_tool_chars:
+          half = self.max_history_tool_chars // 2
+          truncated_len = len(content) - self.max_history_tool_chars
+          cloned_msg["content"] = (
+            f"{content[:half]}\n\n"
+            f"... [TRUNCATED {truncated_len} CHARACTERS OF HISTORICAL TOOL OUTPUT] ...\n\n"
+            f"{content[-half:]}"
+          )
+      if cloned_msg.get("role") == "assistant":
+        self._clean_assistant_message(cloned_msg)
+      processed_messages.append(cloned_msg)
+
+    pruned = []
+    accumulated_tokens = sys_tokens
+
+    # Process from newest to oldest
+    for msg in reversed(processed_messages):
+      content = msg.get("content") or ""
+      # Estimate tool call tokens
+      if msg.get("tool_calls"):
+        content += json.dumps(msg["tool_calls"])
+      if msg.get("tool_call_id"):
+        content += msg["tool_call_id"]
+
+      msg_tokens = self.count_tokens_estimate(content) + 12  # add safety overhead per message structure
+
+      if accumulated_tokens + msg_tokens > self.context_size:
         break
-        
-      if attempt < max_retries:
-        logger.info(f"LLM returned an empty response on loop {self.current_loop} (attempt {attempt}/{max_retries}). Retrying in 2s...")
-        self._print(f"[bold yellow]⚠️  LLM returned an empty response. Retrying in 2s (attempt {attempt}/{max_retries})...[/bold yellow]")
-        time.sleep(2)
-      else:
-        logger.info(f"LLM returned multiple empty responses on loop {self.current_loop}. Breaking cycle.")
-        self._print("[bold red]❌  LLM returned multiple empty responses. Breaking cycle.[/bold red]")
-        
-    if not api_succeeded:
-      break
-            
-    # Ensure every accumulated tool call has a unique ID and valid JSON arguments
-    for tc in tool_calls_accumulated:
-      if not tc.get("id") or tc.get("id") == "call_text_parsed":
-        tc["id"] = f"call_{uuid.uuid4().hex[:12]}"
-      
-      func_obj = tc.get("function")
-      if isinstance(func_obj, dict):
-        t_args_raw = func_obj.get("arguments")
-        if not isinstance(t_args_raw, str):
-          func_obj["arguments"] = json.dumps(t_args_raw) if t_args_raw is not None else "{}"
+
+      pruned.insert(0, msg)
+      accumulated_tokens += msg_tokens
+
+    if log:
+      logger.info(f"Pruning history: kept {len(pruned)} out of {total_msgs} messages (accumulated tokens: {accumulated_tokens})")
+      pruned_count = total_msgs - len(pruned)
+      if pruned_count > 0:
+        logger.warning(f"Context window limit reached. Pruned {pruned_count} messages from history.")
+        self._print(
+          f"\n[bold yellow]⚠️  Context Warning: {pruned_count} older message(s) were pruned from history "
+          f"to fit the context size limit ({self.context_size} tokens).[/bold yellow]"
+        )
+        # If the very first user prompt is no longer in the pruned message history
+        if self.messages and self.messages[0] not in pruned:
+          self._print(
+            "[bold red]⚠️  Critical: Your initial prompt/instructions have been pruned from context! "
+            "The AI may lose track of the overall goal. Consider running '/compress' to reload a summary recap.[/bold red]\n"
+          )
+    # Filter orphaned tool messages
+    defined_ids = set()
+    for msg in pruned:
+      if msg.get("role") == "assistant" and msg.get("tool_calls"):
+        for tc in msg["tool_calls"]:
+          defined_ids.add(tc.get("id"))
+
+    final_pruned = []
+    for msg in pruned:
+      if msg.get("role") == "tool":
+        t_id = msg.get("tool_call_id")
+        if t_id not in defined_ids:
+          continue
+      final_pruned.append(msg)
+
+    if self.prompt_caching and final_pruned:
+      final_pruned = [dict(msg) for msg in final_pruned]
+      final_pruned[-1]["cache_control"] = {"type": "ephemeral"}
+      if len(final_pruned) >= 2:
+        final_pruned[-2]["cache_control"] = {"type": "ephemeral"}
+
+    return [system_msg] + final_pruned
+
+  def _log_llm_request(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None) -> None:
+    """Logs detailed information about the LLM request in DEBUG mode."""
+    if not logger.isEnabledFor(logging.DEBUG):
+      return
+
+    # Mask headers
+    headers = getattr(self.client, "default_headers", {})
+    masked_headers = {}
+    for k, v in headers.items():
+      if k.lower() in ("authorization", "api-key", "x-api-key"):
+        if isinstance(v, str):
+          if len(v) > 12:
+            masked_headers[k] = v[:8] + "..." + v[-4:]
+          else:
+            masked_headers[k] = "..."
         else:
-          try:
-            json.loads(t_args_raw)
-          except Exception:
-            try:
-              repaired = repair_json(t_args_raw)
-              json.loads(repaired)
-              func_obj["arguments"] = repaired
-            except Exception:
-              func_obj["arguments"] = "{}"
-            
-    # Construct assistant message record
-    assistant_msg = {"role": "assistant"}
-    if content_accumulated:
-      assistant_msg["content"] = content_accumulated
+          masked_headers[k] = "..."
+      else:
+        masked_headers[k] = v
+
+    # Mask API key
+    api_key = getattr(self.client, "api_key", None)
+    masked_key = "None"
+    if api_key:
+      if len(api_key) > 12:
+        masked_key = api_key[:8] + "..." + api_key[-4:]
+      else:
+        masked_key = "..."
+
+    logger.debug("=== LLM Request Details ===")
+    logger.debug(f"Provider: {self.provider}")
+    logger.debug(f"Model: {self.model}")
+    logger.debug(f"Base URL: {getattr(self.client, 'base_url', 'Unknown')}")
+    logger.debug(f"API Key: {masked_key}")
+    logger.debug(f"Default Headers: {masked_headers}")
+    logger.debug(f"Timeout: {getattr(self.client, 'timeout', 'Default')}")
+    logger.debug(f"Max Retries: {getattr(self.client, 'max_retries', 'Default')}")
+    logger.debug(f"Request Messages ({len(messages)}):")
+    try:
+      logger.debug(json.dumps(messages, indent=2, default=str))
+    except Exception as e:
+      logger.debug(f"Error serializing request messages: {e}")
+      logger.debug(str(messages))
+
+    if tools:
+      logger.debug(f"Request Tools ({len(tools)}):")
+      try:
+        logger.debug(json.dumps(tools, indent=2, default=str))
+      except Exception as e:
+        logger.debug(f"Error serializing request tools: {e}")
+        logger.debug(str(tools))
     else:
-      assistant_msg["content"] = None
-        
-    if tool_calls_accumulated:
-      assistant_msg["tool_calls"] = []
-      for tc in tool_calls_accumulated:
-        assistant_msg["tool_calls"].append({
-          "id": tc["id"],
-          "type": "function",
-          "function": {
-            "name": tc["function"]["name"],
-            "arguments": tc["function"]["arguments"]
-          }
-        })
-            
+      logger.debug("Request Tools: None")
+    logger.debug("===========================")
+
+  def _log_llm_response_summary(
+    self,
+    content_accumulated: str,
+    tool_calls_accumulated: List[Dict[str, Any]],
+    extra_fields_accumulated: Dict[str, Any],
+    finish_reason: Optional[str] = None,
+    usage: Optional[Any] = None,
+    response_model: Optional[str] = None,
+    system_fingerprint: Optional[str] = None,
+    chunk_id: Optional[str] = None
+  ) -> None:
+    """Logs detailed summary of the LLM response in DEBUG mode."""
+    if not logger.isEnabledFor(logging.DEBUG):
+      return
+
+    logger.debug("=== LLM Response Details ===")
+    logger.debug(f"Chunk ID: {chunk_id}")
+    logger.debug(f"Response Model: {response_model}")
+    logger.debug(f"System Fingerprint: {system_fingerprint}")
+    logger.debug(f"Finish Reason: {finish_reason}")
+
+    if usage:
+      if hasattr(usage, "prompt_tokens"):
+        logger.debug(f"Usage: prompt_tokens={usage.prompt_tokens}, completion_tokens={usage.completion_tokens}, total_tokens={usage.total_tokens}")
+      elif isinstance(usage, dict):
+        logger.debug(f"Usage: prompt_tokens={usage.get('prompt_tokens')}, completion_tokens={usage.get('completion_tokens')}, total_tokens={usage.get('total_tokens')}")
+      else:
+        logger.debug(f"Usage: {usage}")
+    else:
+      logger.debug("Usage: Not provided/available")
+
     for field, val in extra_fields_accumulated.items():
       if val is not None:
-        assistant_msg[field] = val
-          
-    self.messages.append(assistant_msg)
-    
-    # If the response was truncated due to output token limit, automatically continue
-    if finish_reason == "length":
-      logger.warning("LLM response was truncated (finish_reason='length'). Automatically continuing...")
-      self._print("[bold yellow]🔄  AI response was truncated because it reached the maximum output token limit. Automatically continuing...[/bold yellow]")
-      loop_count += 1
-      continue
-    
-    # If no tools called, we're finished with this turn
-    if not tool_calls_accumulated:
-      break
-        
-    # Otherwise, execute requested tools sequentially
-    for idx, tc in enumerate(tool_calls_accumulated):
-      if idx > 0:
-        time.sleep(0.5)
-      t_id = tc["id"]
-      t_name = tc["function"]["name"]
-      t_args_raw = tc["function"]["arguments"]
-      
-      try:
-        args_parsed = json.loads(t_args_raw) if t_args_raw else {}
-      except Exception:
-        try:
-          args_parsed = json.loads(repair_json(t_args_raw)) if t_args_raw else {}
-        except Exception as e:
-          args_parsed = {}
-          t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
-      else:
-        # Execute tool
-        token = active_session_var.set(self)
-        try:
-          if t_name in ("ask_question", "discover_context", "ask_oracle", "web_research"):
-            logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
-            t_result = execute_tool(t_name, args_parsed, self)
-          else:
-            panels = [{
-              "title": "🔧 Executing Tool",
-              "content": Text.from_markup(f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]"),
-              "border_style": "yellow"
-            }]
-            with optional_live(
-              LiveScreenLayout(panels, self.get_rich_status_bar()),
-              console=console,
-              enabled=not self.headless,
-              auto_refresh=False
-            ) as live:
-              self._active_live = live
-              try:
-                logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
-                t_result = execute_tool(t_name, args_parsed, self)
-              finally:
-                self._active_live = None
-              # Remove status bar before exiting Live context
-              live.update(LiveScreenLayout(panels, None), refresh=True)
-        finally:
-          active_session_var.reset(token)
-          self.temp_allowed_ro_paths.clear()
-          self.temp_allowed_rw_paths.clear()
-            
-      # Print result summary nicely
-      self._print(Panel(
-        Text(t_result),
-        title="🔧 Tool Result",
-        border_style="dim yellow"
-      ))
-      
-      truncated = "TRUNCATED" in t_result or "truncated" in t_result.lower() or "WARNING" in t_result
-      logger.info(f"Tool {t_name} (id={t_id}) completed. Result size: {len(t_result)} characters (truncated: {truncated})")
-      logger.debug(f"Tool {t_name} (id={t_id}) result content: {t_result}")
-      
-      # Record result for context
-      # We wrap tool output in a JSON object to prevent issues with gateways/models
-      # trying to parse raw code/braces as invalid JSON.
-      t_result_sanitized = sanitize_tool_output(t_result)
-      wrapped_content = json.dumps({"output": t_result_sanitized})
+        logger.debug(f"Extra Field ({field}): {val}")
 
-      self.messages.append({
-        "role": "tool",
-        "tool_call_id": t_id,
-        "name": t_name,
-        "content": wrapped_content
-      })
-        
-    loop_count += 1
-    
-  if loop_count >= max_tool_loops:
-    self._print("[bold red]Reached maximum sequential tool loop executions. Breaking cycle.[/bold red]")
-  self.current_loop = 0
+    if content_accumulated:
+      logger.debug(f"Assistant response content ({len(content_accumulated)} chars):")
+      logger.debug(content_accumulated)
+    else:
+      logger.debug("Assistant response content: None")
+
+    if tool_calls_accumulated:
+      logger.debug(f"Assistant response tool calls ({len(tool_calls_accumulated)}):")
+      try:
+        logger.debug(json.dumps(tool_calls_accumulated, indent=2, default=str))
+      except Exception as e:
+        logger.debug(f"Error serializing tool calls: {e}")
+        logger.debug(str(tool_calls_accumulated))
+    else:
+      logger.debug("Assistant response tool calls: None")
+    logger.debug("============================")
+
+  def run_llm_cycle(self):
+    """Executes a full inference cycle, resolving tool calls recursively."""
+    self.load_skills()
+    max_tool_loops = self.max_loops
+    loop_count = 0
+    logger.info(f"Starting LLM cycle. Max sequential tool loops: {max_tool_loops}")
+    whitelist_thinking_this_turn = False
+
+    while loop_count < max_tool_loops:
+      self.current_loop = loop_count + 1
+      max_retries = 3
+      api_succeeded = False
+      finish_reason = None
+
+      last_aborted_thinking = None
+      for attempt in range(1, max_retries + 1):
+        # Prepare message payloads based on limit settings
+        active_messages = self.prune_history()
+
+        # If this is a retry and the last message in active_messages is a tool message,
+        # append a temporary user message nudge to bypass trailing tool message chat template issues
+        if attempt > 1 and active_messages and active_messages[-1].get("role") == "tool":
+          active_messages.append({
+            "role": "user",
+            "content": "Please continue the task using the tool output above."
+          })
+
+        # If the previous attempt was aborted due to an internal thinking loop, feed it back
+        if last_aborted_thinking:
+          nudge_content = (
+            "⚠️ The system aborted your previous attempt because you got stuck in an internal thinking loop. "
+            "Review your thinking path below, identify the repetition/deadlock, and use a completely different approach or respond directly:\n\n"
+            f"--- ABORTED THINKING PATH ---\n{last_aborted_thinking}\n------------------------------"
+          )
+          if active_messages and active_messages[-1].get("role") == "user":
+            last_msg = active_messages[-1]
+            if last_msg.get("content"):
+              last_msg["content"] = f"{last_msg['content']}\n\n{nudge_content}"
+            else:
+              last_msg["content"] = nudge_content
+          else:
+            active_messages.append({
+              "role": "user",
+              "content": nudge_content
+            })
+          last_aborted_thinking = None
+
+        # Cache token count for the status bar during streaming
+        self._cached_history_tokens = self._calculate_tokens_for_messages(active_messages)
+
+        # Start LLM stream call
+        tool_calls_accumulated = []
+        content_accumulated = ""
+        reasoning_accumulated = ""
+        extra_fields_accumulated = {
+          "reasoning": None,
+          "reasoning_content": None,
+          "reasoning_details": None,
+          "thought_signature": None
+        }
+
+        logger.info(f"Loop {loop_count + 1}/{max_tool_loops} (Attempt {attempt}/{max_retries}): Sending request to LLM (model={self.model}) with {len(active_messages)} messages")
+        try:
+          # Live rendering console helper
+          panels = [{"title": "Assistant", "content": "Connecting to LLM...", "border_style": "green"}]
+          with optional_live(LiveScreenLayout(panels, self.get_rich_status_bar()), 
+                             console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
+            self._active_live = live
+            # Log request details in DEBUG mode
+            self._log_llm_request(active_messages, self.get_tools())
+
+            # Resolve model and provider
+            actual_model, extra_body = self._resolve_model_and_provider(self.model)
+
+            self._throttle_request()
+            # Try calling with stream_options={"include_usage": True}
+            try:
+              kwargs = {
+                "model": actual_model,
+                "messages": active_messages,
+                "tools": self.get_tools(),
+                "stream": True,
+                "stream_options": {"include_usage": True}
+              }
+              if extra_body:
+                kwargs["extra_body"] = extra_body
+              stream = self._create_completion(**kwargs)
+            except Exception as e:
+              if self._is_retryable_exception(e):
+                raise
+              logger.debug(f"Failed to call API with stream_options: {e}. Retrying without stream_options.")
+              self._throttle_request()
+              kwargs = {
+                "model": actual_model,
+                "messages": active_messages,
+                "tools": self.get_tools(),
+                "stream": True
+              }
+              try:
+                stream = self._create_completion(**kwargs)
+              except Exception as e2:
+                if self._is_retryable_exception(e2):
+                  raise
+                if extra_body and "include_reasoning" in extra_body:
+                  logger.debug(f"Failed with extra_body: {e2}. Retrying without include_reasoning.")
+                  self._throttle_request()
+                  fallback_extra = {k: v for k, v in extra_body.items() if k != "include_reasoning"}
+                  if fallback_extra:
+                    kwargs["extra_body"] = fallback_extra
+                  else:
+                    kwargs.pop("extra_body", None)
+                  stream = self._create_completion(**kwargs)
+                else:
+                  raise
+
+            first_metadata_chunk = True
+            first_chunk = True
+            finish_reason = None
+            usage_metadata = None
+            chunk_id = None
+            resp_model = None
+            sys_fp = None
+            last_extra_fields = {
+              "reasoning": None,
+              "reasoning_content": None,
+              "reasoning_details": None,
+              "thought_signature": None
+            }
+            current_max_thinking = getattr(self.config, "max_thinking_chars", 12000)
+            for chunk in stream:
+              # Capture usage if present
+              if hasattr(chunk, "usage") and chunk.usage:
+                usage_metadata = chunk.usage
+              elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+                usage_metadata = chunk.model_extra["usage"]
+
+              # Log metadata on first chunk
+              if first_metadata_chunk:
+                chunk_id = getattr(chunk, "id", None)
+                resp_model = getattr(chunk, "model", None)
+                sys_fp = getattr(chunk, "system_fingerprint", None)
+                logger.debug(
+                  f"LLM response started. Chunk ID: {chunk_id}, Model: {resp_model}, System Fingerprint: {sys_fp}"
+                )
+                first_metadata_chunk = False
+
+              if not chunk.choices:
+                continue
+              choice = chunk.choices[0]
+              delta = choice.delta
+              if hasattr(choice, "finish_reason") and choice.finish_reason:
+                finish_reason = choice.finish_reason
+
+              # Extract any OpenRouter extra fields for reasoning/thought
+              extra_fields = ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]
+              has_new_reasoning = False
+              for field in extra_fields:
+                val = getattr(delta, field, None)
+                if val is None and hasattr(delta, "model_extra") and delta.model_extra:
+                  val = delta.model_extra.get(field)
+                if val is None and isinstance(delta, dict):
+                  val = delta.get(field)
+
+                if val is not None:
+                  has_new_reasoning = True
+
+                  # Determine if we should append or replace to prevent duplicate metadata / emoji bloat
+                  if field in ("reasoning", "reasoning_content"):
+                    if isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
+                      if val.startswith(extra_fields_accumulated[field]):
+                        # val is the full accumulated reasoning string so far
+                        extra_fields_accumulated[field] = val
+                      else:
+                        # val is a delta chunk. Check duplicate detection to avoid metadata/emoji bloat
+                        is_duplicate = (val == last_extra_fields[field])
+                        is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
+                        if not (is_duplicate and is_metadata_like):
+                          extra_fields_accumulated[field] += val
+                    else:
+                      extra_fields_accumulated[field] = val
+                  else:
+                    extra_fields_accumulated[field] = val
+
+                  last_extra_fields[field] = val
+
+              # Process streaming content
+              if delta.content:
+                content_accumulated += delta.content
+
+              # Process streaming reasoning/thought
+              reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
+                                       extra_fields_accumulated.get("reasoning") or "")
+
+              # Guard against endless internal thinking loops
+              max_thinking_chars = getattr(self.config, "max_thinking_chars", 12000)
+              leeway = getattr(self.config, "max_thinking_leeway_chars", 2000)
+
+              exceeded_budget = len(reasoning_accumulated) > current_max_thinking
+              exceeded_hard_limit = len(reasoning_accumulated) > (current_max_thinking + leeway)
+
+              should_abort = False
+              if exceeded_hard_limit:
+                should_abort = True
+              elif exceeded_budget:
+                if is_safe_to_interrupt(reasoning_accumulated):
+                  should_abort = True
+
+              if should_abort:
+                if whitelist_thinking_this_turn:
+                  should_abort = False
+                elif not self.headless:
+                  with self._pause_live():
+                    self._print("\n[bold yellow]⚠️  LLM exceeded internal thinking budget.[/bold yellow]")
+                    self._print(f"Accumulated thinking: {len(reasoning_accumulated)} characters (limit: {current_max_thinking} chars).")
+                    self._print("What would you like to do?")
+                    self._print(
+                      "  [bold red]\\[s][/bold red]top (abort thinking stream) / "
+                      "  [bold green]\\[l][/bold green]et this go (increase budget by another 12000 chars) / "
+                      "  [bold cyan]\\[w][/bold cyan]hitelist for the current turn: ",
+                      end=""
+                    )
+                    try:
+                      if sys.stdin.isatty():
+                        ready, _, _ = select.select([sys.stdin], [], [], 30.0)
+                        if ready:
+                          response = sys.stdin.readline().strip().lower()
+                        else:
+                          self._print("\n[bold red]⚠️  Timeout: No response received within 30 seconds. Aborting thinking stream to save tokens.[/bold red]")
+                          response = "s"
+                      else:
+                        response = input().strip().lower()
+                    except (KeyboardInterrupt, EOFError):
+                      response = "s"
+                    except Exception as e:
+                      logger.warning(f"Error during timed input select: {e}. Falling back to standard input.")
+                      try:
+                        response = input().strip().lower()
+                      except (KeyboardInterrupt, EOFError):
+                        response = "s"
+
+                    if response in ("l", "let"):
+                      current_max_thinking = len(reasoning_accumulated) + max_thinking_chars
+                      if hasattr(self, "config") and self.config is not None:
+                        self.config.max_thinking_chars = current_max_thinking
+                      should_abort = False
+                      logger.info(f"User allowed thinking to continue. New budget: {current_max_thinking} chars.")
+                    elif response in ("w", "whitelist"):
+                      whitelist_thinking_this_turn = True
+                      should_abort = False
+                      logger.info("User whitelisted thinking for the current turn.")
+                    else:
+                      should_abort = True
+                      logger.info("User decided to stop thinking. Aborting stream.")
+
+              # Check for repetition loops or exceeding absolute high ceiling
+              is_repeating = detect_repetition_loop(reasoning_accumulated)
+              exceeded_absolute_ceiling = len(reasoning_accumulated) > 48000
+
+              if (is_repeating or exceeded_absolute_ceiling) and not content_accumulated and not delta.content and not tool_calls_accumulated and not delta.tool_calls:
+                logger.warning(f"Aborting stream: LLM got stuck in a repetitive loop or exceeded absolute thinking ceiling (len={len(reasoning_accumulated)}, repeating={is_repeating}).")
+                if not self.headless:
+                  with self._pause_live():
+                    if is_repeating:
+                      self._print("\n[bold red]⚠️  LLM got stuck in an infinite thinking loop. Aborting attempt to self-correct...[/bold red]")
+                    else:
+                      self._print("\n[bold red]⚠️  LLM exceeded absolute thinking limit (48k chars). Aborting attempt to self-correct...[/bold red]")
+                if hasattr(stream, "close"):
+                  try:
+                    stream.close()
+                  except Exception:
+                    pass
+                raise ThinkingBudgetExceeded(
+                  "LLM got stuck in an infinite thinking loop." if is_repeating else "LLM exceeded absolute thinking limit.",
+                  reasoning_accumulated
+                )
+
+              if (should_abort 
+                  and not content_accumulated 
+                  and not delta.content 
+                  and not tool_calls_accumulated 
+                  and not delta.tool_calls):
+                logger.warning(f"Aborting stream: LLM exceeded maximum internal thinking budget of {current_max_thinking} chars (accumulated: {len(reasoning_accumulated)}).")
+                if hasattr(stream, "close"):
+                  try:
+                    stream.close()
+                  except Exception:
+                    pass
+                raise ThinkingBudgetExceeded(
+                  "LLM exceeded maximum internal thinking budget.",
+                  reasoning_accumulated
+                )
+
+              if delta.content or has_new_reasoning:
+                first_chunk = False
+                panels = []
+                if reasoning_accumulated.strip():
+                  panels.append({
+                    "title": "Thinking",
+                    "content": reasoning_accumulated,
+                    "border_style": "yellow"
+                  })
+                if content_accumulated:
+                  panels.append({
+                    "title": "Assistant",
+                    "content": content_accumulated,
+                    "border_style": "green"
+                  })
+
+                if panels:
+                  live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
+
+              # Process streaming tool calls
+              if delta.tool_calls:
+                first_chunk = False
+                for tc in delta.tool_calls:
+                  idx = tc.index
+                  while len(tool_calls_accumulated) <= idx:
+                    tool_calls_accumulated.append({
+                      "id": None,
+                      "type": "function",
+                      "function": {"name": "", "arguments": ""}
+                    })
+
+                  item = tool_calls_accumulated[idx]
+                  if tc.id:
+                    item["id"] = tc.id
+                  if tc.function:
+                    if tc.function.name:
+                      item["function"]["name"] += tc.function.name
+                    if tc.function.arguments:
+                      item["function"]["arguments"] += tc.function.arguments
+
+                  # Render loading indicator
+                  panels = [{
+                    "title": "System",
+                    "content": f"Accumulating tool arguments... ({len(tool_calls_accumulated)} call(s))",
+                    "border_style": "yellow"
+                  }]
+                  live.update(LiveScreenLayout(panels, self.get_rich_status_bar()))
+            # Remove status bar before exiting Live context
+            live.update(LiveScreenLayout(panels, None))
+
+          # Reconstruct and print the final panels permanently to console
+          final_panels = []
+          if reasoning_accumulated.strip():
+            disp_reasoning = truncate_thinking_by_line(reasoning_accumulated)
+            final_panels.append(Panel(Markdown(disp_reasoning), title="Thinking", border_style="yellow"))
+          if content_accumulated:
+            final_panels.append(Panel(Markdown(content_accumulated), title="Assistant", border_style="green"))
+
+          if final_panels:
+            self._print(Group(*final_panels))
+
+          if finish_reason == "length":
+            logger.warning("LLM response was truncated due to output token limit (finish_reason='length').")
+            self._print("\n[bold yellow]⚠️  Warning: The AI's response was truncated because it reached the maximum output token limit.[/bold yellow]\n")
+
+          # Update cumulative token counts
+          p_tok = None
+          c_tok = None
+          if usage_metadata:
+            p_tok = getattr(usage_metadata, "prompt_tokens", None)
+            if p_tok is None and isinstance(usage_metadata, dict):
+              p_tok = usage_metadata.get("prompt_tokens")
+            c_tok = getattr(usage_metadata, "completion_tokens", None)
+            if c_tok is None and isinstance(usage_metadata, dict):
+              c_tok = usage_metadata.get("completion_tokens")
+
+          if p_tok is None:
+            p_tok = self._calculate_tokens_for_messages(active_messages)
+          else:
+            # Refine token_to_char_ratio using Moving Average
+            prompt_chars = len(json.dumps(active_messages))
+            if prompt_chars > 0:
+              current_ratio = p_tok / prompt_chars
+              self.token_to_char_ratio = 0.8 * self.token_to_char_ratio + 0.2 * current_ratio
+
+          if c_tok is None:
+            out_content = content_accumulated or ""
+            reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
+                                     extra_fields_accumulated.get("reasoning") or "")
+            c_tok = self.count_tokens_estimate(out_content) + self.count_tokens_estimate(reasoning_accumulated)
+
+          self.cumulative_prompt_tokens = getattr(self, "cumulative_prompt_tokens", 0) + p_tok
+          self.cumulative_completion_tokens = getattr(self, "cumulative_completion_tokens", 0) + c_tok
+
+          # Model specific usage update
+          if not hasattr(self, "model_usage"):
+            self.model_usage = {}
+          if self.model not in self.model_usage:
+            self.model_usage[self.model] = {"prompt_tokens": 0, "completion_tokens": 0}
+          self.model_usage[self.model]["prompt_tokens"] += p_tok
+          self.model_usage[self.model]["completion_tokens"] += c_tok
+
+          logger.info(
+            f"LLM call succeeded. Content size: {len(content_accumulated)} chars, "
+            f"Tool calls: {len(tool_calls_accumulated)}, "
+            f"Tokens this call: {p_tok} prompt, {c_tok} completion. "
+            f"Session cumulative: {self.cumulative_prompt_tokens} prompt, {self.cumulative_completion_tokens} completion."
+          )
+
+          self._log_llm_response_summary(
+            content_accumulated=content_accumulated,
+            tool_calls_accumulated=tool_calls_accumulated,
+            extra_fields_accumulated=extra_fields_accumulated,
+            finish_reason=finish_reason,
+            usage=usage_metadata,
+            response_model=resp_model,
+            system_fingerprint=sys_fp,
+            chunk_id=chunk_id
+          )
+          self.last_api_call_time = time.time()
+        except ThinkingBudgetExceeded as e:
+          self.last_api_call_time = time.time()
+          logger.warning(f"Thinking budget exceeded on attempt {attempt}")
+          last_aborted_thinking = e.accumulated_thinking
+          if attempt < max_retries:
+            self._print(f"[bold yellow]⚠️  LLM exceeded internal thinking budget. Retrying with self-correction nudge (attempt {attempt}/{max_retries})...[/bold yellow]")
+            time.sleep(1)
+            continue
+          else:
+            self._print("[bold red]Error: LLM repeatedly exceeded internal thinking budget without producing output.[/bold red]")
+            break
+        except Exception as e:
+          self.last_api_call_time = time.time()
+          logger.exception("Error calling LLM API")
+          formatted_err = self._format_api_error(e)
+          if attempt < max_retries and self._is_retryable_exception(e):
+            err_msg = str(e).lower()
+            is_rate_limit = any(ind in err_msg for ind in [
+              "rate limit", "rate-limit", "rate_limited", "rate-limited",
+              "too many requests", "high-frequency", "risk_control", "risk control"
+            ])
+            backoff_time = 5 * (2 ** attempt) if is_rate_limit else 2 ** attempt
+            self._print(f"[bold yellow]⚠️  Error calling API: {formatted_err}. Retrying in {backoff_time}s (attempt {attempt}/{max_retries})...[/bold yellow]")
+            time.sleep(backoff_time)
+            continue
+          else:
+            self._print(f"[bold red]Error calling API:[/bold red] {formatted_err}")
+            break
+        finally:
+          self._active_live = None
+
+        # If we didn't receive structured tool calls, try to extract them from text content
+        if not tool_calls_accumulated and content_accumulated:
+          parsed_calls = self.extract_tool_calls_from_text(content_accumulated)
+          if parsed_calls:
+            tool_calls_accumulated = parsed_calls
+            content_accumulated = ""
+
+        # Check if response was empty (no content, no tool calls)
+        is_empty_response = (not tool_calls_accumulated) and (not content_accumulated or not content_accumulated.strip())
+
+        if not is_empty_response:
+          api_succeeded = True
+          break
+
+        if attempt < max_retries:
+          logger.info(f"LLM returned an empty response on loop {self.current_loop} (attempt {attempt}/{max_retries}). Retrying in 2s...")
+          self._print(f"[bold yellow]⚠️  LLM returned an empty response. Retrying in 2s (attempt {attempt}/{max_retries})...[/bold yellow]")
+          time.sleep(2)
+        else:
+          logger.info(f"LLM returned multiple empty responses on loop {self.current_loop}. Breaking cycle.")
+          self._print("[bold red]❌  LLM returned multiple empty responses. Breaking cycle.[/bold red]")
+
+      if not api_succeeded:
+        break
+
+      # Ensure every accumulated tool call has a unique ID and valid JSON arguments
+      for tc in tool_calls_accumulated:
+        if not tc.get("id") or tc.get("id") == "call_text_parsed":
+          tc["id"] = f"call_{uuid.uuid4().hex[:12]}"
+
+        func_obj = tc.get("function")
+        if isinstance(func_obj, dict):
+          t_args_raw = func_obj.get("arguments")
+          if not isinstance(t_args_raw, str):
+            func_obj["arguments"] = json.dumps(t_args_raw) if t_args_raw is not None else "{}"
+          else:
+            try:
+              json.loads(t_args_raw)
+            except Exception:
+              try:
+                repaired = repair_json(t_args_raw)
+                json.loads(repaired)
+                func_obj["arguments"] = repaired
+              except Exception:
+                func_obj["arguments"] = "{}"
+
+      # Construct assistant message record
+      assistant_msg = {"role": "assistant"}
+      if content_accumulated:
+        assistant_msg["content"] = content_accumulated
+      else:
+        assistant_msg["content"] = None
+
+      if tool_calls_accumulated:
+        assistant_msg["tool_calls"] = []
+        for tc in tool_calls_accumulated:
+          assistant_msg["tool_calls"].append({
+            "id": tc["id"],
+            "type": "function",
+            "function": {
+              "name": tc["function"]["name"],
+              "arguments": tc["function"]["arguments"]
+            }
+          })
+
+      for field, val in extra_fields_accumulated.items():
+        if val is not None:
+          assistant_msg[field] = val
+
+      self.messages.append(assistant_msg)
+
+      # If the response was truncated due to output token limit, automatically continue
+      if finish_reason == "length":
+        logger.warning("LLM response was truncated (finish_reason='length'). Automatically continuing...")
+        self._print("[bold yellow]🔄  AI response was truncated because it reached the maximum output token limit. Automatically continuing...[/bold yellow]")
+        loop_count += 1
+        continue
+
+      # If no tools called, we're finished with this turn
+      if not tool_calls_accumulated:
+        break
+
+      # Otherwise, execute requested tools sequentially
+      for idx, tc in enumerate(tool_calls_accumulated):
+        if idx > 0:
+          time.sleep(0.5)
+        t_id = tc["id"]
+        t_name = tc["function"]["name"]
+        t_args_raw = tc["function"]["arguments"]
+
+        try:
+          args_parsed = json.loads(t_args_raw) if t_args_raw else {}
+        except Exception:
+          try:
+            args_parsed = json.loads(repair_json(t_args_raw)) if t_args_raw else {}
+          except Exception as e:
+            args_parsed = {}
+            t_result = f"Error: Arguments failed JSON parsing: {str(e)}"
+        else:
+          # Execute tool
+          token = active_session_var.set(self)
+          try:
+            if t_name in ("ask_question", "discover_context", "ask_oracle", "web_research"):
+              logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
+              t_result = execute_tool(t_name, args_parsed, self)
+            else:
+              panels = [{
+                "title": "🔧 Executing Tool",
+                "content": Text.from_markup(f"Name: [cyan]{t_name}[/cyan]\nArguments: [yellow]{escape(json.dumps(args_parsed, indent=2))}[/yellow]"),
+                "border_style": "yellow"
+              }]
+              with optional_live(
+                LiveScreenLayout(panels, self.get_rich_status_bar()),
+                console=console,
+                enabled=not self.headless,
+                auto_refresh=False
+              ) as live:
+                self._active_live = live
+                try:
+                  logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
+                  t_result = execute_tool(t_name, args_parsed, self)
+                finally:
+                  self._active_live = None
+                # Remove status bar before exiting Live context
+                live.update(LiveScreenLayout(panels, None), refresh=True)
+          finally:
+            active_session_var.reset(token)
+            self.temp_allowed_ro_paths.clear()
+            self.temp_allowed_rw_paths.clear()
+
+        # Print result summary nicely
+        self._print(Panel(
+          Text(t_result),
+          title="🔧 Tool Result",
+          border_style="dim yellow"
+        ))
+
+        truncated = "TRUNCATED" in t_result or "truncated" in t_result.lower() or "WARNING" in t_result
+        logger.info(f"Tool {t_name} (id={t_id}) completed. Result size: {len(t_result)} characters (truncated: {truncated})")
+        logger.debug(f"Tool {t_name} (id={t_id}) result content: {t_result}")
+
+        # Record result for context
+        # We wrap tool output in a JSON object to prevent issues with gateways/models
+        # trying to parse raw code/braces as invalid JSON.
+        t_result_sanitized = sanitize_tool_output(t_result)
+        wrapped_content = json.dumps({"output": t_result_sanitized})
+
+        self.messages.append({
+          "role": "tool",
+          "tool_call_id": t_id,
+          "name": t_name,
+          "content": wrapped_content
+        })
+
+      loop_count += 1
+
+    if loop_count >= max_tool_loops:
+      self._print("[bold red]Reached maximum sequential tool loop executions. Breaking cycle.[/bold red]")
+    self.current_loop = 0
+
+# Module-level aliases for backward compatibility
+_invalidate_token_cache = LLMMixin._invalidate_token_cache
+count_tokens_estimate = LLMMixin.count_tokens_estimate
+_calculate_tokens_for_messages = LLMMixin._calculate_tokens_for_messages
+init_client = LLMMixin.init_client
+_create_completion = LLMMixin._create_completion
+_throttle_request = LLMMixin._throttle_request
+_format_api_error = LLMMixin._format_api_error
+_is_retryable_exception = LLMMixin._is_retryable_exception
+_resolve_model_and_provider = LLMMixin._resolve_model_and_provider
+get_oracle_model = LLMMixin.get_oracle_model
+consult_oracle = LLMMixin.consult_oracle
+_clean_assistant_message = LLMMixin._clean_assistant_message
+prune_history = LLMMixin.prune_history
+_log_llm_request = LLMMixin._log_llm_request
+_log_llm_response_summary = LLMMixin._log_llm_response_summary
+run_llm_cycle = LLMMixin.run_llm_cycle
 
 
 def get_cache_filepath():

@@ -14,25 +14,7 @@ from dataclasses import dataclass, field
 
 from chatty.repo_map import RepoMap
 from chatty.runner import SubprocessRunner, cleanup_resources
-from chatty.llm import (
-  _invalidate_token_cache,
-  _calculate_tokens_for_messages,
-  init_client,
-  _create_completion,
-  _throttle_request,
-  _format_api_error,
-  _is_retryable_exception,
-  _resolve_model_and_provider,
-  get_oracle_model,
-  consult_oracle,
-  _clean_assistant_message,
-  count_tokens_estimate,
-  prune_history,
-  _log_llm_request,
-  _log_llm_response_summary,
-  run_llm_cycle,
-  fetch_available_models
-)
+from chatty.llm import LLMMixin, fetch_available_models
 
 
 import openai
@@ -318,7 +300,7 @@ def scan_plugins_directory(plugins_dir: str, include_only=None, exclude=None) ->
   return skills
 
 
-class ChatbotSession:
+class ChatbotSession(LLMMixin):
   _active_session = None
 
   def __init__(
@@ -663,11 +645,6 @@ class ChatbotSession:
     self._messages = CachedList(value, on_change=self._invalidate_token_cache)
     self._invalidate_token_cache()
 
-  def _invalidate_token_cache(self):
-    return _invalidate_token_cache(self)
-
-  def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
-    return _calculate_tokens_for_messages(self, messages)
 
   @contextlib.contextmanager
   def _pause_live(self):
@@ -911,9 +888,6 @@ class ChatbotSession:
       self.repo_map.cache.clear()
     return self.repo_map.generate_map()
 
-  def init_client(self):
-    """Initializes or updates the OpenAI client based on active settings."""
-    return init_client(self)
 
   def update_available_models_async(self, force_refresh=False):
     import threading
@@ -932,28 +906,6 @@ class ChatbotSession:
         
     threading.Thread(target=fetch_thread, daemon=True).start()
 
-  def _create_completion(self, **kwargs):
-    return _create_completion(self, **kwargs)
-
-  def _throttle_request(self):
-    return _throttle_request(self)
-
-  def _format_api_error(self, e: Exception) -> str:
-    return _format_api_error(self, e)
-
-  def _is_retryable_exception(self, e: Exception) -> bool:
-    return _is_retryable_exception(self, e)
-
-  def _resolve_model_and_provider(self, model_name: str) -> Tuple[str, Optional[Dict[str, Any]]]:
-    return _resolve_model_and_provider(self, model_name)
-
-  def get_oracle_model(self) -> str:
-    """Get model ID of the oracle fallback based on active provider."""
-    return get_oracle_model(self)
-
-  def consult_oracle(self, query: str) -> str:
-    """Consults the oracle model for suggestions/reasoning assistance."""
-    return consult_oracle(self, query)
 
   def get_discovery_model(self) -> str:
     """Returns the configured discovery model, or provider default scout model."""
@@ -1074,17 +1026,6 @@ class ChatbotSession:
     """Applies output filter regex, head/tail limits, and joins lines."""
     return self.runner._apply_output_filters(text, output_filter, head_lines, tail_lines)
 
-  def _clean_assistant_message(self, msg: Dict[str, Any]) -> None:
-    """Strips verbose thinking/reasoning metadata from the assistant message before sending to the LLM API."""
-    return _clean_assistant_message(self, msg)
-
-  def count_tokens_estimate(self, text: str) -> int:
-    """Estimates the token count of a string using the dynamic token_to_char_ratio."""
-    return count_tokens_estimate(self, text)
-
-  def prune_history(self, log: bool = True) -> List[Dict[str, Any]]:
-    """Prunes conversation history to respect the configured context size, compressing older tool outputs."""
-    return prune_history(self, log)
 
   def extract_tool_calls_from_text(self, text: str) -> List[Dict[str, Any]]:
     """Attempts to parse JSON tool calls from plain text content when the LLM returns
@@ -1250,35 +1191,6 @@ class ChatbotSession:
       return tools
     return tools
 
-  def _log_llm_request(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None) -> None:
-    return _log_llm_request(self, messages, tools)
-
-  def _log_llm_response_summary(
-    self,
-    content_accumulated: str,
-    tool_calls_accumulated: List[Dict[str, Any]],
-    extra_fields_accumulated: Dict[str, Any],
-    finish_reason: Optional[str] = None,
-    usage: Optional[Any] = None,
-    response_model: Optional[str] = None,
-    system_fingerprint: Optional[str] = None,
-    chunk_id: Optional[str] = None
-  ) -> None:
-    return _log_llm_response_summary(
-      self,
-      content_accumulated,
-      tool_calls_accumulated,
-      extra_fields_accumulated,
-      finish_reason,
-      usage,
-      response_model,
-      system_fingerprint,
-      chunk_id
-    )
-
-  def run_llm_cycle(self):
-    """Executes a full inference cycle, resolving tool calls recursively."""
-    return run_llm_cycle(self)
 
   def handle_command(self, cmd_line: str) -> bool:
     """
