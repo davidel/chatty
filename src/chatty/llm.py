@@ -660,6 +660,7 @@ def run_llm_cycle(self):
       # Start LLM stream call
       tool_calls_accumulated = []
       content_accumulated = ""
+      reasoning_accumulated = ""
       extra_fields_accumulated = {
         "reasoning": None,
         "reasoning_content": None,
