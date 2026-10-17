@@ -92,7 +92,8 @@ python3 -m chatty [options]
 | `--max-dir-items` | *None* | integer | `200` | Maximum number of directory items listed by directory explorer tool. |
 | `--log-file` | *None* | string | `chatty.log` | File path where execution statements are logged. Set to `""` to disable. |
 | `--log-level` | *None* | string | `info` | Logging verbosity (`debug`, `info`, `warning`, `error`). |
-| `--headless` | *None* | flag | `False` | Run the chatbot in headless mode (no console printing or terminal interactive loop). |
+| `--headless` | *None* | flag | `False` | Run the chatbot in headless mode (no console printing or terminal interactive loop; implicitly enables `--auto-approve`). |
+| `--auto-approve` | *None* | flag | `False` | Automatically approve file changes without interactive diff confirmation prompts. |
 | `--max-thinking-chars` | *None* | integer | `12000` | Maximum internal thinking characters before prompting the user. |
 | `--max-thinking-leeway-chars` | *None* | integer | `2000` | Leeway in characters beyond the maximum before hard-aborting or prompting. |
 | `--api-delay` | *None* | float | `2.5` | Minimum delay in seconds between consecutive API requests. |
@@ -176,7 +177,8 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/restore` | `<file_path> [index_or_timestamp]` | Restores a file to a specific backup version (defaults to the latest). |
 | `/tools` | None | Lists available sandboxed tools and their schema definitions. |
 | `/repo_map` / `/map` | `[refresh]` | Displays the Tree-Sitter / PageRank repository map. |
-| `/config` | `[key=value]` | List, view, or change configuration parameters live. |
+| `/config` | `[key=value]` | List, view, or change configuration parameters live (including `auto_approve=true\|false`). |
+| `/auto_approve` | `[on\|off]` | Toggle or explicitly enable/disable interactive diff review before file modifications. |
 | `/clear` / `/reset`| None | Clears conversational context history. |
 | `/compress` | `[N]` | Directs the model to summarize current conversational state using a structured format, resets older history, and keeps N (default 4) recent messages intact. |
 | `/copy` / `/clip` | `[index\|all]` | Copy a code block or the full AI response to the clipboard. |
@@ -253,6 +255,22 @@ The chatbot uses function-calling to interface with the sandbox workspace. Direc
 - **`hex_dump`**: Performs a hex dump or parses slices of binary files into integers of various widths (8/16/32/64-bit), endianness, and signedness.
 - **`list_file_backups`**: Lists all available timestamped backups for a file path.
 - **`read_file_backup`**: Reads the contents of a specific timestamped file backup (with optional range read and line numbering).
+
+### Interactive Diff Review & File Approval (`auto_approve`)
+
+Chatty provides human-in-the-loop review before files are modified on disk (`write_file` and `patch_file`):
+- **Visual Color-Coded Diffs**: Before applying changes, Chatty renders a syntax-highlighted unified diff showing exactly what will be added, modified, or removed.
+- **Interactive Decision Prompt**:
+  - `[y]es` (or Enter): Approve and write the changes to disk.
+  - `[n]o`: Reject the changes. Chatty returns a rejection status to the AI without modifying the file or creating a backup.
+  - `[c]omment`: Provide direct textual feedback or instructions to the AI (e.g. `"Please retain existing comments and docstrings"`). The AI receives your guidance in the tool execution result and adapts immediately in the next loop.
+  - `[a]uto-approve`: Approve this change and automatically approve all subsequent file changes for the remainder of the session.
+- **In-Session Toggles**:
+  - `/auto_approve [on|off]`: Toggle or explicitly set auto-approval on the fly without restarting Chatty.
+  - `/config auto_approve=true|false`: Dynamically view or update the configuration via `/config`.
+- **Command-Line & Headless Options**:
+  - `--auto-approve`: Start Chatty with auto-approval enabled from the command line.
+  - In `--headless` mode, auto-approval is enabled by default to allow unattended execution.
 
 ### Scratchpad & Workspace Cleanliness (`.chatty/scratch/`)
 Chatty instructs the agent to store all temporary test scripts, one-off execution snippets, scratchpad notes, and intermediate debug files inside `.chatty/scratch/` (relative to the sandbox root) to prevent workspace clutter and avoid polluting `git status`. When exiting Chatty, if any files exist in `.chatty/scratch/`, the CLI interactively prompts whether you want to clean them up or preserve them.

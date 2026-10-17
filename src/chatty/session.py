@@ -42,7 +42,8 @@ from chatty.utils import (
   parse_frontmatter,
   record_command_binaries,
   sanitize_tool_output,
-  repair_json
+  repair_json,
+  print_diff
 )
 from chatty.tools import execute_tool, TOOLS_SCHEMA
 from chatty.safety import validate_command_safety, active_session_var
@@ -142,6 +143,7 @@ class SessionConfig:
   static_skills: Optional[bool] = None
   prompt_caching: bool = False
   headless: bool = False
+  auto_approve: bool = False
   whitelist: List[str] = field(default_factory=list)
   models: List[str] = field(default_factory=list)
   max_thinking_chars: int = 12000
@@ -327,6 +329,7 @@ class ChatbotSession(LLMMixin):
     static_skills: Optional[bool] = None,
     prompt_caching: bool = False,
     headless: bool = False,
+    auto_approve: bool = False,
     whitelist: Optional[List[str]] = None,
     models: Optional[List[str]] = None,
     max_thinking_chars: int = 12000,
@@ -378,6 +381,7 @@ class ChatbotSession(LLMMixin):
         static_skills=static_skills,
         prompt_caching=prompt_caching,
         headless=headless,
+        auto_approve=auto_approve,
         whitelist=whitelist or [],
         models=models or ([model] if model else []),
         max_thinking_chars=max_thinking_chars,
@@ -397,6 +401,10 @@ class ChatbotSession(LLMMixin):
         docker_persistent=docker_persistent,
         sandbox_specified=sandbox_specified
       )
+
+    # In headless mode, auto-approve is implicitly True
+    if self.config.headless:
+      self.config.auto_approve = True
 
     # Ensure static_skills defaults correctly if not provided
     if self.config.static_skills is None:
@@ -1728,6 +1736,49 @@ class ChatbotSession(LLMMixin):
           return False
     except (KeyboardInterrupt, EOFError):
       return False
+
+  def confirm_file_change(self, rel_path: str, old_content: str, new_content: str) -> Tuple[bool, Optional[str]]:
+    """Prompts the user interactively before modifying a file.
+
+    Returns:
+      (approved, feedback):
+        - approved: True if changes should be written to disk.
+        - feedback: Optional instructions if rejected with comment.
+    """
+    if self.auto_approve or self.headless or old_content == new_content:
+      return True, None
+
+    try:
+      with self._pause_live():
+        print_diff(rel_path, old_content, new_content)
+        self._print(
+          f"Apply changes to '[cyan]{rel_path}[/cyan]'? "
+          f"[bold green]\\[y][/bold green]es / "
+          f"[bold red]\\[n][/bold red]o / "
+          f"[bold cyan]\\[c][/bold cyan]omment / "
+          f"[bold magenta]\\[a][/bold magenta]uto-approve: ",
+          end=""
+        )
+        resp = input().strip()
+        choice = resp.lower()
+
+        if choice in ("", "y", "yes"):
+          return True, None
+        elif choice in ("a", "auto", "auto-approve", "auto_approve", "all"):
+          self.auto_approve = True
+          if hasattr(self, "config"):
+            self.config.auto_approve = True
+          self._print("[bold green]Auto-approve enabled for subsequent changes.[/bold green]")
+          return True, None
+        elif choice in ("c", "comment"):
+          self._print("Enter feedback for the AI: ", end="")
+          feedback = input().strip()
+          return False, feedback if feedback else "Change rejected by user."
+        else:
+          return False, None
+    except (KeyboardInterrupt, EOFError):
+      self._print("\n[yellow]Change aborted by user.[/yellow]")
+      return False, None
 
   def show_whitelist(self):
     """Displays whitelisted paths and their permissions."""

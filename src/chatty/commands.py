@@ -993,6 +993,7 @@ def cmd_config(session: Any, arg: str) -> bool:
     "repo_map_tokens": int,
     "discovery_model": str,
     "discovery_loops": int,
+    "auto_approve": bool,
   }
   
   arg = arg.strip()
@@ -1475,6 +1476,27 @@ def cmd_docker(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_auto_approve(session: Any, arg: str) -> bool:
+  arg = arg.strip().lower()
+  if not arg:
+    new_state = not getattr(session, "auto_approve", False)
+  elif arg in ("on", "true", "1", "yes", "enable"):
+    new_state = True
+  elif arg in ("off", "false", "0", "no", "disable"):
+    new_state = False
+  else:
+    console.print("[bold red]Usage: /auto_approve [on|off][/bold red]")
+    return True
+
+  session.auto_approve = new_state
+  if hasattr(session, "config"):
+    session.config.auto_approve = new_state
+
+  state_str = "[bold green]Enabled[/bold green]" if new_state else "[bold yellow]Disabled (interactive review)[/bold yellow]"
+  console.print(f"Auto-approve file changes: {state_str}")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -1513,6 +1535,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/whitelist": cmd_whitelist,
   "/permissions": cmd_whitelist,
   "/config": cmd_config,
+  "/auto_approve": cmd_auto_approve,
+  "/autoapprove": cmd_auto_approve,
   "/backups": cmd_backups,
   "/restore": cmd_restore,
   "/copy": cmd_copy,

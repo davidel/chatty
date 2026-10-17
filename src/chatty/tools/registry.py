@@ -105,7 +105,7 @@ def handle_write_file(arguments: Dict[str, Any], session: Any) -> str:
   content = arguments.get("content")
   if not path or content is None:
     return "Error: Missing parameters 'path' and 'content'."
-  return tool_write_file(session.sandbox, path, content)
+  return tool_write_file(session.sandbox, path, content, session=session)
 
 
 def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:
@@ -119,10 +119,10 @@ def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:
     return "Error: Missing parameter 'path'."
     
   if patch is not None:
-    return tool_patch_file(session.sandbox, path, patch, dry_run=dry_run)
+    return tool_patch_file(session.sandbox, path, patch, dry_run=dry_run, session=session)
   elif search is not None and replace is not None:
     synthetic_patch = f"<<<<<<< SEARCH\n{search}\n=======\n{replace}\n>>>>>>> REPLACE"
-    return tool_patch_file(session.sandbox, path, synthetic_patch, dry_run=dry_run)
+    return tool_patch_file(session.sandbox, path, synthetic_patch, dry_run=dry_run, session=session)
   else:
     return "Error: Must specify either 'patch' or both 'search' and 'replace'."
 

@@ -11,7 +11,8 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 from chatty.safety import (
   get_safe_path,
   is_text_file,
-  count_lines
+  count_lines,
+  active_session_var
 )
 from chatty.utils import print_diff, record_command_binaries
 from chatty.backup import backup_file
@@ -175,13 +176,15 @@ def tool_get_file_info(sandbox_dir: str, path: str) -> str:
     return f"Error getting file info: {str(e)}"
 
 
-def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
+def tool_write_file(sandbox_dir: str, path: str, content: str, session: Optional[Any] = None) -> str:
   """Write text content to a file inside the sandbox."""
   try:
+    if session is None:
+      session = active_session_var.get()
+
     safe_p = get_safe_path(sandbox_dir, path, write=True)
 
     rel_path = os.path.relpath(safe_p, sandbox_dir)
-    backup_file(sandbox_dir, rel_path)
     old_content = ""
     if os.path.exists(safe_p):
       try:
@@ -190,11 +193,22 @@ def tool_write_file(sandbox_dir: str, path: str, content: str) -> str:
       except Exception:
         pass
 
+    diff_shown = False
+    if session and hasattr(session, "confirm_file_change"):
+      if not getattr(session, "auto_approve", False) and not getattr(session, "headless", False) and old_content != content:
+        diff_shown = True
+      approved, feedback = session.confirm_file_change(rel_path, old_content, content)
+      if not approved:
+        if feedback:
+          return f"Change rejected by user with instructions: {feedback}"
+        return f"Change rejected by user for file '{rel_path}'."
+
+    backup_file(sandbox_dir, rel_path)
     os.makedirs(os.path.dirname(safe_p), exist_ok=True)
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.write(content)
 
-    if old_content:
+    if old_content and not diff_shown:
       print_diff(rel_path, old_content, content)
 
     return f"Successfully wrote to file '{rel_path}'."
@@ -615,9 +629,12 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
   return "not_found", closest_info
 
 
-def tool_patch_file(sandbox_dir: str, path: str, patch: str, dry_run: bool = False) -> str:
+def tool_patch_file(sandbox_dir: str, path: str, patch: str, dry_run: bool = False, session: Optional[Any] = None) -> str:
   """Replace one or more unique blocks of text in a file using Aider-style SEARCH/REPLACE blocks."""
   try:
+    if session is None:
+      session = active_session_var.get()
+
     safe_p = get_safe_path(sandbox_dir, path, write=True)
     if not os.path.exists(safe_p):
       return f"Error: File '{path}' does not exist. Use write_file to create new files."
@@ -731,8 +748,6 @@ def tool_patch_file(sandbox_dir: str, path: str, patch: str, dry_run: bool = Fal
       )
 
     # Real application
-    backup_file(sandbox_dir, rel_path)
-
     for idx, (search_block, replace_block) in enumerate(patches):
       status, match_info = find_block_in_file(content, search_block)
 
@@ -787,10 +802,22 @@ def tool_patch_file(sandbox_dir: str, path: str, patch: str, dry_run: bool = Fal
 
       content = content[:start_char] + replace_block_final + content[end_char:]
 
+    diff_shown = False
+    if not dry_run and session and hasattr(session, "confirm_file_change"):
+      if not getattr(session, "auto_approve", False) and not getattr(session, "headless", False) and original_content != content:
+        diff_shown = True
+      approved, feedback = session.confirm_file_change(rel_path, original_content, content)
+      if not approved:
+        if feedback:
+          return f"Change rejected by user with instructions: {feedback}"
+        return f"Change rejected by user for file '{rel_path}'."
+
+    backup_file(sandbox_dir, rel_path)
     with open(safe_p, 'w', encoding='utf-8') as f:
       f.write(content)
 
-    print_diff(rel_path, original_content, content)
+    if not diff_shown:
+      print_diff(rel_path, original_content, content)
 
     orig_lines = original_content.splitlines(keepends=True)
     new_lines = content.splitlines(keepends=True)

@@ -164,6 +164,12 @@ def main():
     help="Run the chatbot in headless mode (no console printing or terminal interactive loop)."
   )
   parser.add_argument(
+    "--auto-approve",
+    action="store_true",
+    default=False,
+    help="Automatically approve file changes without interactive prompt."
+  )
+  parser.add_argument(
     "--max-thinking-chars",
     type=int,
     default=12000,
@@ -345,6 +351,7 @@ def main():
     static_skills=args.static_skills,
     prompt_caching=args.prompt_caching,
     headless=args.headless,
+    auto_approve=args.auto_approve,
     whitelist=args.whitelist,
     max_thinking_chars=args.max_thinking_chars,
     max_thinking_leeway_chars=args.max_thinking_leeway_chars,

@@ -257,6 +257,7 @@ def show_help(session: Any):
     ("/whitelist [add <path> [ro|rw] | remove <path> | clear]", "Manage whitelisted out-of-sandbox paths"),
     ("/skill [NAME...|clear]", "Load skill(s) on-demand or clear explicitly loaded skills"),
     ("/config [key=value]", "List, view, or change configuration parameters live"),
+    ("/auto_approve [on|off]", "Toggle or set interactive file change approval"),
     ("/clear / /reset", "Clear conversation memory"),
     ("/compress [N]", "Summarize history, clear context, reload summary, keeping N (default 4) recent messages"),
     ("/copy [index|all] / /clip", "Copy a code block or full response to clipboard"),
@@ -299,6 +300,7 @@ def show_status(session: Any):
 
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
+  table.add_row("Auto Approve", "Enabled" if getattr(session, "auto_approve", False) else "Disabled")
   table.add_row("Repo Map", f"{'Enabled' if session.repo_map else 'Disabled'} (budget: {session.repo_map_tokens} tokens)")
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
   table.add_row("API Request Timeout", f"{session.api_timeout} seconds")
