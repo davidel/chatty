@@ -299,7 +299,7 @@ class SubprocessRunner:
         logger.info(f"Command timed out. Transitioned to background. Task ID: {task_id}")
         self.session._print(
           f"\n[bold yellow]⚙️  Command took > 10s and is now running in the background. "
-          f"Task ID: {task_id}. Use '/status' or check_background_command to monitor progress.[/bold yellow]\n"
+          f"Task ID: {task_id}. Use '/task' or check_background_command to monitor progress.[/bold yellow]\n"
         )
         self.session.background_commands[task_id] = {
           "proc": proc,

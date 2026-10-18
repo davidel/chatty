@@ -1534,6 +1534,145 @@ def cmd_mcp(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_task(session: Any, arg: str) -> bool:
+  parts = arg.strip().split()
+  subcmd = parts[0].lower() if parts else "list"
+
+  if subcmd in ("list", "ls", "ps"):
+    tasks = getattr(session, "background_commands", {})
+    if not tasks:
+      console.print("[yellow]No background tasks currently tracked.[/yellow]")
+      return True
+
+    from rich.table import Table
+    table = Table(title="Background Tasks", show_header=True, header_style="bold magenta")
+    table.add_column("Task ID", style="bold cyan")
+    table.add_column("PID", style="white")
+    table.add_column("Status", style="green")
+    table.add_column("Resources", style="yellow")
+    table.add_column("Command", style="white")
+
+    for task_id, task in tasks.items():
+      proc = task.get("proc")
+      status = task.get("status")
+      if status is None and proc:
+        status = proc.poll()
+        if status is not None:
+          task["status"] = status
+
+      pid_str = str(getattr(proc, "pid", "-")) if proc else "-"
+      if status is None:
+        status_str = "[bold green]Running[/bold green]"
+        res = session._format_pgroup_resources(getattr(proc, "pid", None)) if hasattr(session, "_format_pgroup_resources") else ""
+        res_str = res if res else "-"
+      elif status == 0:
+        status_str = "[bold cyan]Exited (0)[/bold cyan]"
+        res_str = "-"
+      else:
+        status_str = f"[bold red]Exited ({status})[/bold red]"
+        res_str = "-"
+
+      cmd_preview = task.get("command", "")
+      if len(cmd_preview) > 60:
+        cmd_preview = cmd_preview[:57] + "..."
+
+      table.add_row(task_id, pid_str, status_str, res_str, cmd_preview)
+
+    console.print(table)
+    return True
+
+  if subcmd in ("show", "peek", "cat", "view", "output") or subcmd.startswith("task_"):
+    if subcmd.startswith("task_"):
+      task_id = parts[0]
+      tail_lines = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    else:
+      if len(parts) < 2:
+        console.print("[bold red]Usage: /task show <task_id> [tail_lines][/bold red]")
+        return True
+      task_id = parts[1]
+      tail_lines = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+
+    tasks = getattr(session, "background_commands", {})
+    task = tasks.get(task_id)
+    if not task:
+      console.print(f"[bold red]Error: Task ID '{task_id}' not found.[/bold red]")
+      return True
+
+    proc = task.get("proc")
+    status = task.get("status")
+    if status is None and proc:
+      status = proc.poll()
+      if status is not None:
+        task["status"] = status
+
+    if status is None:
+      res = session._format_pgroup_resources(getattr(proc, "pid", None)) if hasattr(session, "_format_pgroup_resources") else ""
+      status_desc = "[bold green]Running[/bold green]" + (f" ({res})" if res else "")
+    elif status == 0:
+      status_desc = "[bold cyan]Exited (0)[/bold cyan]"
+    else:
+      status_desc = f"[bold red]Exited ({status})[/bold red]"
+
+    console.print(f"[bold cyan]Task ID:[/bold cyan] {task_id}  [bold cyan]Status:[/bold cyan] {status_desc}")
+    console.print(f"[bold cyan]Command:[/bold cyan] {task.get('command', '')}\n")
+
+    stdout_path = task.get("stdout_path")
+    stderr_path = task.get("stderr_path")
+    stdout_content = ""
+    stderr_content = ""
+    if stdout_path and os.path.exists(stdout_path):
+      try:
+        with open(stdout_path, "r", errors="replace") as f:
+          stdout_content = f.read()
+      except Exception as e:
+        stdout_content = f"Error reading stdout: {e}"
+    if stderr_path and os.path.exists(stderr_path):
+      try:
+        with open(stderr_path, "r", errors="replace") as f:
+          stderr_content = f.read()
+      except Exception as e:
+        stderr_content = f"Error reading stderr: {e}"
+
+    if tail_lines:
+      if stdout_content:
+        lines = stdout_content.splitlines()
+        stdout_content = "\n".join(lines[-tail_lines:])
+      if stderr_content:
+        lines = stderr_content.splitlines()
+        stderr_content = "\n".join(lines[-tail_lines:])
+
+    if stdout_content:
+      console.print(Panel(stdout_content, title="[bold green]Stdout[/bold green]", border_style="green"))
+    if stderr_content:
+      console.print(Panel(stderr_content, title="[bold red]Stderr[/bold red]", border_style="red"))
+    if not stdout_content and not stderr_content:
+      console.print("[dim](No output generated yet)[/dim]")
+    return True
+
+  if subcmd in ("kill", "stop", "terminate"):
+    if len(parts) < 2:
+      console.print("[bold red]Usage: /task kill <task_id>[/bold red]")
+      return True
+    task_id = parts[1]
+    res = session.tool_kill_process(task_id)
+    if "Successfully" in res:
+      console.print(f"[bold green]{res}[/bold green]")
+    elif "Error" in res:
+      console.print(f"[bold red]{res}[/bold red]")
+    else:
+      console.print(f"[yellow]{res}[/yellow]")
+    return True
+
+  console.print(
+    "[bold cyan]Usage:[/bold cyan] /task [list|show|kill] [args]\n"
+    "  [cyan]/task (or /task list)[/cyan]       List all background tasks\n"
+    "  [cyan]/task show <task_id> [N][/cyan]     Show output and status of a task (optional last N lines)\n"
+    "  [cyan]/task kill <task_id>[/cyan]         Terminate a background task\n"
+    "  [dim]Shortcut: '/task task_1' shows task_1 output[/dim]"
+  )
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -1587,6 +1726,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/docker": cmd_docker,
   "/container": cmd_docker,
   "/dexec": cmd_docker,
+  "/task": cmd_task,
+  "/tasks": cmd_task,
 }
 
 

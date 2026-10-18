@@ -8,7 +8,18 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from chatty.session import ChatbotSession
-from chatty.commands import COMMANDS, cmd_provider, cmd_model, cmd_models, cmd_undo, cmd_pop, cmd_compress, cmd_skill, filter_models
+from chatty.commands import (
+  COMMANDS,
+  cmd_compress,
+  cmd_model,
+  cmd_models,
+  cmd_pop,
+  cmd_provider,
+  cmd_skill,
+  cmd_task,
+  cmd_undo,
+  filter_models
+)
 from chatty.utils import repair_json
 from rich.panel import Panel
 
@@ -809,6 +820,103 @@ class TestDockerCommand(unittest.TestCase):
     self.assertEqual(col1_texts[idx_img], "chatty-sandbox:davide")
     idx_cnt = col0_texts.index("Docker Container")
     self.assertEqual(col1_texts[idx_cnt], "chatty-sandbox-12345")
+
+
+class TestTaskCommands(unittest.TestCase):
+
+  def setUp(self):
+    self.old_cwd = os.getcwd()
+    self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
+    self.session = ChatbotSession(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.sandbox_dir
+    )
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
+
+  def test_cmd_task_registry(self):
+    self.assertIn("/task", COMMANDS)
+    self.assertIn("/tasks", COMMANDS)
+
+  def test_cmd_task_empty_list(self):
+    from unittest.mock import patch
+    with patch("chatty.commands.console.print") as mock_print:
+      res = cmd_task(self.session, "list")
+      self.assertTrue(res)
+      mock_print.assert_called_once()
+      self.assertIn("No background tasks", mock_print.call_args[0][0])
+
+  def test_cmd_task_list_with_tasks(self):
+    from unittest.mock import MagicMock, patch
+    mock_proc = MagicMock()
+    mock_proc.pid = 4321
+    mock_proc.poll.return_value = None
+    self.session.background_commands["task_1"] = {
+      "proc": mock_proc,
+      "command": "python -m pytest tests/",
+      "status": None
+    }
+    with patch("chatty.commands.console.print") as mock_print:
+      res = cmd_task(self.session, "")
+      self.assertTrue(res)
+      mock_print.assert_called_once()
+      table = mock_print.call_args[0][0]
+      col_ids = [cell.plain if hasattr(cell, "plain") else str(cell) for cell in table.columns[0]._cells]
+      self.assertIn("task_1", col_ids)
+
+  def test_cmd_task_show(self):
+    from unittest.mock import MagicMock, patch
+    stdout_file = tempfile.NamedTemporaryFile(delete=False, mode="w+t")
+    stdout_file.write("test output line 1\ntest output line 2\n")
+    stdout_file.close()
+
+    mock_proc = MagicMock()
+    mock_proc.pid = 4321
+    mock_proc.poll.return_value = 0
+    self.session.background_commands["task_1"] = {
+      "proc": mock_proc,
+      "command": "echo test",
+      "status": 0,
+      "stdout_path": stdout_file.name,
+      "stderr_path": None
+    }
+    try:
+      with patch("chatty.commands.console.print") as mock_print:
+        # Test /task show task_1
+        res = cmd_task(self.session, "show task_1")
+        self.assertTrue(res)
+        printed = [str(call[0][0]) for call in mock_print.call_args_list if call[0]]
+        self.assertTrue(any("task_1" in p for p in printed))
+
+        # Test shortcut /task task_1
+        res_shortcut = cmd_task(self.session, "task_1 1")
+        self.assertTrue(res_shortcut)
+
+        # Test non-existent task
+        res_missing = cmd_task(self.session, "show task_99")
+        self.assertTrue(res_missing)
+    finally:
+      os.unlink(stdout_file.name)
+
+  def test_cmd_task_kill(self):
+    from unittest.mock import patch
+    with patch.object(self.session, "tool_kill_process", return_value="Successfully terminated background task 'task_1'.") as mock_kill:
+      res = cmd_task(self.session, "kill task_1")
+      self.assertTrue(res)
+      mock_kill.assert_called_once_with("task_1")
+
+    # Missing task id
+    res_no_arg = cmd_task(self.session, "kill")
+    self.assertTrue(res_no_arg)
+
+  def test_cmd_task_help(self):
+    from unittest.mock import patch
+    with patch("chatty.commands.console.print") as mock_print:
+      res = cmd_task(self.session, "invalid_subcmd")
+      self.assertTrue(res)
+      self.assertTrue(any("Usage:" in str(call[0][0]) for call in mock_print.call_args_list if call[0]))
 
 
 if __name__ == "__main__":

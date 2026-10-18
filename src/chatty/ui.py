@@ -266,6 +266,7 @@ def show_help(session: Any):
     ("/save_response <path> / /save_reply", "Save the entire last AI response to a file"),
     ("/show <path>", "Read and render a Markdown file beautifully in the terminal"),
     ("/docker [command] / /container", "Execute a command (or inspect status) inside the Docker companion container"),
+    ("/task [list|show|kill] / /tasks", "Manage background tasks (list, show output, terminate)"),
     ("/exit / /quit", "Exit the application"),
   ]
 
