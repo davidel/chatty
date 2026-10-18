@@ -94,17 +94,20 @@ class TestDockerBackendUnit(unittest.TestCase):
 
     self.assertIn("--shm-size=2g", run_cmd)
 
+    self.assertEqual(backend.stdin_mode, subprocess.PIPE)
+
     # Verify command execution wrapper
     cmd_args, use_shell, cwd = backend.build_command_args("ls -la", cwd="/tmp/sandbox")
     self.assertFalse(use_shell)
     self.assertIsNone(cwd)
-    self.assertEqual(cmd_args[:4], ["docker", "exec", "-w", "/workspace"])
-    self.assertEqual(cmd_args[4], backend.container_name)
-    self.assertEqual(cmd_args[5:], ["/bin/sh", "-c", "ls -la"])
+    self.assertEqual(cmd_args[:5], ["docker", "exec", "-i", "-w", "/workspace"])
+    self.assertEqual(cmd_args[5], backend.container_name)
+    self.assertEqual(cmd_args[6:], ["/bin/sh", "-c", "exec < /dev/null; exec /bin/sh -c 'ls -la'"])
 
     # Verify task_id wrapping for background process tracking
     task_args, _, _ = backend.build_command_args("sleep 20", task_id="task_42")
     self.assertIn("echo $$ > /tmp/task_42.pid", task_args[-1])
+    self.assertIn("exec < /dev/null", task_args[-1])
 
     # Test task termination
     proc = MagicMock()
@@ -264,6 +267,24 @@ class TestDockerBackendUnit(unittest.TestCase):
 
     # Path not matching any mapping returns itself
     self.assertEqual(backend._resolve_host_path("/var/log"), "/var/log")
+
+  def test_docker_backend_runner_uses_pipe_stdin(self):
+    from chatty.session import ChatbotSession
+    session = ChatbotSession(sandbox="/tmp/sandbox")
+    mock_backend = MagicMock()
+    mock_backend.stdin_mode = subprocess.PIPE
+    mock_backend.build_command_args.return_value = (["docker", "exec", "-i", "c", "/bin/sh", "-c", "echo 1"], False, None)
+    session.backend = mock_backend
+
+    mock_proc = MagicMock()
+    mock_proc.wait.return_value = 0
+    mock_proc.returncode = 0
+    mock_proc.stdin = MagicMock()
+
+    with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
+      res = session.tool_run_command("pytest")
+      self.assertEqual(mock_popen.call_args[1].get("stdin"), subprocess.PIPE)
+      mock_proc.stdin.close.assert_called_once()
 
   def test_resolve_host_path_direct_param_and_fallback(self):
     backend = DockerBackend(

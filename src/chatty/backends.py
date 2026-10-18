@@ -95,6 +95,10 @@ class ExecutionBackend(abc.ABC):
   def get_name(self) -> str:
     pass
 
+  @property
+  def stdin_mode(self) -> int:
+    return subprocess.DEVNULL
+
 
 class LocalBackend(ExecutionBackend):
 
@@ -183,7 +187,7 @@ class DockerBackend(ExecutionBackend):
     self.allowed_rw_paths = allowed_rw_paths or []
     self.docker_bin = docker_bin
     self.container_workspace = container_workspace
-    self.docker_host = docker_host
+    self.docker_host = docker_host or os.environ.get("DOCKER_HOST")
     self.status_callback = status_callback
     self.persistent = persistent
     self.reset_on_start = reset_container
@@ -539,6 +543,10 @@ class DockerBackend(ExecutionBackend):
         self.is_running = False
         self._start_container()
 
+  @property
+  def stdin_mode(self) -> int:
+    return subprocess.PIPE
+
   def build_command_args(
     self,
     command: str,
@@ -556,12 +564,12 @@ class DockerBackend(ExecutionBackend):
         pass
 
     if task_id:
-      wrapped_cmd = f"echo $$ > /tmp/{task_id}.pid; exec /bin/sh -c {shlex.quote(command)}"
+      wrapped_cmd = f"echo $$ > /tmp/{task_id}.pid; exec < /dev/null; exec /bin/sh -c {shlex.quote(command)}"
     else:
-      wrapped_cmd = command
+      wrapped_cmd = f"exec < /dev/null; exec /bin/sh -c {shlex.quote(command)}"
 
     cmd_args = [
-      self.docker_bin, "exec",
+      self.docker_bin, "exec", "-i",
       "-w", exec_cwd,
       self.container_name,
       "/bin/sh", "-c", wrapped_cmd

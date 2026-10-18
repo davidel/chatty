@@ -16,6 +16,10 @@ logger = logging.getLogger("chatty")
 
 def _close_and_unlink_task(task: Dict[str, Any]) -> None:
   """Closes open output file streams and removes temporary files for a task."""
+  proc = task.get("proc")
+  if proc and getattr(proc, "stdin", None):
+    with contextlib.suppress(Exception):
+      proc.stdin.close()
   for file_key in ("stdout_file", "stderr_file"):
     f = task.get(file_key)
     if f:
@@ -246,17 +250,22 @@ class SubprocessRunner:
         shell_val = True
         run_cwd = self.session.sandbox
 
+      stdin_val = getattr(self.session.backend, "stdin_mode", subprocess.DEVNULL) if getattr(self.session, "backend", None) else subprocess.DEVNULL
+
       proc = subprocess.Popen(
         cmd_args,
         shell=shell_val,
         cwd=run_cwd,
-        stdin=subprocess.DEVNULL,
+        stdin=stdin_val,
         stdout=stdout_f,
         stderr=subprocess.STDOUT if combine_stderr else stderr_f,
         start_new_session=True
       )
       try:
         proc.wait(timeout=10)
+        if proc.stdin:
+          with contextlib.suppress(Exception):
+            proc.stdin.close()
         stdout_f.close()
         if stderr_f:
           stderr_f.close()
@@ -312,6 +321,9 @@ class SubprocessRunner:
           f"You must NOT block. Instead, check its output later by calling the 'check_background_command' tool.{resource_msg}"
         )
     except Exception as e:
+      if "proc" in locals() and proc and getattr(proc, "stdin", None):
+        with contextlib.suppress(Exception):
+          proc.stdin.close()
       for f in (stdout_f, stderr_f):
         if f:
           with contextlib.suppress(Exception):
@@ -355,6 +367,9 @@ class SubprocessRunner:
         task["status"] = status
 
     if status is not None:
+      if getattr(proc, "stdin", None):
+        with contextlib.suppress(Exception):
+          proc.stdin.close()
       try:
         if task.get("stdout_file"):
           task["stdout_file"].close()
