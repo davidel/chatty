@@ -178,6 +178,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/backups` | `<file_path>` | Lists all available timestamped backups for a given file. |
 | `/restore` | `<file_path> [index_or_timestamp]` | Restores a file to a specific backup version (defaults to the latest). |
 | `/tools` | None | Lists available sandboxed tools and their schema definitions. |
+| `/find_symbol` | `<name>` | Search the global project-wide index for any symbol definition. |
 | `/repo_map` / `/map` | `[refresh]` | Displays the Tree-Sitter / PageRank repository map. |
 | `/config` | `[key=value]` | List, view, or change configuration parameters live (including `auto_approve=true\|false`). |
 | `/auto_approve` | `[on\|off]` | Toggle or explicitly enable/disable interactive diff review before file modifications. |
@@ -187,7 +188,9 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/copy` / `/clip` | `[index\|all]` | Copy a code block or the full AI response to the clipboard. |
 | `/write` / `/save_code` | `<path> [index\|all]` | Write a code block or the full AI response to a file. |
 | `/save_response` / `/save_reply` | `<path>` | Save the entire last AI response to a file. |
+| `/show` | `<path>` | Read and render a Markdown file beautifully in the terminal. |
 | `/docker` / `/container` | `[<command>\|reset]` | Inspect companion container status, execute commands inside the container, or reset its state. |
+| `/task` / `/tasks` | `[list\|show <task_id> [N]\|kill <task_id>]` | Manage background tasks (list active tasks, view stdout/stderr, or terminate). |
 | `/exit` / `/quit` | None | Cleanly terminates background processes and exits Chatty. |
 
 ### Model Discovery & Search Filters
@@ -344,9 +347,10 @@ Chatty instructs the agent to store all temporary test scripts, one-off executio
   - *Safety Restrictions*: Monitored by safety checks to block commands that attempt directory escapes, or attempt to circumvent tool guidelines by calling commands like `cat`, `grep`, `find`, `sed`, `awk`, `less`, `more`, `wc`, `kill`, `pkill`, `killall`, `cp`, `mv`, `rm`, `rmdir`, `mkdir`, `ls`, `dir`.
   - *Output Controls*: Supports `output_filter` (regex matching), `head_lines`, and `tail_lines` parameters to prevent token overflow.
   - *Asynchronous Process Execution*: Commands that block or run indefinitely are automatically backgrounded by the session, returning a `Task ID` (e.g., `task_1`).
-- **`check_background_command`**: Inspects status, reads output, and checks exit status code of background processes using their `task_id`.
+- **`check_background_command`**: Inspects status, reads output, and checks exit status code of background processes using their `task_id` (supports wait timeouts up to 60s).
 - **`peek_task_output`**: Peeks at the currently accumulated output of a background task without blocking or changing its running status.
 - **`kill_process`**: Kills a running background subprocess.
+- **Background Task Management (`/task` / `/tasks`)**: Interactively list running tasks (`/task` or `/task list`), inspect their live output (`/task show <task_id> [N]` or `/task <task_id>`), or terminate them (`/task kill <task_id>`).
 - **`sleep`**: Pauses execution for a specified number of seconds.
 - **`ask_question`**: Prompts the user with a question or selectable options to confirm decisions or resolve ambiguity.
 - **`ask_oracle`**: Consults a more advanced oracle model for advice or suggestions when stuck on a difficult reasoning step, logic problem, or complex code generation.
@@ -536,5 +540,7 @@ Chatty records session activity in a log file (default: `chatty.log`). The loggi
 Chatty comes with a comprehensive unittest suite located in `tests/`. You can execute tests from the project root:
 
 ```bash
+pytest
+# OR
 python3 -m unittest discover tests
 ```
