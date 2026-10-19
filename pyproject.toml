@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chatty-agent"
-version = "0.5.3"
+version = "0.5.4"
 description = "AI Chatbot CLI with advanced sandboxed text and file system interaction"
 readme = "README.md"
 license = "Apache-2.0"
@@ -15,23 +15,24 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-    "requests",
-    "openai",
-    "rich",
-    "prompt-toolkit",
-    "PyYAML",
-    "json-repair",
-    "psutil",
-    "litellm",
-    "pypdf",
-    "tree-sitter",
-    "tree-sitter-python",
-    "tree-sitter-c",
-    "tree-sitter-cpp",
-    "tree-sitter-javascript",
-    "tree-sitter-typescript",
-    "tree-sitter-go",
-    "tree-sitter-rust",
+  "requests",
+  "openai",
+  "rich",
+  "prompt-toolkit",
+  "PyYAML",
+  "json-repair",
+  "psutil",
+  "litellm",
+  "mcp",
+  "pypdf",
+  "tree-sitter",
+  "tree-sitter-python",
+  "tree-sitter-c",
+  "tree-sitter-cpp",
+  "tree-sitter-javascript",
+  "tree-sitter-typescript",
+  "tree-sitter-go",
+  "tree-sitter-rust",
 ]
 
 [project.urls]

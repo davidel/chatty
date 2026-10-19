@@ -77,7 +77,7 @@ class MCPClient:
       },
       "clientInfo": {
         "name": "chatty",
-        "version": "0.5.3"
+        "version": "0.5.4"
       }
     }
 
