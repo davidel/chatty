@@ -863,7 +863,8 @@ def cmd_history(session: Any, arg: str) -> bool:
     tok = session.count_tokens_estimate(content)
     if reasoning:
       tok += session.count_tokens_estimate(reasoning)
-    console.print(f" {idx + 1}. [bold]{role}[/bold]: {display_text[:80].replace('\n', ' ')}... ({tok} tokens)")
+    snippet = display_text[:80].replace("\n", " ")
+    console.print(f" {idx + 1}. [bold]{role}[/bold]: {snippet}... ({tok} tokens)")
   return True
 
 
