@@ -295,7 +295,14 @@ class TestCommandSafety(unittest.TestCase):
       self.assertIn("timed out after 0.1 seconds", status_res)
 
       # Check that excessive timeouts are capped
-      with mock.patch("time.time", side_effect=[0.0, 0.0, 65.0]), mock.patch("time.sleep"):
+      current_time = 0.0
+      def fake_time():
+        nonlocal current_time
+        t = current_time
+        current_time += 65.0
+        return t
+
+      with mock.patch("chatty.runner.time.time", side_effect=fake_time), mock.patch("chatty.runner.time.sleep"):
         capped_res = self.session.tool_check_background_command("task_1", timeout=300)
         self.assertIn("capped from requested 300s", capped_res)
 
