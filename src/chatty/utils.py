@@ -478,10 +478,15 @@ def repair_json(json_str: str) -> str:
 
   try:
     import json_repair
-    repaired = json_repair.repair(json_str)
+    if hasattr(json_repair, "repair_json"):
+      repaired = json_repair.repair_json(json_str)
+    elif hasattr(json_repair, "repair"):
+      repaired = json_repair.repair(json_str)
+    else:
+      repaired = None
     if repaired:
       return repaired
-  except ImportError:
+  except Exception:
     pass
 
   s = json_str.strip()

@@ -61,7 +61,7 @@ def is_docker_available(docker_bin: str = "docker", docker_host: Optional[str] =
       [docker_bin, "info"],
       capture_output=True,
       env=env,
-      timeout=5
+      timeout=15
     )
     return res.returncode == 0
   except Exception:

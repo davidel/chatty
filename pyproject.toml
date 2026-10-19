@@ -9,7 +9,7 @@ description = "AI Chatbot CLI with advanced sandboxed text and file system inter
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: OS Independent",
