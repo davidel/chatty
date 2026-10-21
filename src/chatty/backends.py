@@ -405,6 +405,7 @@ class DockerBackend(ExecutionBackend):
     if status == "running":
       self.is_running = True
       self._notify(f"Reusing running companion container '{self.container_name}'.")
+      self._bootstrap_container()
       return
     elif status in ("exited", "created"):
       self._notify(f"Starting existing companion container '{self.container_name}'...")
@@ -417,12 +418,14 @@ class DockerBackend(ExecutionBackend):
       if res.returncode == 0:
         self.is_running = True
         logger.info(f"Companion container '{self.container_name}' started successfully.")
+        self._bootstrap_container()
         return
       logger.warning(f"Failed to start existing container '{self.container_name}': {res.stderr}. Recreating...")
       subprocess.run([self.docker_bin, "rm", "-f", self.container_name], capture_output=True, env=self._get_docker_env())
     elif status == "paused":
       subprocess.run([self.docker_bin, "unpause", self.container_name], capture_output=True, env=self._get_docker_env())
       self.is_running = True
+      self._bootstrap_container()
       return
 
     self._notify(f"Starting Docker companion container '{self.container_name}'...")
@@ -451,6 +454,10 @@ class DockerBackend(ExecutionBackend):
       "-v", f"{host_mount_dir}:{self.container_workspace}:rw",
       "-w", self.container_workspace
     ])
+
+    rw_dests = {os.path.normpath(p) for p in self.allowed_rw_paths}
+    if "/tmp" not in rw_dests:
+      cmd.extend(["--tmpfs", "/tmp:rw,exec,nosuid,nodev"])
 
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
       cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
@@ -505,7 +512,15 @@ class DockerBackend(ExecutionBackend):
 
     self.is_running = True
     logger.info(f"Companion container '{self.container_name}' started successfully.")
+    self._bootstrap_container()
 
+  def _bootstrap_container(self) -> None:
+    subprocess.run(
+      [self.docker_bin, "exec", self.container_name, "mkdir", "-p", "/tmp/.chatty"],
+      capture_output=True,
+      env=self._get_docker_env()
+    )
+    git_name, git_email = get_host_git_config()
     if git_name:
       subprocess.run(
         [self.docker_bin, "exec", self.container_name, "git", "config", "--global", "user.name", git_name],
@@ -564,7 +579,7 @@ class DockerBackend(ExecutionBackend):
         pass
 
     if task_id:
-      wrapped_cmd = f"echo $$ > /tmp/{task_id}.pid; exec < /dev/null; exec /bin/sh -c {shlex.quote(command)}"
+      wrapped_cmd = f"echo $$ > /tmp/.chatty/{task_id}.pid; exec < /dev/null; exec /bin/sh -c {shlex.quote(command)}"
     else:
       wrapped_cmd = f"exec < /dev/null; exec /bin/sh -c {shlex.quote(command)}"
 
@@ -580,7 +595,7 @@ class DockerBackend(ExecutionBackend):
     if self.is_running and task_id:
       try:
         pid_res = subprocess.run(
-          [self.docker_bin, "exec", self.container_name, "cat", f"/tmp/{task_id}.pid"],
+          [self.docker_bin, "exec", self.container_name, "cat", f"/tmp/.chatty/{task_id}.pid"],
           capture_output=True,
           text=True,
           timeout=2,
@@ -602,7 +617,7 @@ class DockerBackend(ExecutionBackend):
             env=self._get_docker_env()
           )
         subprocess.run(
-          [self.docker_bin, "exec", self.container_name, "rm", "-f", f"/tmp/{task_id}.pid"],
+          [self.docker_bin, "exec", self.container_name, "rm", "-f", f"/tmp/.chatty/{task_id}.pid"],
           capture_output=True,
           timeout=2,
           env=self._get_docker_env()

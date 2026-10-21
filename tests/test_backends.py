@@ -93,6 +93,8 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertTrue(any(arg.startswith("PATH=") and ".local/bin" in arg for arg in run_cmd))
 
     self.assertIn("--shm-size=2g", run_cmd)
+    self.assertIn("--tmpfs", run_cmd)
+    self.assertIn("/tmp:rw,exec,nosuid,nodev", run_cmd)
 
     self.assertEqual(backend.stdin_mode, subprocess.PIPE)
 
@@ -106,7 +108,7 @@ class TestDockerBackendUnit(unittest.TestCase):
 
     # Verify task_id wrapping for background process tracking
     task_args, _, _ = backend.build_command_args("sleep 20", task_id="task_42")
-    self.assertIn("echo $$ > /tmp/task_42.pid", task_args[-1])
+    self.assertIn("echo $$ > /tmp/.chatty/task_42.pid", task_args[-1])
     self.assertIn("exec < /dev/null", task_args[-1])
 
     # Test task termination
@@ -448,6 +450,9 @@ class TestDockerBackendUnit(unittest.TestCase):
     mock_run.side_effect = [
       MagicMock(returncode=0, stdout="exited\n", stderr=""), # inspect
       MagicMock(returncode=0, stdout="", stderr=""),          # start
+      MagicMock(returncode=0, stdout="", stderr=""),          # mkdir -p /tmp/.chatty
+      MagicMock(returncode=0, stdout="", stderr=""),          # git config user.name
+      MagicMock(returncode=0, stdout="", stderr=""),          # git config user.email
     ]
 
     backend = DockerBackend(
