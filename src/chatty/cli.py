@@ -276,6 +276,13 @@ def main():
         console.print(f"[bold red]Error loading prompt configuration:[/bold red] {e}")
       sys.exit(1)
           
+  sandbox_specified = args.sandbox is not None
+  sandbox_dir = args.sandbox if sandbox_specified else "./sandbox"
+
+  from chatty.models_config import get_saved_models, save_models_for_tasks
+  saved_models = get_saved_models(sandbox=sandbox_dir if sandbox_specified else None)
+  saved_main = saved_models.get("main")
+
   from urllib.parse import urlparse
 
   # Determine provider
@@ -298,7 +305,7 @@ def main():
   if not is_standard_provider:
     if not args.url:
       parser.error(f"Provider '{provider}' requires an API URL. Pass it via --url / -u.")
-    if not args.model:
+    if not args.model and not saved_main:
       parser.error(f"Provider '{provider}' requires a model. Pass it via --model / -m.")
 
   # Resolve default models
@@ -309,6 +316,10 @@ def main():
         part = part.strip()
         if part:
           models.append(part)
+  elif saved_main:
+    models = [saved_main]
+    if not args.headless:
+      console.print(f"[bold blue]Info:[/bold blue] Loaded saved main model from .chatty: [bold green]{models[0]}[/bold green]")
 
   if not models:
     prov_inst = get_provider(provider)
@@ -334,16 +345,31 @@ def main():
         parser.error(f"Provider '{provider}' requires a model. Pass it via --model / -m.")
           
   model = models[0]
-  
-  sandbox_specified = args.sandbox is not None
-  sandbox_dir = args.sandbox if sandbox_specified else "./sandbox"
+
+  oracle_model = args.oracle_model
+  if not oracle_model and "oracle" in saved_models:
+    oracle_model = saved_models["oracle"]
+    if not args.headless:
+      console.print(f"[bold blue]Info:[/bold blue] Loaded saved oracle model from .chatty: [bold green]{oracle_model}[/bold green]")
+
+  discovery_model = args.discovery_model
+  if not discovery_model and "discovery" in saved_models:
+    discovery_model = saved_models["discovery"]
+    if not args.headless:
+      console.print(f"[bold blue]Info:[/bold blue] Loaded saved discovery model from .chatty: [bold green]{discovery_model}[/bold green]")
+
+  save_models_for_tasks({
+    "main": model,
+    "oracle": oracle_model,
+    "discovery": discovery_model
+  }, sandbox=sandbox_dir if sandbox_specified else None)
   
   # Initialize and execute chat session
   with ChatbotSession(
     provider=provider,
     model=model,
     models=models,
-    oracle_model=args.oracle_model,
+    oracle_model=oracle_model,
     context_size=args.context_size,
     sandbox=sandbox_dir,
     sandbox_specified=sandbox_specified,
@@ -372,7 +398,7 @@ def main():
     api_timeout=args.api_timeout,
     repo_map=args.repo_map,
     repo_map_tokens=args.repo_map_tokens,
-    discovery_model=args.discovery_model,
+    discovery_model=discovery_model,
     discovery_loops=args.discovery_loops,
     backend=args.backend,
     docker_image=args.docker_image,

@@ -168,20 +168,7 @@ class SessionConfig:
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
-
-
-def find_workspace_root() -> str:
-  curr = os.path.abspath(os.getcwd())
-  visited = set()
-  while True:
-    visited.add(curr)
-    if os.path.exists(os.path.join(curr, ".git")):
-      return curr
-    parent = os.path.dirname(curr)
-    if parent == curr or parent in visited:
-      break
-    curr = parent
-  return os.path.abspath(os.getcwd())
+from chatty.models_config import find_workspace_root, save_model_for_task, save_models_for_tasks
 
 
 def resolve_path(path_str: str, workspace_root: str) -> str:
@@ -709,6 +696,10 @@ class ChatbotSession(LLMMixin):
           os.chdir(abs_val)
         except Exception as e:
           logger.error(f"Failed to change directory to new sandbox: {e}")
+      elif name in ("model", "oracle_model", "discovery_model") and value:
+        task_name = "main" if name == "model" else ("oracle" if name == "oracle_model" else "discovery")
+        sandbox_dir = getattr(self, "sandbox", None)
+        save_model_for_task(task_name, value, sandbox=sandbox_dir)
     else:
       super().__setattr__(name, value)
 

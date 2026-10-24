@@ -69,8 +69,8 @@ python3 -m chatty [options]
 | Parameter | Short | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `--provider` | `-p` | string | `ollama` | Backend provider to use (e.g., `ollama`, `openrouter`, `anthropic`, `chatty`, etc.). If omitted and `--url` is set, resolves automatically to the domain of the URL. |
-| `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. Ollama: auto-detects first local model (falls back to `qwen2.5-coder:7b`). OpenRouter: dynamically defaults to the most popular free model (falls back to `google/gemini-2.5-flash:free`). Custom: required (no fallback). |
-| `--oracle-model` | *None* | string | *None* | Model identifier to use as the oracle. No default is assumed (the oracle tool is only active if an oracle model is explicitly configured). |
+| `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. If omitted, reuses the saved model from `.chatty/models.json` if available. Otherwise, Ollama auto-detects first local model (falls back to `qwen2.5-coder:7b`) and OpenRouter dynamically defaults to the most popular free model (falls back to `google/gemini-2.5-flash:free`). Custom: required (no fallback). |
+| `--oracle-model` | *None* | string | *None* | Model identifier to use as the oracle. If omitted, reuses the saved oracle model from `.chatty/models.json` if available. |
 | `--context-size` | `-c` | integer | `8192` | Target context window length constraint in tokens. |
 | `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. If neither Docker nor Landlock is available and `--sandbox` is specified, Chatty aborts to prevent un-sandboxed execution unless `--backend none` is passed. |
 | `--skills-path` | `-k` | string | *None* | Custom directory paths to scan for static/dynamic Skills (can be specified multiple times). |
@@ -100,7 +100,7 @@ python3 -m chatty [options]
 | `--api-timeout` | *None* | float | `60.0` | Timeout in seconds for API requests and streams. |
 | `--repo-map / --no-repo-map` | *None* | flag | `True` | Include a Tree-Sitter / PageRank repository map in the system prompt. |
 | `--repo-map-tokens` | *None* | integer | `1024` | Target token budget for the repository map. |
-| `--discovery-model` | *None* | string | *Auto-resolved* | Model identifier for the discovery/scout agent (dynamically selects a fast, low-cost coding model on OpenRouter, a local coder model on Ollama, or falls back to the active model). |
+| `--discovery-model` | *None* | string | *Auto-resolved* | Model identifier for the discovery/scout agent. If omitted, reuses the saved discovery model from `.chatty/models.json` if available; otherwise dynamically selects a fast, low-cost coding model on OpenRouter, a local coder model on Ollama, or falls back to the active model. |
 | `--discovery-loops` | *None* | integer | `50` | Maximum tool execution loops allowed for the discovery agent. |
 | `--backend` | `-B` | string | `auto` | Execution backend for shell commands: `auto` (default: Docker if available, else Landlock on Linux, else fails if `--sandbox` specified), `docker` (companion container), `landlock` (Linux Landlock LSM), or `none` (direct host execution). |
 | `--docker-image` | *None* | string | `chatty-sandbox:<user>` | Docker image tag to use for the companion container. |
@@ -322,6 +322,18 @@ The configuration syntax follows the standard `mcpServers` format:
 
 ### Scratchpad & Workspace Cleanliness (`.chatty/scratch/`)
 Chatty instructs the agent to store all temporary test scripts, one-off execution snippets, scratchpad notes, and intermediate debug files inside `.chatty/scratch/` (relative to the sandbox root) to prevent workspace clutter and avoid polluting `git status`. When exiting Chatty, if any files exist in `.chatty/scratch/`, the CLI interactively prompts whether you want to clean them up or preserve them.
+
+### Persistent Task Model Selections (`.chatty/models.json`)
+Chatty remembers your latest model selections for each task (`main`, `oracle`, `discovery`) inside the project's `.chatty/models.json` file.
+When launching Chatty in a project without specifying model options on the command line (`--model`, `--oracle-model`, `--discovery-model`), Chatty automatically reuses the latest selections recorded in `.chatty/models.json`:
+```json
+{
+  "main": "qwen2.5-coder:7b",
+  "oracle": "deepseek-coder",
+  "discovery": "google/gemini-2.5-flash:free"
+}
+```
+Updating models via CLI arguments or interactive slash commands (`/model`, `/oracle`, `/discovery_model`) automatically persists the selection for that task to `.chatty/models.json`.
 
 
 ### Code Search & Diagnostics
