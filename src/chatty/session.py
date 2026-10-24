@@ -156,6 +156,7 @@ class SessionConfig:
   discovery_loops: int = 50
   backend: str = "auto"
   docker_image: Optional[str] = None
+  docker_base_image: Optional[str] = None
   dockerfile: Optional[str] = None
   docker_build: bool = False
   docker_host: Optional[str] = None
@@ -344,6 +345,7 @@ class ChatbotSession(LLMMixin):
     discovery_loops: int = 50,
     backend: Optional[str] = None,
     docker_image: Optional[str] = None,
+    docker_base_image: Optional[str] = None,
     dockerfile: Optional[str] = None,
     docker_build: bool = False,
     docker_host: Optional[str] = None,
@@ -398,6 +400,7 @@ class ChatbotSession(LLMMixin):
         discovery_loops=discovery_loops,
         backend=backend or "auto",
         docker_image=docker_image,
+        docker_base_image=docker_base_image,
         dockerfile=dockerfile,
         docker_build=docker_build,
         docker_host=docker_host,
@@ -630,6 +633,7 @@ class ChatbotSession(LLMMixin):
         session_id=session_id,
         host_sandbox=self.sandbox,
         image=self.config.docker_image,
+        base_image=self.config.docker_base_image,
         dockerfile=self.config.dockerfile,
         build_image=self.config.docker_build,
         docker_host=self.config.docker_host,

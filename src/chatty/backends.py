@@ -165,6 +165,7 @@ class DockerBackend(ExecutionBackend):
     session_id: str,
     host_sandbox: str,
     image: Optional[str] = None,
+    base_image: Optional[str] = None,
     dockerfile: Optional[str] = None,
     build_image: bool = False,
     allowed_ro_paths: Optional[List[str]] = None,
@@ -181,6 +182,7 @@ class DockerBackend(ExecutionBackend):
     self.session_id = session_id
     self.host_sandbox = os.path.abspath(host_sandbox)
     self.image = image or get_default_image_tag()
+    self.base_image = base_image
     self.dockerfile = dockerfile
     self.build_image = build_image
     self.allowed_ro_paths = allowed_ro_paths or []
@@ -236,15 +238,15 @@ class DockerBackend(ExecutionBackend):
     self._prune_stale_containers()
 
     rebuilt_image = False
-    if self.dockerfile or self.build_image:
+    if self.dockerfile or self.build_image or self.base_image:
       self._notify(f"Building Docker companion image '{self.image}'...")
-      self.build_companion_image(dockerfile=self.dockerfile, tag=self.image)
+      self.build_companion_image(dockerfile=self.dockerfile, tag=self.image, base_image=self.base_image)
       rebuilt_image = True
     else:
       if not self._image_exists(self.image):
         if self.image.startswith("chatty-sandbox"):
           self._notify(f"Default image '{self.image}' not found. Building companion image (this may take a minute on first run)...")
-          self.build_companion_image(dockerfile=get_default_dockerfile_path(), tag=self.image)
+          self.build_companion_image(dockerfile=get_default_dockerfile_path(), tag=self.image, base_image=self.base_image)
           rebuilt_image = True
         else:
           self._notify(f"Image '{self.image}' not found locally. Pulling companion image...")
@@ -274,8 +276,14 @@ class DockerBackend(ExecutionBackend):
     if res.returncode != 0:
       raise RuntimeError(f"Failed to pull Docker image '{tag}': {res.stderr}")
 
-  def build_companion_image(self, dockerfile: Optional[str] = None, tag: Optional[str] = None) -> None:
+  def build_companion_image(
+    self,
+    dockerfile: Optional[str] = None,
+    tag: Optional[str] = None,
+    base_image: Optional[str] = None
+  ) -> None:
     target_tag = tag or self.image
+    target_base = base_image or self.base_image
     df_path = dockerfile or get_default_dockerfile_path()
     if not os.path.exists(df_path):
       raise FileNotFoundError(f"Dockerfile not found at '{df_path}'")
@@ -295,9 +303,13 @@ class DockerBackend(ExecutionBackend):
       "--build-arg", f"USER_ID={uid}",
       "--build-arg", f"GROUP_ID={gid}",
       "--build-arg", f"USER_NAME={username}",
+    ]
+    if target_base:
+      cmd.extend(["--build-arg", f"BASE_IMAGE={target_base}"])
+    cmd.extend([
       "-f", df_path,
       context_dir
-    ]
+    ])
     res = subprocess.run(cmd, capture_output=True, text=True, env=self._get_docker_env())
     if res.returncode != 0:
       raise RuntimeError(f"Docker build failed for image '{target_tag}':\n{res.stderr}\n{res.stdout}")

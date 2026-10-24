@@ -171,7 +171,6 @@ def main():
   )
   parser.add_argument(
     "--mcp-config",
-    default=None,
     help="Path to an MCP (Model Context Protocol) JSON configuration file."
   )
   parser.add_argument(
@@ -224,8 +223,11 @@ def main():
   )
   parser.add_argument(
     "--docker-image",
-    default=None,
     help="Docker image tag to use for the companion container (default: 'chatty-sandbox:<user>' or 'chatty-sandbox:latest')."
+  )
+  parser.add_argument(
+    "--docker-base-image",
+    help="Base image to use when building the companion container (default: 'debian:stable-slim')."
   )
   parser.add_argument(
     "--dockerfile",
@@ -374,6 +376,7 @@ def main():
     discovery_loops=args.discovery_loops,
     backend=args.backend,
     docker_image=args.docker_image,
+    docker_base_image=args.docker_base_image,
     dockerfile=args.dockerfile,
     docker_build=args.docker_build,
     docker_host=args.docker_host,

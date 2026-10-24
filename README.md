@@ -104,6 +104,7 @@ python3 -m chatty [options]
 | `--discovery-loops` | *None* | integer | `50` | Maximum tool execution loops allowed for the discovery agent. |
 | `--backend` | `-B` | string | `auto` | Execution backend for shell commands: `auto` (default: Docker if available, else Landlock on Linux, else fails if `--sandbox` specified), `docker` (companion container), `landlock` (Linux Landlock LSM), or `none` (direct host execution). |
 | `--docker-image` | *None* | string | `chatty-sandbox:<user>` | Docker image tag to use for the companion container. |
+| `--docker-base-image` | *None* | string | `debian:stable-slim` | Base image to use when building the companion container. |
 | `--dockerfile` | *None* | string | *None* | Path to a custom Dockerfile to build and use for the companion container. |
 | `--docker-build` | *None* | flag | `False` | Force building or rebuilding the Docker companion image on startup. |
 | `--docker-reset` | *None* | flag | `False` | Reset (recreate) the Docker companion container for the current workspace. |
@@ -395,7 +396,8 @@ When the Docker backend is active, Chatty manages the entire lifecycle of an iso
   - `--docker-ephemeral`: Run as a throwaway container that is deleted immediately upon session exit.
 * **Process Lifetime & Background Tasks**: Commands taking longer than 10 seconds automatically transition to background tasks. Chatty tracks process IDs inside the container (`/tmp/<task_id>.pid`) to guarantee that terminating a background task cleanly terminates the remote process tree without leaving orphaned processes.
 * **Automatic Image Management**:
-  - Built-in user-specific image tag (`chatty-sandbox:<user>`) built from Chatty's default Dockerfile template (Debian Bookworm with Python, pip, modern pytest, C/C++ compilers, and development tools).
+  - Built-in user-specific image tag (`chatty-sandbox:<user>`) built from Chatty's default Dockerfile template (Debian Stable with Python, pip, modern pytest, C/C++ compilers, and development tools).
+  - Custom Base Image: Configure the base image used during build via `--docker-base-image <image>` (defaults to `debian:stable-slim`).
   - Custom Dockerfile: Point to a custom Dockerfile via `--dockerfile <path>`.
   - Rebuilding: Force a rebuild using `--docker-build` (automatically recreates the container to use the new image).
   - Custom Image: Use an existing image tag via `--docker-image <tag>`.

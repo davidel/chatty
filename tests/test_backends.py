@@ -153,6 +153,28 @@ class TestDockerBackendUnit(unittest.TestCase):
     self.assertFalse(any("GIT_USER_NAME=" in arg for arg in build_cmd))
 
   @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_build_image_with_base_image(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    backend = DockerBackend(
+      session_id="build_base_test",
+      host_sandbox="/tmp/sandbox",
+      image="custom-image:v1",
+      base_image="debian:testing-slim"
+    )
+    backend.initialize()
+
+    build_calls = [
+      call for call in mock_run.call_args_list
+      if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "build"
+    ]
+    self.assertTrue(len(build_calls) > 0)
+    build_cmd = build_calls[0][0][0]
+    self.assertTrue(any(arg == "BASE_IMAGE=debian:testing-slim" for arg in build_cmd))
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
   @patch("chatty.backends.get_host_git_config", return_value=("Git Dev", "dev@example.com"))
   @patch("shutil.which", return_value="/usr/bin/docker")
   @patch("subprocess.run")
