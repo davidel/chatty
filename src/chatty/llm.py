@@ -153,7 +153,9 @@ class LLMMixin:
     if getattr(self.client, "default_headers", None):
       litellm_kwargs["headers"] = self.client.default_headers
 
-    timeout = getattr(self.client, "timeout", None) or getattr(self.config, "api_timeout", 60.0)
+    timeout = kwargs.get("timeout")
+    if timeout is None:
+      timeout = getattr(self.client, "timeout", None) or getattr(self.config, "api_timeout", 60.0)
     litellm_kwargs["timeout"] = timeout
 
     logger.info(f"Sending API request to {self.provider} (model={actual_model}, timeout={timeout:.1f}s)...")
@@ -300,17 +302,38 @@ class LLMMixin:
     ]
     logger.info(f"Consulting oracle (model={oracle_model}) with query: {query}")
     content_accumulated = ""
+    reasoning_accumulated = ""
+    extra_fields_accumulated = {
+      "reasoning": None,
+      "reasoning_content": None,
+      "reasoning_details": None,
+      "thought_signature": None
+    }
+    last_extra_fields = {
+      "reasoning": None,
+      "reasoning_content": None,
+      "reasoning_details": None,
+      "thought_signature": None
+    }
     panels = [{"title": "🔮 Oracle", "content": "Connecting to Oracle LLM...", "border_style": "purple"}]
     max_retries = 3
     for attempt in range(1, max_retries + 1):
+      content_accumulated = ""
+      reasoning_accumulated = ""
+      for k in extra_fields_accumulated:
+        extra_fields_accumulated[k] = None
+        last_extra_fields[k] = None
+      panels = [{"title": "🔮 Oracle", "content": "Connecting to Oracle LLM...", "border_style": "purple"}]
       try:
         with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not self.headless, refresh_per_second=12, transient=True) as live:
           actual_model, extra_body = self._resolve_model_and_provider(oracle_model)
           self._throttle_request()
+          oracle_timeout = getattr(self.config, "oracle_timeout", 180.0)
           kwargs = {
             "model": actual_model,
             "messages": messages,
-            "stream": True
+            "stream": True,
+            "timeout": oracle_timeout
           }
           if extra_body:
             kwargs["extra_body"] = extra_body
@@ -325,10 +348,62 @@ class LLMMixin:
               continue
             choice = chunk.choices[0]
             delta = choice.delta
+
+            # Extract any OpenRouter extra fields for reasoning/thought
+            extra_fields = ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]
+            has_new_reasoning = False
+            for field in extra_fields:
+              val = getattr(delta, field, None)
+              if val is None and hasattr(delta, "model_extra") and delta.model_extra:
+                val = delta.model_extra.get(field)
+              if val is None and isinstance(delta, dict):
+                val = delta.get(field)
+              if val is not None and not isinstance(val, (str, dict, list)):
+                val = None
+
+              if val is not None:
+                has_new_reasoning = True
+                if field in ("reasoning", "reasoning_content"):
+                  if isinstance(val, str) and isinstance(extra_fields_accumulated[field], str):
+                    if val.startswith(extra_fields_accumulated[field]):
+                      extra_fields_accumulated[field] = val
+                    else:
+                      is_duplicate = (val == last_extra_fields[field])
+                      is_metadata_like = len(val) > 1 or any(ord(c) > 0x2000 for c in val)
+                      if not (is_duplicate and is_metadata_like):
+                        extra_fields_accumulated[field] += val
+                  else:
+                    extra_fields_accumulated[field] = val
+                else:
+                  extra_fields_accumulated[field] = val
+                last_extra_fields[field] = val
+
             if delta.content:
               content_accumulated += delta.content
-              panels[0]["content"] = content_accumulated
-              live.update(LiveScreenLayout(panels, None))
+
+            reasoning_accumulated = (extra_fields_accumulated.get("reasoning_content") or 
+                                     extra_fields_accumulated.get("reasoning") or "")
+
+            if delta.content or has_new_reasoning:
+              new_panels = []
+              if reasoning_accumulated.strip():
+                new_panels.append({
+                  "title": "🔮 Oracle (Thinking)",
+                  "content": reasoning_accumulated,
+                  "border_style": "yellow"
+                })
+              if content_accumulated:
+                new_panels.append({
+                  "title": "🔮 Oracle",
+                  "content": content_accumulated,
+                  "border_style": "purple"
+                })
+              if new_panels:
+                panels = new_panels
+                live.update(LiveScreenLayout(panels, None))
+
+        if not content_accumulated and reasoning_accumulated:
+          content_accumulated = reasoning_accumulated
 
         # Update cumulative token counts for Oracle
         p_tok = None

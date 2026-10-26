@@ -979,6 +979,7 @@ def cmd_config(session: Any, arg: str) -> bool:
   allowed_keys = {
     "api_delay": float,
     "api_timeout": float,
+    "oracle_timeout": float,
     "max_loops": int,
     "context_size": int,
     "max_thinking_chars": int,

@@ -98,6 +98,7 @@ python3 -m chatty [options]
 | `--max-thinking-leeway-chars` | *None* | integer | `2000` | Leeway in characters beyond the maximum before hard-aborting or prompting. |
 | `--api-delay` | *None* | float | `2.5` | Minimum delay in seconds between consecutive API requests. |
 | `--api-timeout` | *None* | float | `60.0` | Timeout in seconds for API requests and streams. |
+| `--oracle-timeout` | *None* | float | `180.0` | Timeout in seconds for oracle API requests and streams. |
 | `--repo-map / --no-repo-map` | *None* | flag | `True` | Include a Tree-Sitter / PageRank repository map in the system prompt. |
 | `--repo-map-tokens` | *None* | integer | `1024` | Target token budget for the repository map. |
 | `--discovery-model` | *None* | string | *Auto-resolved* | Model identifier for the discovery/scout agent. If omitted, reuses the saved discovery model from `.chatty/models.json` if available; otherwise dynamically selects a fast, low-cost coding model on OpenRouter, a local coder model on Ollama, or falls back to the active model. |

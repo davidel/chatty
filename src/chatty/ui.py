@@ -309,6 +309,7 @@ def show_status(session: Any):
   table.add_row("Repo Map", f"{'Enabled' if session.repo_map else 'Disabled'} (budget: {session.repo_map_tokens} tokens)")
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
   table.add_row("API Request Timeout", f"{session.api_timeout} seconds")
+  table.add_row("Oracle Request Timeout", f"{getattr(session, 'oracle_timeout', 180.0)} seconds")
   table.add_row("Total Messages", str(len(session.messages)))
 
   # Display current model usage

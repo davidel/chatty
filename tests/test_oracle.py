@@ -245,3 +245,41 @@ class TestOracle(unittest.TestCase):
     sent_query = kwargs["messages"][1]["content"]
 
     self.assertIn("[Error reading file ../outside.txt: Access Denied:", sent_query)
+
+  def test_oracle_timeout_config(self):
+    self.assertEqual(self.session.oracle_timeout, 180.0)
+    session_custom = ChatbotSession(
+      provider="ollama",
+      model="test-model",
+      oracle_timeout=300.0,
+      sandbox=self.sandbox_dir
+    )
+    self.assertEqual(session_custom.oracle_timeout, 300.0)
+    self.session.handle_command("/config oracle_timeout=240.0")
+    self.assertEqual(self.session.oracle_timeout, 240.0)
+
+  @patch("chatty.session.openai.OpenAI")
+  def test_consult_oracle_with_reasoning(self, mock_openai):
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+    chunk1 = MagicMock()
+    chunk1.choices = [MagicMock(delta=MagicMock(content=None, reasoning="Analyzing...", model_extra=None))]
+    chunk2 = MagicMock()
+    chunk2.choices = [MagicMock(delta=MagicMock(content="Here is the fix", reasoning=None, model_extra=None))]
+    mock_client.chat.completions.create.return_value = [chunk1, chunk2]
+    res = self.session.consult_oracle("Stuck on bug")
+    self.assertEqual(res, "Here is the fix")
+    _, kwargs = mock_client.chat.completions.create.call_args
+    self.assertEqual(kwargs.get("timeout"), 180.0)
+
+  @patch("chatty.session.openai.OpenAI")
+  def test_consult_oracle_pure_reasoning_fallback(self, mock_openai):
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    self.session.client = mock_client
+    chunk = MagicMock()
+    chunk.choices = [MagicMock(delta=MagicMock(content="", reasoning="Pure reasoning answer", model_extra=None))]
+    mock_client.chat.completions.create.return_value = [chunk]
+    res = self.session.consult_oracle("Question")
+    self.assertEqual(res, "Pure reasoning answer")

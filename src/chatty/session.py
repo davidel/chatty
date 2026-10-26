@@ -150,6 +150,7 @@ class SessionConfig:
   max_thinking_leeway_chars: int = 2000
   api_delay: float = 2.5
   api_timeout: float = 60.0
+  oracle_timeout: float = 180.0
   repo_map: bool = True
   repo_map_tokens: int = 1024
   discovery_model: Optional[str] = None
@@ -326,6 +327,7 @@ class ChatbotSession(LLMMixin):
     max_thinking_leeway_chars: int = 2000,
     api_delay: float = 2.5,
     api_timeout: float = 60.0,
+    oracle_timeout: float = 180.0,
     repo_map: bool = True,
     repo_map_tokens: int = 1024,
     discovery_model: Optional[str] = None,
@@ -381,6 +383,7 @@ class ChatbotSession(LLMMixin):
         max_thinking_leeway_chars=max_thinking_leeway_chars,
         api_delay=api_delay,
         api_timeout=api_timeout,
+        oracle_timeout=oracle_timeout,
         repo_map=repo_map,
         repo_map_tokens=repo_map_tokens,
         discovery_model=discovery_model,
