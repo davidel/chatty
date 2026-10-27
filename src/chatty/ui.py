@@ -172,7 +172,7 @@ class ChattyCompleter(Completer):
       else:
         parts = text.split(maxsplit=1)
         cmd = parts[0].lower()
-        if cmd in ('/load', '/save', '/save_session', '/load_session', '/show', '/view', '/open'):
+        if cmd in ('/load', '/save', '/save_session', '/load_session', '/show', '/view', '/open', '/attach', '/upload'):
           path_text = parts[1] if len(parts) > 1 else ""
           sub_doc = Document(path_text, cursor_position=len(path_text))
           for completion in self.path_completer.get_completions(sub_doc, complete_event):
@@ -266,6 +266,7 @@ def show_help(session: Any):
     ("/save_response <path> / /save_reply", "Save the entire last AI response to a file"),
     ("/show <path>", "Read and render a Markdown file beautifully in the terminal"),
     ("/view <path> / /open", "Open an image, SVG, PDF, or CAD asset in the desktop viewer"),
+    ("/attach <path> [--pages N] / /upload", "Stage a PDF, image, or SVG attachment for multimodal vision"),
     ("/docker [command] / /container", "Execute a command (or inspect status) inside the Docker companion container"),
     ("/task [list|show|kill] / /tasks", "Manage background tasks (list, show output, terminate)"),
     ("/exit / /quit", "Exit the application"),

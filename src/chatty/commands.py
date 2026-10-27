@@ -1363,6 +1363,92 @@ def cmd_view(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_attach(session: Any, arg: str) -> bool:
+  """Stages a file (PDF, image, SVG) as a multimodal attachment for subsequent prompts."""
+  import shlex
+  from chatty.attachments import stage_attachment
+
+  arg = arg.strip()
+  if not arg:
+    console.print("[bold red]Usage: /attach <file_path> [--pages <spec>][/bold red]")
+    console.print("[dim]Supported formats: .pdf, .png, .jpg, .jpeg, .webp, .bmp, .svg[/dim]")
+    return True
+
+  if arg in ("clear", "reset"):
+    if hasattr(session, "staged_attachments"):
+      session.staged_attachments.clear()
+    console.print("[bold yellow]Cleared staged attachments.[/bold yellow]")
+    return True
+
+  if arg in ("list", "ls"):
+    staged = getattr(session, "staged_attachments", None)
+    if not staged:
+      console.print("[yellow]No attachments currently staged.[/yellow]")
+    else:
+      console.print(f"[bold cyan]Staged Attachments ({len(staged)}):[/bold cyan]")
+      for idx, att in enumerate(staged, 1):
+        pages_info = f" (pages: {att.page_numbers})" if att.media_type == "pdf" else ""
+        vision_info = f" [{len(att.images)} image(s)]" if att.images else " [no vision image]"
+        console.print(f"  {idx}. [bold green]{att.filename}[/bold green] ({att.media_type}){pages_info}{vision_info}")
+    return True
+
+  try:
+    parts = shlex.split(arg)
+  except ValueError as ve:
+    console.print(f"[bold red]Error parsing command arguments: {ve}[/bold red]")
+    return True
+
+  target_path = None
+  pages_spec = None
+  idx = 0
+  while idx < len(parts):
+    if parts[idx] == "--pages" and idx + 1 < len(parts):
+      pages_spec = parts[idx + 1]
+      idx += 2
+    else:
+      if target_path is None:
+        target_path = parts[idx]
+      idx += 1
+
+  if not target_path:
+    console.print("[bold red]Usage: /attach <file_path> [--pages <spec>][/bold red]")
+    return True
+
+  target_path = os.path.expanduser(target_path)
+  resolved_path = None
+
+  # Try relative to sandbox
+  sandbox_path = os.path.realpath(os.path.join(session.sandbox, target_path))
+  if os.path.exists(sandbox_path) and os.path.isfile(sandbox_path):
+    resolved_path = sandbox_path
+  # Try relative to current working directory or absolute
+  elif os.path.exists(target_path) and os.path.isfile(target_path):
+    resolved_path = os.path.realpath(target_path)
+
+  if not resolved_path:
+    console.print(f"[bold red]Error: File '{target_path}' does not exist or is not a file.[/bold red]")
+    return True
+
+  attachment, err = stage_attachment(session.sandbox, resolved_path, pages_spec=pages_spec)
+  if err:
+    console.print(f"[bold red]Error attaching file: {err}[/bold red]")
+    return True
+
+  if not hasattr(session, "staged_attachments"):
+    session.staged_attachments = []
+  session.staged_attachments.append(attachment)
+
+  pages_info = f" (pages: {attachment.page_numbers})" if attachment.media_type == "pdf" else ""
+  console.print(f"[bold green]Successfully staged attachment:[/bold green] [cyan]{attachment.filename}[/cyan]{pages_info}")
+
+  if attachment.warning:
+    console.print(f"[bold yellow]Notice:[/bold yellow] {attachment.warning}")
+  elif attachment.images:
+    console.print(f"[dim]• {len(attachment.images)} image(s) prepared for vision models.[/dim]")
+
+  return True
+
+
 def cmd_find_symbol(session: Any, arg: str) -> bool:
   arg = arg.strip()
   if not arg:
@@ -1768,6 +1854,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/show": cmd_show,
   "/view": cmd_view,
   "/open": cmd_view,
+  "/attach": cmd_attach,
+  "/upload": cmd_attach,
   "/docker": cmd_docker,
   "/container": cmd_docker,
   "/dexec": cmd_docker,

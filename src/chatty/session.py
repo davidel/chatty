@@ -428,6 +428,7 @@ class ChatbotSession(LLMMixin):
     self.next_task_id = 1
     self.max_completed_tasks = 10
     self._active_live = None
+    self.staged_attachments: List[Any] = []
     
     if self.config.enable_mcp:
       from chatty.mcp import MCPManager
