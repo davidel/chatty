@@ -1223,6 +1223,24 @@ class ChatbotSession(LLMMixin):
     return tools
 
 
+  def add_user_message(self, user_input: str) -> Dict[str, Any]:
+    """
+    Constructs and appends the user message, incorporating any staged attachments
+    into a multimodal payload, then clears staged_attachments.
+    """
+    from chatty.attachments import format_multimodal_user_message
+
+    staged = getattr(self, "staged_attachments", None)
+    if staged:
+      msg = format_multimodal_user_message(user_input, staged)
+      self.staged_attachments.clear()
+    else:
+      msg = {"role": "user", "content": user_input}
+
+    self.messages.append(msg)
+    return msg
+
+
   def handle_command(self, cmd_line: str) -> bool:
     """
     Parses and handles slash commands.

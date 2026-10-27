@@ -478,12 +478,18 @@ def start_interactive_loop(session: Any):
     model_usage = session.model_usage.get(session.model, {"prompt_tokens": 0, "completion_tokens": 0}) if hasattr(session, "model_usage") else {"prompt_tokens": 0, "completion_tokens": 0}
     cumulative_tokens = model_usage.get("prompt_tokens", 0) + model_usage.get("completion_tokens", 0)
 
+    attach_part = ""
+    staged = getattr(session, "staged_attachments", None)
+    if staged:
+      attach_part = f"| <b>Attached:</b> <ansimagenta>{len(staged)} item(s)</ansimagenta> "
+
     return HTML(
       f" <b>Model:</b> <ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow> |"
       f" <b>Context:</b> {total_tokens}/{session.context_size} |"
       f" <b>Usage:</b> {format_short_number(cumulative_tokens)} |"
       f" <b>Ratio:</b> {session.token_to_char_ratio:.2f} |"
       f" <b>Loops:</b> <ansicyan>{session.current_loop}/{session.max_loops}</ansicyan> "
+      f"{attach_part}"
     )
 
   def prompt_continuation(width, line_number, is_soft_wrap):
@@ -518,7 +524,7 @@ def start_interactive_loop(session: Any):
 
       # Append user query to history and execute loop
       logger.info(f"User Input: {user_input}")
-      session.messages.append({"role": "user", "content": user_input})
+      session.add_user_message(user_input)
       session.run_llm_cycle()
 
     except KeyboardInterrupt:

@@ -102,19 +102,31 @@ class LLMMixin:
 
   def _calculate_tokens_for_messages(self, messages: List[Dict[str, Any]]) -> int:
     total_tokens = 0
-    if messages:
-      sys_msg = messages[0]
-      total_tokens += self.count_tokens_estimate(sys_msg.get("content") or "")
-      for msg in messages[1:]:
-        content = msg.get("content") or ""
-        if msg.get("tool_calls"):
-          content += json.dumps(msg["tool_calls"])
-        if msg.get("tool_call_id"):
-          content += msg["tool_call_id"]
-        for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
-          if msg.get(field):
-            content += str(msg[field])
-        total_tokens += self.count_tokens_estimate(content) + 12
+    for msg in messages:
+      raw_content = msg.get("content")
+      image_tokens = 0
+      if isinstance(raw_content, list):
+        text_parts = []
+        for part in raw_content:
+          if isinstance(part, dict):
+            if part.get("type") == "text":
+              text_parts.append(part.get("text") or "")
+            elif part.get("type") == "image_url":
+              image_tokens += 1000
+          elif isinstance(part, str):
+            text_parts.append(part)
+        content = " ".join(text_parts)
+      else:
+        content = raw_content or ""
+      if msg.get("tool_calls"):
+        content += json.dumps(msg["tool_calls"])
+      if msg.get("tool_call_id"):
+        content += msg["tool_call_id"]
+      for field in ["reasoning", "reasoning_content", "reasoning_details", "thought_signature"]:
+        if msg.get(field):
+          content += str(msg[field])
+      overhead = 0 if msg.get("role") == "system" else 12
+      total_tokens += self.count_tokens_estimate(content) + image_tokens + overhead
     return total_tokens
 
   def init_client(self):
@@ -508,14 +520,28 @@ class LLMMixin:
 
     # Process from newest to oldest
     for msg in reversed(processed_messages):
-      content = msg.get("content") or ""
+      raw_content = msg.get("content")
+      img_tokens = 0
+      if isinstance(raw_content, list):
+        text_parts = []
+        for part in raw_content:
+          if isinstance(part, dict):
+            if part.get("type") == "text":
+              text_parts.append(part.get("text") or "")
+            elif part.get("type") == "image_url":
+              img_tokens += 1000
+          elif isinstance(part, str):
+            text_parts.append(part)
+        content = " ".join(text_parts)
+      else:
+        content = raw_content or ""
       # Estimate tool call tokens
       if msg.get("tool_calls"):
         content += json.dumps(msg["tool_calls"])
       if msg.get("tool_call_id"):
         content += msg["tool_call_id"]
 
-      msg_tokens = self.count_tokens_estimate(content) + 12  # add safety overhead per message structure
+      msg_tokens = self.count_tokens_estimate(content) + img_tokens + 12
 
       if accumulated_tokens + msg_tokens > self.context_size:
         break
@@ -705,7 +731,10 @@ class LLMMixin:
           if active_messages and active_messages[-1].get("role") == "user":
             last_msg = active_messages[-1]
             if last_msg.get("content"):
-              last_msg["content"] = f"{last_msg['content']}\n\n{nudge_content}"
+              if isinstance(last_msg["content"], list):
+                last_msg["content"].append({"type": "text", "text": f"\n\n{nudge_content}"})
+              else:
+                last_msg["content"] = f"{last_msg['content']}\n\n{nudge_content}"
             else:
               last_msg["content"] = nudge_content
           else:

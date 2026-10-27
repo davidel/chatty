@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 import re
@@ -300,3 +301,49 @@ def stage_attachment(
     return attachment, None
 
   return None, f"Unhandled attachment format '{ext}'"
+
+
+def format_multimodal_user_message(
+  user_text: str,
+  attachments: List[StagedAttachment]
+) -> Dict[str, Any]:
+  """
+  Builds a standard OpenAI/LiteLLM multimodal user message dict.
+  Incorporates text instructions, extracted document annotations, and base64 image data URLs.
+  """
+  if not attachments:
+    return {"role": "user", "content": user_text}
+
+  has_images = any(len(att.images) > 0 for att in attachments)
+  has_text = any(att.extracted_text for att in attachments)
+
+  if not has_images and not has_text:
+    return {"role": "user", "content": user_text}
+
+  content_blocks: List[Dict[str, Any]] = []
+
+  if user_text and user_text.strip():
+    content_blocks.append({"type": "text", "text": user_text})
+
+  for att in attachments:
+    if att.extracted_text:
+      header = f"\n\n--- Attachment: {att.filename} ---"
+      content_blocks.append({
+        "type": "text",
+        "text": f"{header}\n{att.extracted_text}\n--- End of {att.filename} ---"
+      })
+
+    for p_num, img_bytes in att.images:
+      b64_data = base64.b64encode(img_bytes).decode("ascii")
+      content_blocks.append({
+        "type": "image_url",
+        "image_url": {
+          "url": f"data:image/png;base64,{b64_data}",
+          "detail": "high"
+        }
+      })
+
+  return {
+    "role": "user",
+    "content": content_blocks
+  }
