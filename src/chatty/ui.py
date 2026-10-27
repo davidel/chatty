@@ -2,6 +2,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 from typing import Any, List, Dict
 
 from prompt_toolkit import PromptSession
@@ -195,15 +196,22 @@ class ChattyCompleter(Completer):
                   yield Completion(m_id, start_position=-len(prefix))
     else:
       if text and not text.endswith(' ') and not text.endswith('\n'):
-        words = text.split()
-        if words:
-          last_word = words[-1]
-          if '/' in last_word or '.' in last_word or '~' in last_word or any(
-              entry.startswith(last_word) for entry in self._safe_listdir()
-          ):
-            sub_doc = Document(last_word, cursor_position=len(last_word))
-            for completion in self.path_completer.get_completions(sub_doc, complete_event):
-              yield completion
+        at_match = re.search(r'(?:^|[\s(\[{<,;])@(?:"([^"]*)|(?:\'([^\']*))|([^\s]*))$', text)
+        if at_match:
+          path_query = at_match.group(1) or at_match.group(2) or at_match.group(3) or ""
+          sub_doc = Document(path_query, cursor_position=len(path_query))
+          for completion in self.path_completer.get_completions(sub_doc, complete_event):
+            yield completion
+        else:
+          words = text.split()
+          if words:
+            last_word = words[-1]
+            if '/' in last_word or '.' in last_word or '~' in last_word or any(
+                entry.startswith(last_word) for entry in self._safe_listdir()
+            ):
+              sub_doc = Document(last_word, cursor_position=len(last_word))
+              for completion in self.path_completer.get_completions(sub_doc, complete_event):
+                yield completion
 
 
 def show_whitelist(session: Any):
@@ -279,6 +287,7 @@ def show_help(session: Any):
     table.add_row(cmd, desc)
 
   session._print(table)
+  session._print("\n[bold cyan]Tip:[/bold cyan] Reference files inline using [bold]@path[/bold] (e.g. [green]@drawing.pdf[/green], [green]@blueprint.pdf:1-2[/green], [green]@schema.png[/green]) to stage attachments automatically.")
 
 
 def show_status(session: Any):

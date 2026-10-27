@@ -19,6 +19,17 @@ SUPPORTED_EXTENSIONS = {
 }
 
 
+INLINE_PATH_PATTERN = re.compile(
+  r'(?:^|[\s(\[{<,;])@(?:'
+  r'\"(?P<qpath>[^"]+)\"|'
+  r"\'(?P<sqpath>[^']+)\'|"
+  r'(?P<rawpath>[^\s()\[\]{}<>\"\'!?,;:]+)'
+  r')'
+  r'(?::(?P<spec>[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*|all))?'
+  r'(?=[.,;:?!)}\]]*(?:\s|$))'
+)
+
+
 @dataclass
 class StagedAttachment:
   original_path: str
@@ -347,3 +358,137 @@ def format_multimodal_user_message(
     "role": "user",
     "content": content_blocks
   }
+
+
+def extract_inline_paths(text: str) -> List[Tuple[str, Optional[str]]]:
+  """
+  Extracts inline @path mentions from text.
+  Returns a list of (path_str, optional_pages_spec) tuples.
+  """
+  if not text or "@" not in text:
+    return []
+
+  results: List[Tuple[str, Optional[str]]] = []
+  for match in INLINE_PATH_PATTERN.finditer(text):
+    is_quoted = bool(match.group("qpath") or match.group("sqpath"))
+    path = match.group("qpath") or match.group("sqpath") or match.group("rawpath")
+    spec = match.group("spec")
+    if path and path.strip():
+      clean_path = path.strip() if is_quoted else path.strip().rstrip(".,;:?!")
+      if clean_path:
+        results.append((clean_path, spec.strip() if spec else None))
+
+  return results
+
+
+def resolve_inline_path(path_str: str, sandbox_dir: Optional[str] = None) -> Optional[str]:
+  """
+  Resolves an inline path reference to an existing file path, checking:
+  1. Absolute / tilde-expanded paths
+  2. Relative to sandbox directory (if provided)
+  3. Relative to current working directory
+  Returns absolute path if file exists, else None.
+  """
+  expanded = os.path.expanduser(path_str.strip())
+  if os.path.isabs(expanded):
+    if os.path.isfile(expanded):
+      return os.path.abspath(expanded)
+    return None
+
+  if sandbox_dir:
+    candidate = os.path.join(sandbox_dir, expanded)
+    if os.path.isfile(candidate):
+      return os.path.abspath(candidate)
+
+  cwd_candidate = os.path.abspath(expanded)
+  if os.path.isfile(cwd_candidate):
+    return cwd_candidate
+
+  return None
+
+
+def stage_text_file(
+  sandbox_dir: str,
+  file_path: str,
+  max_bytes: int = 100000
+) -> Tuple[Optional[StagedAttachment], Optional[str]]:
+  """
+  Stages a local text or code file as context for prompt attachments.
+  """
+  abs_path = os.path.abspath(file_path)
+  if not os.path.exists(abs_path):
+    return None, f"File not found: {file_path}"
+  if not os.path.isfile(abs_path):
+    return None, f"Path is not a file: {file_path}"
+
+  filename = os.path.basename(abs_path)
+  try:
+    with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+      content = f.read(max_bytes + 1)
+    if len(content) > max_bytes:
+      content = content[:max_bytes] + f"\n\n... (truncated at {max_bytes} bytes) ..."
+
+    attachments_dir = get_attachments_dir(sandbox_dir)
+    staged_filename = f"{uuid.uuid4().hex[:8]}_{filename}"
+    staged_dest = os.path.join(attachments_dir, staged_filename)
+    try:
+      shutil.copy2(abs_path, staged_dest)
+    except Exception:
+      staged_dest = abs_path
+
+    attachment = StagedAttachment(
+      original_path=abs_path,
+      filename=filename,
+      staged_path=staged_dest,
+      media_type="text",
+      page_numbers=[1],
+      images=[],
+      extracted_text=content,
+      warning=None
+    )
+    return attachment, None
+  except Exception as e:
+    return None, f"Failed to stage text file '{filename}': {e}"
+
+
+def process_inline_attachments(
+  user_input: str,
+  sandbox_dir: Optional[str] = None
+) -> Tuple[List[StagedAttachment], List[str]]:
+  """
+  Finds @path mentions in user_input, resolves existing files, and stages them.
+  Returns (attachments, warnings).
+  """
+  extracted = extract_inline_paths(user_input)
+  if not extracted:
+    return [], []
+
+  target_sandbox = sandbox_dir or os.getcwd()
+  attachments: List[StagedAttachment] = []
+  warnings: List[str] = []
+  seen_paths = set()
+
+  for path_str, spec in extracted:
+    resolved = resolve_inline_path(path_str, target_sandbox)
+    if not resolved:
+      continue
+
+    cache_key = (resolved, spec)
+    if cache_key in seen_paths:
+      continue
+    seen_paths.add(cache_key)
+
+    ext = os.path.splitext(resolved)[1].lower()
+    if ext in SUPPORTED_EXTENSIONS:
+      att, err = stage_attachment(target_sandbox, resolved, pages_spec=spec)
+    else:
+      att, err = stage_text_file(target_sandbox, resolved)
+
+    if att:
+      attachments.append(att)
+      if att.warning:
+        warnings.append(att.warning)
+    elif err:
+      warnings.append(err)
+
+  return attachments, warnings

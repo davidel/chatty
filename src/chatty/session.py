@@ -1226,14 +1226,30 @@ class ChatbotSession(LLMMixin):
   def add_user_message(self, user_input: str) -> Dict[str, Any]:
     """
     Constructs and appends the user message, incorporating any staged attachments
-    into a multimodal payload, then clears staged_attachments.
+    and inline @path file references into a multimodal payload, then clears staged_attachments.
     """
-    from chatty.attachments import format_multimodal_user_message
+    from chatty.attachments import format_multimodal_user_message, process_inline_attachments
 
-    staged = getattr(self, "staged_attachments", None)
+    inline_attachments, inline_warnings = process_inline_attachments(
+      user_input, getattr(self, "sandbox", None)
+    )
+    if inline_warnings:
+      console_print = self._print if hasattr(self, "_print") else print
+      for warn in inline_warnings:
+        console_print(f"[yellow]Attachment notice:[/yellow] {warn}")
+
+    staged = list(getattr(self, "staged_attachments", []))
+    staged_original_paths = {att.original_path for att in staged}
+
+    for att in inline_attachments:
+      if att.original_path not in staged_original_paths:
+        staged.append(att)
+        staged_original_paths.add(att.original_path)
+
     if staged:
       msg = format_multimodal_user_message(user_input, staged)
-      self.staged_attachments.clear()
+      if hasattr(self, "staged_attachments") and self.staged_attachments:
+        self.staged_attachments.clear()
     else:
       msg = {"role": "user", "content": user_input}
 
