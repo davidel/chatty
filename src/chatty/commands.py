@@ -980,6 +980,7 @@ def cmd_config(session: Any, arg: str) -> bool:
     "api_delay": float,
     "api_timeout": float,
     "oracle_timeout": float,
+    "discovery_timeout": float,
     "max_loops": int,
     "context_size": int,
     "max_thinking_chars": int,

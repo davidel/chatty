@@ -483,6 +483,144 @@ class TestDiscoveryAgent(unittest.TestCase):
           self.assertIn("read_file", res)
           self.assertIn("create_app()", res)
 
+  @patch("chatty.discovery.optional_live")
+  def test_run_discovery_passes_discovery_timeout(self, mock_optional_live):
+    from types import SimpleNamespace
+    self.session.config.discovery_timeout = 42.0
+    mock_chunk = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Done dossier", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+    with patch.object(self.session, "_create_completion", return_value=[mock_chunk]) as mock_create:
+      res = run_discovery(self.session, "Test timeout", max_loops=1)
+      self.assertEqual(res, "Done dossier")
+      self.assertEqual(mock_create.call_args.kwargs.get("timeout"), 42.0)
+
+  @patch("chatty.discovery.optional_live")
+  def test_run_discovery_displays_thinking_tokens(self, mock_optional_live):
+    from types import SimpleNamespace
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    chunk1 = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning="Analyzing auth module...", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+    chunk2 = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Dossier ready", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+
+    curr_time = [100.0]
+    def mock_time():
+      curr_time[0] += 5.1
+      return curr_time[0]
+
+    with patch("chatty.discovery.time.time", side_effect=mock_time):
+      with patch.object(self.session, "_create_completion", return_value=[chunk1, chunk2]):
+        res = run_discovery(self.session, "Inspect auth", max_loops=1)
+        self.assertEqual(res, "Dossier ready")
+
+    captured_contents = []
+    for call in mock_optional_live.call_args_list:
+      layout = call.args[0] if call.args else call.kwargs.get("renderable")
+      if hasattr(layout, "panels"):
+        for p in layout.panels:
+          content = p.get("content")
+          text_str = content.plain if hasattr(content, "plain") else str(content)
+          captured_contents.append(text_str)
+
+    self.assertTrue(any("Thinking:" in c and "tokens" in c for c in captured_contents))
+
+  @patch("chatty.discovery.optional_live")
+  def test_run_discovery_thinking_budget_exceeded_user_stop(self, mock_optional_live):
+    from types import SimpleNamespace
+    self.session.headless = False
+    self.session.config.max_thinking_chars = 50
+
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    excessive_thinking = "This is a very long chain of reasoning that exceeds the configured test limit."
+    chunk_excessive = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning=excessive_thinking, tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+    chunk_recovered = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Self-corrected dossier", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+
+    with patch("time.sleep"):
+      with patch("chatty.discovery.sys.stdin.isatty", return_value=True):
+        with patch("chatty.discovery.select.select", return_value=([sys.stdin], [], [])):
+          with patch("chatty.discovery.sys.stdin.readline", return_value="s\n"):
+            with patch.object(self.session, "_create_completion", side_effect=[[chunk_excessive], [chunk_recovered]]) as mock_create:
+              res = run_discovery(self.session, "Inspect security", max_loops=1)
+              self.assertEqual(res, "Self-corrected dossier")
+              self.assertEqual(mock_create.call_count, 2)
+              second_call_messages = mock_create.call_args_list[1].kwargs["messages"]
+              self.assertTrue(any("exceeded the thinking budget" in m.get("content", "") for m in second_call_messages))
+
+  @patch("chatty.discovery.optional_live")
+  def test_run_discovery_thinking_budget_user_let_go(self, mock_optional_live):
+    from types import SimpleNamespace
+    self.session.headless = False
+    self.session.config.max_thinking_chars = 50
+
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    excessive_thinking = "This is a very long chain of reasoning that exceeds the configured test limit."
+    chunk1 = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning=excessive_thinking, tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+    chunk2 = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Final result after let go", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+
+    with patch("time.sleep"):
+      with patch("chatty.discovery.sys.stdin.isatty", return_value=True):
+        with patch("chatty.discovery.select.select", return_value=([sys.stdin], [], [])):
+          with patch("chatty.discovery.sys.stdin.readline", return_value="l\n"):
+            with patch.object(self.session, "_create_completion", return_value=[chunk1, chunk2]) as mock_create:
+              res = run_discovery(self.session, "Inspect security", max_loops=1)
+              self.assertEqual(res, "Final result after let go")
+              self.assertEqual(mock_create.call_count, 1)
+
+  @patch("chatty.discovery.optional_live")
+  def test_run_discovery_repetition_loop_aborts_and_retries(self, mock_optional_live):
+    from types import SimpleNamespace
+    mock_live = MagicMock()
+    mock_optional_live.return_value.__enter__.return_value = mock_live
+
+    repeated_thinking = "Let me think about this step. " * 30
+    chunk_repeating = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning=repeated_thinking, tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+    chunk_ok = SimpleNamespace(
+      choices=[SimpleNamespace(delta=SimpleNamespace(content="Recovered after repetition", tool_calls=None))],
+      usage=None,
+      model_extra=None
+    )
+
+    with patch("time.sleep"):
+      with patch.object(self.session, "_create_completion", side_effect=[[chunk_repeating], [chunk_ok]]) as mock_create:
+        res = run_discovery(self.session, "Inspect repetition", max_loops=1)
+        self.assertEqual(res, "Recovered after repetition")
+        self.assertEqual(mock_create.call_count, 2)
+
 
 class TestTimeoutStreamWrapper(unittest.TestCase):
 
@@ -514,6 +652,30 @@ class TestTimeoutStreamWrapper(unittest.TestCase):
     wrapper = TimeoutStreamWrapper(mock_stream, timeout=5.0)
     wrapper.close()
     mock_stream.close.assert_called_once()
+
+  def test_wrapper_close_cleans_up_nested_litellm_streams(self):
+    from chatty.utils import TimeoutStreamWrapper
+    mock_stream = MagicMock()
+    mock_cs = MagicMock()
+    mock_resp_iter = MagicMock()
+    mock_underlying = MagicMock()
+    mock_http_resp = MagicMock()
+
+    mock_resp_iter._response = mock_underlying
+    mock_cs.streaming_response = mock_resp_iter
+    mock_cs.response_iterator = None
+    mock_cs.http_response = mock_http_resp
+    mock_stream.completion_stream = mock_cs
+
+    mock_stream.__iter__.return_value = iter([1, 2, 3])
+    wrapper = TimeoutStreamWrapper(mock_stream, timeout=5.0)
+    wrapper.close()
+
+    mock_stream.close.assert_called_once()
+    mock_cs.close.assert_called_once()
+    mock_resp_iter.close.assert_called_once()
+    mock_underlying.close.assert_called_once()
+    mock_http_resp.close.assert_called_once()
 
 
 if __name__ == "__main__":

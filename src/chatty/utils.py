@@ -667,9 +667,37 @@ class TimeoutStreamWrapper:
 
   def close(self):
     self._stop_event.set()
-    if hasattr(self._stream, "close") and callable(self._stream.close):
+    stream = self._stream
+    if hasattr(stream, "close") and callable(stream.close):
       try:
-        self._stream.close()
+        stream.close()
       except Exception:
         pass
+    cs = getattr(stream, "completion_stream", None)
+    if cs is not None:
+      if hasattr(cs, "close") and callable(cs.close):
+        try:
+          cs.close()
+        except Exception:
+          pass
+      for attr in ("streaming_response", "response_iterator"):
+        resp_iter = getattr(cs, attr, None)
+        if resp_iter is not None:
+          if hasattr(resp_iter, "close") and callable(resp_iter.close):
+            try:
+              resp_iter.close()
+            except Exception:
+              pass
+          underlying = getattr(resp_iter, "_response", None)
+          if underlying is not None and hasattr(underlying, "close") and callable(underlying.close):
+            try:
+              underlying.close()
+            except Exception:
+              pass
+      http_resp = getattr(cs, "http_response", None)
+      if http_resp is not None and hasattr(http_resp, "close") and callable(http_resp.close):
+        try:
+          http_resp.close()
+        except Exception:
+          pass
 

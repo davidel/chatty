@@ -310,6 +310,8 @@ def show_status(session: Any):
   table.add_row("API Request Delay", f"{session.api_delay} seconds")
   table.add_row("API Request Timeout", f"{session.api_timeout} seconds")
   table.add_row("Oracle Request Timeout", f"{getattr(session, 'oracle_timeout', 180.0)} seconds")
+  disc_timeout = getattr(session, "discovery_timeout", None) or session.api_timeout
+  table.add_row("Discovery Request Timeout", f"{disc_timeout} seconds")
   table.add_row("Total Messages", str(len(session.messages)))
 
   # Display current model usage

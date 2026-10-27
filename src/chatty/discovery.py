@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+import select
+import sys
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Set
@@ -15,6 +17,7 @@ from rich.markup import escape
 from chatty.tools import TOOLS_SCHEMA, execute_tool
 from chatty.safety import active_session_var
 from chatty.ui import optional_live, LiveScreenLayout
+from chatty.llm import ThinkingBudgetExceeded, is_safe_to_interrupt, detect_repetition_loop
 
 logger = logging.getLogger("chatty")
 console = Console()
@@ -215,17 +218,23 @@ def _run_scout_loop(
     actual_model, extra_body = session._resolve_model_and_provider(discovery_model)
     session._throttle_request()
 
+    discovery_timeout = getattr(session.config, "discovery_timeout", None) or getattr(session.config, "api_timeout", 60.0)
     kwargs: Dict[str, Any] = {
       "model": actual_model,
       "messages": scout_messages,
       "tools": scout_tools,
       "stream": True,
+      "timeout": discovery_timeout,
     }
     if extra_body:
       kwargs["extra_body"] = extra_body
 
     content_accumulated = ""
     tool_calls_accumulated: List[Dict[str, Any]] = []
+    reasoning_accumulated = ""
+    last_thinking_display_time = time.time()
+    current_max_thinking = getattr(session.config, "max_thinking_chars", 12000)
+    whitelist_thinking_this_turn = False
     usage_metadata = None
     api_succeeded = False
 
@@ -234,43 +243,192 @@ def _run_scout_loop(
     )
 
     for attempt in range(1, max_retries + 1):
+      content_accumulated = ""
+      tool_calls_accumulated = []
+      reasoning_accumulated = ""
+      last_thinking_display_time = time.time()
       try:
         with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not session.headless, refresh_per_second=12, transient=True) as live:
-          stream = session._create_completion(**kwargs)
-          for chunk in stream:
-            if hasattr(chunk, "usage") and chunk.usage:
-              usage_metadata = chunk.usage
-            elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
-              usage_metadata = chunk.model_extra["usage"]
+          session._active_live = live
+          try:
+            stream = session._create_completion(**kwargs)
+            for chunk in stream:
+              if hasattr(chunk, "usage") and chunk.usage:
+                usage_metadata = chunk.usage
+              elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+                usage_metadata = chunk.model_extra["usage"]
 
-            if not chunk.choices:
-              continue
+              if not chunk.choices:
+                continue
 
-            choice = chunk.choices[0]
-            delta = choice.delta
+              choice = chunk.choices[0]
+              delta = choice.delta
 
-            if delta.content:
-              content_accumulated += delta.content
+              val = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+              if val is None and hasattr(delta, "model_extra") and delta.model_extra:
+                val = delta.model_extra.get("reasoning") or delta.model_extra.get("reasoning_content")
+              if val is None and isinstance(delta, dict):
+                val = delta.get("reasoning") or delta.get("reasoning_content")
 
-            if delta.tool_calls:
-              for tc in delta.tool_calls:
-                idx = tc.index
-                while len(tool_calls_accumulated) <= idx:
-                  tool_calls_accumulated.append({
-                    "id": None,
-                    "type": "function",
-                    "function": {"name": "", "arguments": ""}
-                  })
-                item = tool_calls_accumulated[idx]
-                if tc.id:
-                  item["id"] = tc.id
-                if tc.function:
-                  if tc.function.name:
-                    item["function"]["name"] += tc.function.name
-                  if tc.function.arguments:
-                    item["function"]["arguments"] += tc.function.arguments
+              if val:
+                if isinstance(val, str):
+                  if reasoning_accumulated and val.startswith(reasoning_accumulated):
+                    reasoning_accumulated = val
+                  else:
+                    reasoning_accumulated += val
 
-          api_succeeded = True
+              now = time.time()
+              if reasoning_accumulated and not content_accumulated and not tool_calls_accumulated:
+                if now - last_thinking_display_time >= 5.0:
+                  last_thinking_display_time = now
+                  t_count = session.count_tokens_estimate(reasoning_accumulated)
+                  panels[0]["content"] = _format_panel_content(
+                    f"Investigation step [bold yellow]{loop_idx + 1}/{loops_limit}[/bold yellow] (model: {escape(discovery_model)}) "
+                    f"[dim]• Thinking: ~{t_count:,} tokens ({len(reasoning_accumulated):,} chars)...[/dim]"
+                  )
+                  if live is not None:
+                    live.update(LiveScreenLayout(panels, None))
+
+              max_thinking_chars = getattr(session.config, "max_thinking_chars", 12000)
+              leeway = getattr(session.config, "max_thinking_leeway_chars", 2000)
+
+              exceeded_budget = len(reasoning_accumulated) > current_max_thinking
+              exceeded_hard_limit = len(reasoning_accumulated) > (current_max_thinking + leeway)
+
+              should_abort = False
+              if exceeded_hard_limit:
+                should_abort = True
+              elif exceeded_budget:
+                if is_safe_to_interrupt(reasoning_accumulated):
+                  should_abort = True
+
+              if should_abort:
+                if whitelist_thinking_this_turn:
+                  should_abort = False
+                elif not session.headless:
+                  with session._pause_live():
+                    session._print(f"\n[bold yellow]⚠️  {log_label} exceeded internal thinking budget.[/bold yellow]")
+                    t_count = session.count_tokens_estimate(reasoning_accumulated)
+                    session._print(
+                      f"Accumulated thinking: {len(reasoning_accumulated)} characters "
+                      f"(~{t_count:,} tokens, limit: {current_max_thinking} chars)."
+                    )
+                    session._print("What would you like to do?")
+                    session._print(
+                      "  [bold red]\\[s][/bold red]top (abort thinking stream) / "
+                      "  [bold green]\\[l][/bold green]et this go (increase budget by another 12000 chars) / "
+                      "  [bold cyan]\\[w][/bold cyan]hitelist for the current turn: ",
+                      end=""
+                    )
+                    try:
+                      if sys.stdin.isatty():
+                        ready, _, _ = select.select([sys.stdin], [], [], 30.0)
+                        if ready:
+                          resp = sys.stdin.readline().strip().lower()
+                        else:
+                          session._print("\n[bold red]⚠️  Timeout: No response received within 30 seconds. Aborting thinking stream to save tokens.[/bold red]")
+                          resp = "s"
+                      else:
+                        resp = input().strip().lower()
+                    except (KeyboardInterrupt, EOFError):
+                      resp = "s"
+                    except Exception as err:
+                      logger.warning(f"Error during timed input select: {err}. Falling back to standard input.")
+                      try:
+                        resp = input().strip().lower()
+                      except (KeyboardInterrupt, EOFError):
+                        resp = "s"
+
+                    if resp in ("l", "let"):
+                      current_max_thinking = len(reasoning_accumulated) + max_thinking_chars
+                      should_abort = False
+                      logger.info(f"User allowed thinking to continue in {log_label}. New budget: {current_max_thinking} chars.")
+                    elif resp in ("w", "whitelist"):
+                      whitelist_thinking_this_turn = True
+                      should_abort = False
+                      logger.info(f"User whitelisted thinking for the current turn in {log_label}.")
+                    else:
+                      should_abort = True
+                      logger.info(f"User decided to stop thinking in {log_label}. Aborting stream.")
+
+              is_repeating = detect_repetition_loop(reasoning_accumulated)
+              exceeded_absolute_ceiling = len(reasoning_accumulated) > 48000
+
+              if (is_repeating or exceeded_absolute_ceiling) and not content_accumulated and not delta.content and not tool_calls_accumulated and not delta.tool_calls:
+                logger.warning(
+                  f"Aborting stream: {log_label} got stuck in a repetitive loop or exceeded absolute thinking ceiling "
+                  f"(len={len(reasoning_accumulated)}, repeating={is_repeating})."
+                )
+                if not session.headless:
+                  with session._pause_live():
+                    if is_repeating:
+                      session._print(f"\n[bold red]⚠️  {log_label} got stuck in an infinite thinking loop. Aborting attempt to self-correct...[/bold red]")
+                    else:
+                      session._print(f"\n[bold red]⚠️  {log_label} exceeded absolute thinking limit (48k chars). Aborting attempt to self-correct...[/bold red]")
+                if hasattr(stream, "close"):
+                  try:
+                    stream.close()
+                  except Exception:
+                    pass
+                raise ThinkingBudgetExceeded(
+                  f"{log_label} got stuck in an infinite thinking loop." if is_repeating else f"{log_label} exceeded absolute thinking limit.",
+                  reasoning_accumulated
+                )
+
+              if (should_abort
+                  and not content_accumulated
+                  and not delta.content
+                  and not tool_calls_accumulated
+                  and not delta.tool_calls):
+                if hasattr(stream, "close"):
+                  try:
+                    stream.close()
+                  except Exception:
+                    pass
+                raise ThinkingBudgetExceeded(
+                  f"{log_label} exceeded maximum internal thinking budget.",
+                  reasoning_accumulated
+                )
+
+              if delta.content:
+                content_accumulated += delta.content
+
+              if delta.tool_calls:
+                for tc in delta.tool_calls:
+                  idx = tc.index
+                  while len(tool_calls_accumulated) <= idx:
+                    tool_calls_accumulated.append({
+                      "id": None,
+                      "type": "function",
+                      "function": {"name": "", "arguments": ""}
+                    })
+                  item = tool_calls_accumulated[idx]
+                  if tc.id:
+                    item["id"] = tc.id
+                  if tc.function:
+                    if tc.function.name:
+                      item["function"]["name"] += tc.function.name
+                    if tc.function.arguments:
+                      item["function"]["arguments"] += tc.function.arguments
+
+            api_succeeded = True
+            break
+          finally:
+            session._active_live = None
+      except ThinkingBudgetExceeded as e:
+        logger.warning(f"{log_label} thinking budget exceeded on attempt {attempt}")
+        if attempt < max_retries:
+          if not session.headless:
+            session._print(f"[bold yellow]⚠️  {log_label} exceeded thinking budget. Retrying with self-correction nudge (attempt {attempt}/{max_retries})...[/bold yellow]")
+          scout_messages.append({
+            "role": "user",
+            "content": "I aborted your previous attempt because you exceeded the thinking budget. Please proceed directly to issuing tool calls or compiling your final context dossier without further internal reasoning."
+          })
+          time.sleep(1)
+          continue
+        else:
+          if not session.headless:
+            session._print(f"[bold red]Error: {log_label} repeatedly exceeded internal thinking budget without producing output.[/bold red]")
           break
       except Exception as e:
         logger.warning(f"{log_label} API attempt {attempt} failed: {e}")
@@ -379,18 +537,27 @@ def _run_scout_loop(
           half = max_tool_chars // 2
           msg["content"] = f"{c[:half]}\n\n... [truncated] ...\n\n{c[-half:]}"
 
+    discovery_timeout = getattr(session.config, "discovery_timeout", None) or getattr(session.config, "api_timeout", 60.0)
     kwargs = {
       "model": actual_model,
       "messages": scout_messages,
       "stream": True,
+      "timeout": discovery_timeout,
     }
     if extra_body:
       kwargs["extra_body"] = extra_body
 
     content_accumulated = ""
+    reasoning_accumulated = ""
+    current_max_thinking = getattr(session.config, "max_thinking_chars", 12000)
+    whitelist_thinking_this_turn = False
+    last_thinking_display_time = time.time()
     usage_metadata = None
     for attempt in range(1, max_retries + 1):
       session._throttle_request()
+      content_accumulated = ""
+      reasoning_accumulated = ""
+      last_thinking_display_time = time.time()
       try:
         with optional_live(
           LiveScreenLayout(panels, None),
@@ -399,22 +566,167 @@ def _run_scout_loop(
           refresh_per_second=12,
           transient=True
         ) as live:
-          stream = session._create_completion(**kwargs)
-          for chunk in stream:
-            if hasattr(chunk, "usage") and chunk.usage:
-              usage_metadata = chunk.usage
-            elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
-              usage_metadata = chunk.model_extra["usage"]
+          session._active_live = live
+          try:
+            stream = session._create_completion(**kwargs)
+            for chunk in stream:
+              if hasattr(chunk, "usage") and chunk.usage:
+                usage_metadata = chunk.usage
+              elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+                usage_metadata = chunk.model_extra["usage"]
 
-            if not chunk.choices:
-              continue
+              if not chunk.choices:
+                continue
 
-            choice = chunk.choices[0]
-            delta = choice.delta
-            if delta.content:
-              content_accumulated += delta.content
+              choice = chunk.choices[0]
+              delta = choice.delta
 
-          final_dossier = content_accumulated.strip()
+              val = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+              if val is None and hasattr(delta, "model_extra") and delta.model_extra:
+                val = delta.model_extra.get("reasoning") or delta.model_extra.get("reasoning_content")
+              if val is None and isinstance(delta, dict):
+                val = delta.get("reasoning") or delta.get("reasoning_content")
+
+              if val:
+                if isinstance(val, str):
+                  if reasoning_accumulated and val.startswith(reasoning_accumulated):
+                    reasoning_accumulated = val
+                  else:
+                    reasoning_accumulated += val
+
+              now = time.time()
+              if reasoning_accumulated and not content_accumulated:
+                if now - last_thinking_display_time >= 5.0:
+                  last_thinking_display_time = now
+                  t_count = session.count_tokens_estimate(reasoning_accumulated)
+                  panels[0]["content"] = _format_panel_content(
+                    f"Investigation limit reached ([bold yellow]{loops_limit}/{loops_limit}[/bold yellow]). "
+                    f"Synthesizing final briefing (model: {escape(discovery_model)}) "
+                    f"[dim]• Thinking: ~{t_count:,} tokens ({len(reasoning_accumulated):,} chars)...[/dim]"
+                  )
+                  if live is not None:
+                    live.update(LiveScreenLayout(panels, None))
+
+              max_thinking_chars = getattr(session.config, "max_thinking_chars", 12000)
+              leeway = getattr(session.config, "max_thinking_leeway_chars", 2000)
+
+              exceeded_budget = len(reasoning_accumulated) > current_max_thinking
+              exceeded_hard_limit = len(reasoning_accumulated) > (current_max_thinking + leeway)
+
+              should_abort = False
+              if exceeded_hard_limit:
+                should_abort = True
+              elif exceeded_budget:
+                if is_safe_to_interrupt(reasoning_accumulated):
+                  should_abort = True
+
+              if should_abort:
+                if whitelist_thinking_this_turn:
+                  should_abort = False
+                elif not session.headless:
+                  with session._pause_live():
+                    session._print(f"\n[bold yellow]⚠️  {log_label} synthesis exceeded internal thinking budget.[/bold yellow]")
+                    t_count = session.count_tokens_estimate(reasoning_accumulated)
+                    session._print(
+                      f"Accumulated thinking: {len(reasoning_accumulated)} characters "
+                      f"(~{t_count:,} tokens, limit: {current_max_thinking} chars)."
+                    )
+                    session._print("What would you like to do?")
+                    session._print(
+                      "  [bold red]\\[s][/bold red]top (abort thinking stream) / "
+                      "  [bold green]\\[l][/bold green]et this go (increase budget by another 12000 chars) / "
+                      "  [bold cyan]\\[w][/bold cyan]hitelist for the current turn: ",
+                      end=""
+                    )
+                    try:
+                      if sys.stdin.isatty():
+                        ready, _, _ = select.select([sys.stdin], [], [], 30.0)
+                        if ready:
+                          resp = sys.stdin.readline().strip().lower()
+                        else:
+                          session._print("\n[bold red]⚠️  Timeout: No response received within 30 seconds. Aborting thinking stream to save tokens.[/bold red]")
+                          resp = "s"
+                      else:
+                        resp = input().strip().lower()
+                    except (KeyboardInterrupt, EOFError):
+                      resp = "s"
+                    except Exception as err:
+                      logger.warning(f"Error during timed input select: {err}. Falling back to standard input.")
+                      try:
+                        resp = input().strip().lower()
+                      except (KeyboardInterrupt, EOFError):
+                        resp = "s"
+
+                    if resp in ("l", "let"):
+                      current_max_thinking = len(reasoning_accumulated) + max_thinking_chars
+                      should_abort = False
+                      logger.info(f"User allowed thinking to continue in {log_label} synthesis. New budget: {current_max_thinking} chars.")
+                    elif resp in ("w", "whitelist"):
+                      whitelist_thinking_this_turn = True
+                      should_abort = False
+                      logger.info(f"User whitelisted thinking for the current turn in {log_label} synthesis.")
+                    else:
+                      should_abort = True
+                      logger.info(f"User decided to stop thinking in {log_label} synthesis. Aborting stream.")
+
+              is_repeating = detect_repetition_loop(reasoning_accumulated)
+              exceeded_absolute_ceiling = len(reasoning_accumulated) > 48000
+
+              if (is_repeating or exceeded_absolute_ceiling) and not content_accumulated and not delta.content:
+                logger.warning(
+                  f"Aborting synthesis stream: {log_label} got stuck in a repetitive loop or exceeded absolute thinking ceiling "
+                  f"(len={len(reasoning_accumulated)}, repeating={is_repeating})."
+                )
+                if not session.headless:
+                  with session._pause_live():
+                    if is_repeating:
+                      session._print(f"\n[bold red]⚠️  {log_label} synthesis got stuck in an infinite thinking loop. Aborting attempt to self-correct...[/bold red]")
+                    else:
+                      session._print(f"\n[bold red]⚠️  {log_label} synthesis exceeded absolute thinking limit (48k chars). Aborting attempt to self-correct...[/bold red]")
+                if hasattr(stream, "close"):
+                  try:
+                    stream.close()
+                  except Exception:
+                    pass
+                raise ThinkingBudgetExceeded(
+                  f"{log_label} synthesis got stuck in an infinite thinking loop." if is_repeating else f"{log_label} synthesis exceeded absolute thinking limit.",
+                  reasoning_accumulated
+                )
+
+              if should_abort and not content_accumulated and not delta.content:
+                if hasattr(stream, "close"):
+                  try:
+                    stream.close()
+                  except Exception:
+                    pass
+                raise ThinkingBudgetExceeded(
+                  f"{log_label} synthesis exceeded maximum internal thinking budget.",
+                  reasoning_accumulated
+                )
+
+              if delta.content:
+                content_accumulated += delta.content
+
+            if not content_accumulated and reasoning_accumulated:
+              content_accumulated = reasoning_accumulated
+            final_dossier = content_accumulated.strip()
+            break
+          finally:
+            session._active_live = None
+      except ThinkingBudgetExceeded as e:
+        logger.warning(f"{log_label} synthesis thinking budget exceeded on attempt {attempt}")
+        if attempt < max_retries:
+          if not session.headless:
+            session._print(f"[bold yellow]⚠️  {log_label} synthesis exceeded thinking budget. Retrying with self-correction nudge (attempt {attempt}/{max_retries})...[/bold yellow]")
+          scout_messages.append({
+            "role": "user",
+            "content": "I aborted your previous synthesis attempt because you exceeded the thinking budget. Please synthesize all gathered context and information into the final Markdown briefing now without further internal reasoning."
+          })
+          time.sleep(1)
+          continue
+        else:
+          if not session.headless:
+            session._print(f"[bold red]Error: {log_label} synthesis repeatedly exceeded internal thinking budget.[/bold red]")
           break
       except Exception as e:
         logger.warning(f"{log_label} synthesis API attempt {attempt} failed: {e}")

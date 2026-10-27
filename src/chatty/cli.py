@@ -210,6 +210,12 @@ def main():
     help="Timeout in seconds for oracle API requests and streams (default: 180.0)."
   )
   parser.add_argument(
+    "--discovery-timeout",
+    type=float,
+    default=None,
+    help="Timeout in seconds for discovery agent API requests and streams (default: inherits --api-timeout)."
+  )
+  parser.add_argument(
     "--repo-map",
     action=argparse.BooleanOptionalAction,
     default=True,
@@ -403,6 +409,7 @@ def main():
     api_delay=args.api_delay,
     api_timeout=args.api_timeout,
     oracle_timeout=args.oracle_timeout,
+    discovery_timeout=args.discovery_timeout,
     repo_map=args.repo_map,
     repo_map_tokens=args.repo_map_tokens,
     discovery_model=discovery_model,
