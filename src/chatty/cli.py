@@ -216,10 +216,17 @@ def main():
     help="Timeout in seconds for discovery agent API requests and streams (default: inherits --api-timeout)."
   )
   parser.add_argument(
+    "--profile",
+    type=str,
+    default="coder",
+    choices=["coder", "general"],
+    help="Agent role profile ('coder' for software engineering, 'general' for general assistant; default: 'coder')."
+  )
+  parser.add_argument(
     "--repo-map",
     action=argparse.BooleanOptionalAction,
-    default=True,
-    help="Include a Tree-Sitter repository map in the system prompt (default: True)."
+    default=None,
+    help="Include a Tree-Sitter repository map in the system prompt (default: True for coder, False for general)."
   )
   parser.add_argument(
     "--repo-map-tokens",
@@ -344,11 +351,11 @@ def main():
         if not args.headless:
           console.print(f"[bold blue]Info:[/bold blue] Auto-detected local Ollama model: [bold green]{models[0]}[/bold green]")
       else:
-        models = [prov_inst.get_default_model()]
+        models = [prov_inst.get_default_model(profile=args.profile)]
         if not args.headless:
           console.print(f"[bold blue]Info:[/bold blue] No local Ollama models detected. Fallback default: [bold green]{models[0]}[/bold green]")
     else:
-      default_m = prov_inst.get_default_model(args.api_key)
+      default_m = prov_inst.get_default_model(args.api_key, profile=args.profile)
       if default_m:
         models = [default_m]
         if not args.headless:
@@ -410,6 +417,7 @@ def main():
     api_timeout=args.api_timeout,
     oracle_timeout=args.oracle_timeout,
     discovery_timeout=args.discovery_timeout,
+    profile=args.profile,
     repo_map=args.repo_map,
     repo_map_tokens=args.repo_map_tokens,
     discovery_model=discovery_model,

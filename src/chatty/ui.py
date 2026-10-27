@@ -302,6 +302,8 @@ def show_status(session: Any):
 
   table.add_row("Context Limit", f"{session.context_size} tokens")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
+  prof = getattr(session, "profile", "coder")
+  table.add_row("Agent Profile", prof if isinstance(prof, str) else "coder")
   table.add_row("Auto Approve", "Enabled" if getattr(session, "auto_approve", False) else "Disabled")
   mcp_manager = getattr(session, "mcp_manager", None)
   mcp_count = len(mcp_manager.clients) if mcp_manager else 0

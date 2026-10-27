@@ -38,6 +38,10 @@ from chatty.tools.registry import TOOL_REGISTRY
 
 def execute_tool(name: str, arguments: Dict[str, Any], session: Any) -> str:
   """Executes the specified tool with arguments in the sandbox directory."""
+  if hasattr(session, "agent_profile") and session.agent_profile:
+    if name in session.agent_profile.excluded_tools:
+      return f"Error: Tool '{name}' is disabled for the '{session.agent_profile.name}' profile."
+
   if not hasattr(session, "tool_calls_count"):
     session.tool_calls_count = {}
   session.tool_calls_count[name] = session.tool_calls_count.get(name, 0) + 1

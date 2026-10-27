@@ -981,6 +981,7 @@ def cmd_config(session: Any, arg: str) -> bool:
     "api_timeout": float,
     "oracle_timeout": float,
     "discovery_timeout": float,
+    "profile": str,
     "max_loops": int,
     "context_size": int,
     "max_thinking_chars": int,
@@ -1034,6 +1035,12 @@ def cmd_config(session: Any, arg: str) -> bool:
         parsed_val = val_type(val_str)
         
       setattr(session, key, parsed_val)
+      if key == "profile":
+        from chatty.profiles import get_profile
+        session.agent_profile = get_profile(str(parsed_val))
+        session.config.profile = session.agent_profile.name
+        if not getattr(session.config, "system_prompt_override", None):
+          session.system_prompt = session.agent_profile.default_system_prompt
       console.print(f"[bold green]Configuration updated:[/bold green] {key} = [cyan]{parsed_val}[/cyan]")
     except ValueError as e:
       console.print(f"[bold red]Error parsing value for '{key}': {str(e)}[/bold red]")

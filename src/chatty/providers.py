@@ -82,7 +82,7 @@ class BaseProvider(ABC):
     pass
 
   @abstractmethod
-  def get_default_model(self, api_key: Optional[str] = None) -> Optional[str]:
+  def get_default_model(self, api_key: Optional[str] = None, profile: Optional[str] = None) -> Optional[str]:
     pass
 
   @abstractmethod
@@ -102,9 +102,9 @@ class BaseProvider(ABC):
     message.pop("reasoning_details", None)
     message.pop("thought_signature", None)
 
-  def get_default_discovery_model(self, api_key: Optional[str] = None) -> Optional[str]:
+  def get_default_discovery_model(self, api_key: Optional[str] = None, profile: Optional[str] = None) -> Optional[str]:
     """Returns the default model for discovery/reconnaissance tasks."""
-    return self.get_default_model(api_key)
+    return self.get_default_model(api_key, profile=profile)
 
   def get_extra_body(self, model: str) -> Optional[Dict[str, Any]]:
     """Returns provider-specific extra_body kwargs for completion requests."""
@@ -119,21 +119,29 @@ class OllamaProvider(BaseProvider):
   def get_default_url(self) -> str:
     return "http://localhost:11434/v1"
 
-  def get_default_model(self, api_key: Optional[str] = None) -> str:
+  def get_default_model(self, api_key: Optional[str] = None, profile: Optional[str] = None) -> str:
+    if profile == "general":
+      return "llama3.2:3b"
     return "qwen2.5-coder:7b"
 
-  def get_default_discovery_model(self, api_key: Optional[str] = None) -> Optional[str]:
+  def get_default_discovery_model(self, api_key: Optional[str] = None, profile: Optional[str] = None) -> Optional[str]:
     try:
       models = self.fetch_models(None, None)
-      for m in models:
-        m_id = m.get("id", "").lower()
-        if "coder" in m_id or "code" in m_id:
-          return m["id"]
+      if profile == "general":
+        for m in models:
+          m_id = m.get("id", "").lower()
+          if any(k in m_id for k in ["llama", "mistral", "gemma", "qwen"]) and "coder" not in m_id:
+            return m["id"]
+      else:
+        for m in models:
+          m_id = m.get("id", "").lower()
+          if "coder" in m_id or "code" in m_id:
+            return m["id"]
       if models:
         return models[0]["id"]
     except Exception:
       pass
-    return self.get_default_model(api_key)
+    return self.get_default_model(api_key, profile=profile)
 
   def init_client(self, url: Optional[str], api_key: Optional[str]) -> LiteLLMClientStub:
     base = url or self.get_default_url()
@@ -197,7 +205,7 @@ class OpenRouterProvider(BaseProvider):
       pass
     return "google/gemini-2.5-flash:free"
 
-  def get_default_discovery_model(self, api_key: Optional[str] = None) -> str:
+  def get_default_discovery_model(self, api_key: Optional[str] = None, profile: Optional[str] = None) -> str:
     try:
       models = self.fetch_models(None, api_key)
       coding_matches = []
@@ -218,14 +226,20 @@ class OpenRouterProvider(BaseProvider):
           else:
             general_matches.append(m["id"])
 
-      if coding_matches:
-        return coding_matches[0]
-      if general_matches:
-        return general_matches[0]
+      if profile == "general":
+        if general_matches:
+          return general_matches[0]
+        if coding_matches:
+          return coding_matches[0]
+      else:
+        if coding_matches:
+          return coding_matches[0]
+        if general_matches:
+          return general_matches[0]
     except Exception as e:
       logger.debug(f"Error resolving dynamic OpenRouter discovery model: {e}")
 
-    return self.get_default_model(api_key)
+    return self.get_default_model(api_key, profile=profile)
 
   def init_client(self, url: Optional[str], api_key: Optional[str]) -> LiteLLMClientStub:
     base = url or self.get_default_url()
