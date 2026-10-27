@@ -1330,6 +1330,39 @@ def cmd_show(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_view(session: Any, arg: str) -> bool:
+  """Opens a file (image, SVG, PDF, CAD model, etc.) in the user's default desktop application."""
+  from chatty.utils import open_in_desktop_viewer
+
+  file_path = arg.strip()
+  if not file_path:
+    console.print("[bold red]Usage: /view <file_path>[/bold red]")
+    return True
+
+  file_path = os.path.expanduser(file_path)
+  resolved_path = None
+
+  # Try relative to sandbox
+  sandbox_path = os.path.realpath(os.path.join(session.sandbox, file_path))
+  if os.path.exists(sandbox_path) and os.path.isfile(sandbox_path):
+    resolved_path = sandbox_path
+  # Try relative to current working directory or absolute
+  elif os.path.exists(file_path) and os.path.isfile(file_path):
+    resolved_path = os.path.realpath(file_path)
+
+  if not resolved_path:
+    console.print(f"[bold red]Error: File '{file_path}' does not exist or is a directory.[/bold red]")
+    return True
+
+  success, msg = open_in_desktop_viewer(resolved_path)
+  if success:
+    console.print(f"[bold green]{msg}[/bold green]")
+  else:
+    console.print(f"[bold red]Error: {msg}[/bold red]")
+
+  return True
+
+
 def cmd_find_symbol(session: Any, arg: str) -> bool:
   arg = arg.strip()
   if not arg:
@@ -1733,6 +1766,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/save_response": cmd_save_response,
   "/save_reply": cmd_save_response,
   "/show": cmd_show,
+  "/view": cmd_view,
+  "/open": cmd_view,
   "/docker": cmd_docker,
   "/container": cmd_docker,
   "/dexec": cmd_docker,

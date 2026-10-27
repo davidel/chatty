@@ -4,6 +4,9 @@ import logging
 import os
 import queue
 import re
+import shutil
+import subprocess
+import sys
 import threading
 import urllib.parse
 from typing import List, Dict, Any, Tuple, Optional
@@ -700,4 +703,41 @@ class TimeoutStreamWrapper:
           http_resp.close()
         except Exception:
           pass
+
+
+def open_in_desktop_viewer(file_path: str) -> Tuple[bool, str]:
+  """
+  Opens a file in the user's default desktop application non-blockingly.
+  Returns (success, message).
+  """
+  abs_path = os.path.abspath(file_path)
+  if not os.path.exists(abs_path):
+    return False, f"File not found: {file_path}"
+
+  try:
+    if sys.platform.startswith("linux"):
+      if not shutil.which("xdg-open"):
+        return False, "Desktop opener 'xdg-open' not found on system."
+      subprocess.Popen(
+        ["xdg-open", abs_path],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True
+      )
+      return True, f"Opened '{file_path}' in desktop viewer."
+    elif sys.platform == "darwin":
+      subprocess.Popen(
+        ["open", abs_path],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True
+      )
+      return True, f"Opened '{file_path}' in desktop viewer."
+    elif sys.platform == "win32":
+      os.startfile(abs_path)
+      return True, f"Opened '{file_path}' in desktop viewer."
+    else:
+      return False, f"Unsupported operating system for desktop viewing: {sys.platform}"
+  except Exception as e:
+    return False, f"Failed to open desktop viewer: {e}"
 

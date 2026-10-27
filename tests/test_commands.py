@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import unittest
+import subprocess
 import sys
 
 # Ensure src is in python path
@@ -207,6 +208,12 @@ class TestCommandsRegistry(unittest.TestCase):
 
     completions_show_path = list(completer.get_completions(Document("/show test_file_comp"), None))
     self.assertTrue(any(c.display_text == "test_file_completion.txt" for c in completions_show_path))
+
+    completions_view_path = list(completer.get_completions(Document("/view test_file_comp"), None))
+    self.assertTrue(any(c.display_text == "test_file_completion.txt" for c in completions_view_path))
+
+    completions_open_path = list(completer.get_completions(Document("/open test_file_comp"), None))
+    self.assertTrue(any(c.display_text == "test_file_completion.txt" for c in completions_open_path))
 
     # 4. Test inline path autocompletion in general sentences
     completions_general = list(completer.get_completions(Document("look at test_file_comp"), None))
@@ -657,6 +664,98 @@ class TestCompressCommand(unittest.TestCase):
       self.assertIsInstance(args[0], Syntax)
       self.assertEqual(args[0].code, "print('hello')")
       self.assertEqual(args[0].lexer.name, "Python")
+
+  def test_cmd_view(self):
+    from unittest.mock import patch
+
+    # 1. No file path provided
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/view"](self.session, "")
+      self.assertTrue(res)
+      mock_print.assert_any_call("[bold red]Usage: /view <file_path>[/bold red]")
+
+    # 2. File does not exist
+    with patch("chatty.commands.console.print") as mock_print:
+      res = COMMANDS["/view"](self.session, "non_existent_schematic.svg")
+      self.assertTrue(res)
+      mock_print.assert_any_call("[bold red]Error: File 'non_existent_schematic.svg' does not exist or is a directory.[/bold red]")
+
+    # 3. Valid file exists and opened successfully via /view and /open
+    svg_path = os.path.join(self.sandbox_dir, "part.svg")
+    with open(svg_path, "w", encoding="utf-8") as f:
+      f.write("<svg></svg>")
+
+    with patch("chatty.utils.open_in_desktop_viewer", return_value=(True, "Opened 'part.svg' in desktop viewer.")) as mock_open:
+      with patch("chatty.commands.console.print") as mock_print:
+        res = COMMANDS["/view"](self.session, "part.svg")
+        self.assertTrue(res)
+        mock_open.assert_called_once_with(os.path.realpath(svg_path))
+        mock_print.assert_any_call("[bold green]Opened 'part.svg' in desktop viewer.[/bold green]")
+
+    with patch("chatty.utils.open_in_desktop_viewer", return_value=(True, "Opened 'part.svg' in desktop viewer.")) as mock_open:
+      with patch("chatty.commands.console.print") as mock_print:
+        res = COMMANDS["/open"](self.session, "part.svg")
+        self.assertTrue(res)
+        mock_open.assert_called_once_with(os.path.realpath(svg_path))
+
+    # 4. Opener returns error
+    with patch("chatty.utils.open_in_desktop_viewer", return_value=(False, "Failed to launch viewer")) as mock_open:
+      with patch("chatty.commands.console.print") as mock_print:
+        res = COMMANDS["/view"](self.session, "part.svg")
+        self.assertTrue(res)
+        mock_print.assert_any_call("[bold red]Error: Failed to launch viewer[/bold red]")
+
+  def test_open_in_desktop_viewer_platforms(self):
+    from unittest.mock import patch, MagicMock
+    from chatty.utils import open_in_desktop_viewer
+
+    test_file = os.path.join(self.sandbox_dir, "drawing.png")
+    with open(test_file, "w") as f:
+      f.write("image")
+
+    # Non-existent file
+    ok, msg = open_in_desktop_viewer(os.path.join(self.sandbox_dir, "missing.png"))
+    self.assertFalse(ok)
+    self.assertIn("File not found", msg)
+
+    # Linux platform with xdg-open
+    with patch("sys.platform", "linux"):
+      with patch("shutil.which", return_value="/usr/bin/xdg-open"):
+        with patch("subprocess.Popen") as mock_popen:
+          ok, msg = open_in_desktop_viewer(test_file)
+          self.assertTrue(ok)
+          mock_popen.assert_called_once_with(
+            ["xdg-open", os.path.abspath(test_file)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+          )
+
+    # Linux platform missing xdg-open
+    with patch("sys.platform", "linux"):
+      with patch("shutil.which", return_value=None):
+        ok, msg = open_in_desktop_viewer(test_file)
+        self.assertFalse(ok)
+        self.assertIn("Desktop opener 'xdg-open' not found", msg)
+
+    # macOS platform with open
+    with patch("sys.platform", "darwin"):
+      with patch("subprocess.Popen") as mock_popen:
+        ok, msg = open_in_desktop_viewer(test_file)
+        self.assertTrue(ok)
+        mock_popen.assert_called_once_with(
+          ["open", os.path.abspath(test_file)],
+          stdout=subprocess.DEVNULL,
+          stderr=subprocess.DEVNULL,
+          start_new_session=True
+        )
+
+    # Windows platform with os.startfile
+    with patch("sys.platform", "win32"):
+      with patch("os.startfile", create=True) as mock_startfile:
+        ok, msg = open_in_desktop_viewer(test_file)
+        self.assertTrue(ok)
+        mock_startfile.assert_called_once_with(os.path.abspath(test_file))
 
   def test_cmd_history(self):
     from unittest.mock import patch
