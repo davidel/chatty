@@ -877,6 +877,26 @@ class TestDockerCommand(unittest.TestCase):
       session.backend.reset_container.assert_called_once()
       self.assertTrue(any("reset successfully" in str(call) for call in mock_print.call_args_list))
 
+  def test_docker_command_commit(self):
+    from unittest.mock import MagicMock, patch
+    session = MagicMock()
+    session.backend.get_name.return_value = "docker"
+    session.backend.container_name = "chatty-test"
+    session.backend.image = "chatty-sandbox:latest"
+    session.backend.docker_bin = "docker"
+    session.backend._get_docker_env.return_value = {}
+
+    with patch("subprocess.run") as mock_run:
+      mock_run.return_value = MagicMock(returncode=0)
+      res = COMMANDS["/docker"](session, "commit")
+      self.assertTrue(res)
+      mock_run.assert_called_once_with(
+        ["docker", "commit", "chatty-test", "chatty-sandbox:latest"],
+        capture_output=True,
+        text=True,
+        env={}
+      )
+
   def test_status_command_displays_docker_details(self):
     from unittest.mock import MagicMock
     from chatty.ui import show_status

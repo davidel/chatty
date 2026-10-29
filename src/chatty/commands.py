@@ -1552,6 +1552,23 @@ def cmd_docker(session: Any, arg: str) -> bool:
       console.print(f"[bold red]Error resetting companion container: {e}[/bold red]")
     return True
 
+  if arg == "commit" or arg.startswith("commit "):
+    parts = arg.split(maxsplit=1)
+    target_tag = parts[1].strip() if len(parts) > 1 else backend.image
+    console.print(f"[yellow]Committing container state to image '{target_tag}'...[/yellow]")
+    import subprocess
+    res = subprocess.run(
+      [backend.docker_bin, "commit", backend.container_name, target_tag],
+      capture_output=True,
+      text=True,
+      env=backend._get_docker_env()
+    )
+    if res.returncode == 0:
+      console.print(f"[bold green]Successfully saved container filesystem to image '{target_tag}'.[/bold green]")
+    else:
+      console.print(f"[bold red]Failed to commit container: {res.stderr}[/bold red]")
+    return True
+
   if hasattr(backend, "ensure_running"):
     try:
       backend.ensure_running()
@@ -1565,16 +1582,26 @@ def cmd_docker(session: Any, arg: str) -> bool:
 
   if not arg:
     pers_str = "Yes (persistent per workspace)" if getattr(backend, "persistent", False) else "No (ephemeral)"
+    proxy_info = ""
+    if getattr(backend, "auth_proxy", None) and getattr(backend.auth_proxy, "is_running", False):
+      proxy_env = backend.auth_proxy.get_container_env()
+      proxy_info = f"[bold cyan]Auth Proxy:[/bold cyan] Active on port {backend.auth_proxy.port}\n"
+      for k, v in proxy_env.items():
+        proxy_info += f"  [dim]• {k}={v}[/dim]\n"
+      proxy_info += "\n"
+
     console.print(Panel(
       f"[bold cyan]Container:[/bold cyan] {backend.container_name}\n"
       f"[bold cyan]Image:[/bold cyan] {backend.image}\n"
       f"[bold cyan]Status:[/bold cyan] [bold green]Running[/bold green]\n"
       f"[bold cyan]Persistent:[/bold cyan] {pers_str}\n"
       f"[bold cyan]Workspace:[/bold cyan] {backend.container_workspace} ({backend.host_sandbox})\n"
-      f"[bold cyan]Docker Host:[/bold cyan] {backend.docker_host or 'default (local socket)'}\n\n"
+      f"[bold cyan]Docker Host:[/bold cyan] {backend.docker_host or 'default (local socket)'}\n"
+      f"{proxy_info}"
       f"[dim]Usage: /docker <command> (or /container <command>)[/dim]\n"
       f"[dim]Example: /docker pytest[/dim]\n"
       f"[dim]Example: /docker sudo apt update[/dim]\n"
+      f"[dim]Example: /docker commit (save installed apt/pip packages into image)[/dim]\n"
       f"[dim]Example: /docker reset (drops and recreates the container)[/dim]\n"
       f"[dim]Example: /docker bash[/dim]",
       title="[bold cyan]Docker Companion Container[/bold cyan]",
@@ -1590,9 +1617,14 @@ def cmd_docker(session: Any, arg: str) -> bool:
     backend.docker_bin, "exec",
     "-it" if is_tty else "-i",
     "-w", backend.container_workspace,
+  ]
+  if getattr(backend, "auth_proxy", None) and getattr(backend.auth_proxy, "is_running", False):
+    for env_k, env_v in backend.auth_proxy.get_container_env().items():
+      docker_cmd.extend(["-e", f"{env_k}={env_v}"])
+  docker_cmd.extend([
     backend.container_name,
     "/bin/sh", "-c", arg
-  ]
+  ])
   console.print(f"[dim]Running in container '{backend.container_name}': {arg}[/dim]\n")
   try:
     res = subprocess.run(docker_cmd, env=backend._get_docker_env())

@@ -192,7 +192,7 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/write` / `/save_code` | `<path> [index\|all]` | Write a code block or the full AI response to a file. |
 | `/save_response` / `/save_reply` | `<path>` | Save the entire last AI response to a file. |
 | `/show` | `<path>` | Read and render a Markdown file beautifully in the terminal. |
-| `/docker` / `/container` | `[<command>\|reset]` | Inspect companion container status, execute commands inside the container, or reset its state. |
+| `/docker` / `/container` | `[<command>\|commit [tag]\|reset]` | Inspect companion container status, execute commands inside the container, snapshot packages to an image (`commit`), or reset its state. |
 | `/task` / `/tasks` | `[list\|show <task_id> [N]\|kill <task_id>]` | Manage background tasks (list active tasks, view stdout/stderr, or terminate). |
 | `/exit` / `/quit` | None | Cleanly terminates background processes and exits Chatty. |
 

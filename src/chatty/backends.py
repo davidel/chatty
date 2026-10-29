@@ -553,6 +553,47 @@ class DockerBackend(ExecutionBackend):
       capture_output=True,
       env=self._get_docker_env()
     )
+    # Ensure host.docker.internal resolves inside existing or reused containers without requiring a container reset
+    try:
+      check_hosts = subprocess.run(
+        [self.docker_bin, "exec", self.container_name, "/bin/sh", "-c", "grep -q 'host.docker.internal' /etc/hosts"],
+        capture_output=True,
+        env=self._get_docker_env()
+      )
+      if check_hosts.returncode != 0:
+        gw_res = subprocess.run(
+          [self.docker_bin, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}", self.container_name],
+          capture_output=True,
+          text=True,
+          env=self._get_docker_env()
+        )
+        gw_ip = gw_res.stdout.strip()
+        if not gw_ip:
+          gw_res2 = subprocess.run(
+            [self.docker_bin, "exec", self.container_name, "/bin/sh", "-c", "ip route show default | awk '{print $3}'"],
+            capture_output=True,
+            text=True,
+            env=self._get_docker_env()
+          )
+          gw_ip = gw_res2.stdout.strip()
+        if not gw_ip:
+          gw_res3 = subprocess.run(
+            [self.docker_bin, "network", "inspect", "bridge", "-f", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"],
+            capture_output=True,
+            text=True,
+            env=self._get_docker_env()
+          )
+          gw_ip = gw_res3.stdout.strip()
+        if gw_ip:
+          subprocess.run(
+            [self.docker_bin, "exec", "-u", "0", self.container_name, "/bin/sh", "-c", f"echo '{gw_ip} host.docker.internal' >> /etc/hosts"],
+            capture_output=True,
+            env=self._get_docker_env()
+          )
+          logger.info(f"Dynamically configured 'host.docker.internal' -> {gw_ip} in container '{self.container_name}'.")
+    except Exception as e:
+      logger.debug(f"Error checking/updating host.docker.internal in container: {e}")
+
     git_name, git_email = get_host_git_config()
     if git_name:
       subprocess.run(
