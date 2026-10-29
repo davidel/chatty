@@ -111,6 +111,7 @@ python3 -m chatty [options]
 | `--docker-reset` | *None* | flag | `False` | Reset (recreate) the Docker companion container for the current workspace. |
 | `--docker-ephemeral` | *None* | flag | `False` | Run the companion container as ephemeral (destroy on session exit). |
 | `--docker-host` | *None* | string | *None* | Custom Docker host endpoint (e.g. `tcp://127.0.0.1:2375` or `unix:///run/user/1000/docker.sock`). Overrides `DOCKER_HOST`. |
+| `--docker-auth-proxy / --no-docker-auth-proxy` | *None* | flag | `True` | Enable or disable host credential proxy for the companion container (safely injects credentials like `HF_TOKEN`, AWS SigV4, GCS, Cloudflare R2, etc. without exposing secrets to the LLM). |
 | `--mcp-config` | *None* | string | *None* | Path to an MCP (Model Context Protocol) JSON configuration file. |
 | `--mcp / --no-mcp` | *None* | flag | `True` | Enable or disable Model Context Protocol (MCP) server integration. |
 
@@ -435,6 +436,17 @@ When the Docker backend is active, Chatty manages the entire lifecycle of an iso
   ```
   Multiple mappings can be delimited by colons (`:`), semicolons (`;`), or commas (`,`). Longer and more specific prefixes automatically take precedence over parent paths.
 * **Container Lifecycle & Pruning**: Ephemeral containers are tagged with `chatty.ephemeral=true` and pruned automatically on startup, while persistent workspace containers are retained until explicitly reset.
+* **Safe Secret Injection (Credential Egress Proxy)**:
+  - Sandboxed containers grant passwordless `sudo` rights so agents can install system tools. Exposing secrets directly as container environment variables or files would allow an LLM to read or exfiltrate them.
+  - Chatty runs a zero-trust, host-side credential proxy bound to an ephemeral port on `0.0.0.0` (accessible only from loopback and private Docker bridge networks).
+  - Outbound calls originating inside the container are routed through the proxy using standard SDK endpoint environment variables, injecting credentials on the host without the container ever knowing the secret strings:
+    - **Hugging Face (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`)**: Injects `Authorization: Bearer <TOKEN>` into `https://huggingface.co` via `HF_ENDPOINT`.
+    - **Cloudflare R2 (`CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`)**: Routes requests to `https://<account_id>.r2.cloudflarestorage.com` via `AWS_ENDPOINT_URL_S3` and signs requests dynamically on the host using AWS SigV4.
+    - **AWS S3 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)**: Routes to `https://s3.amazonaws.com` via `AWS_ENDPOINT_URL` and signs with AWS SigV4.
+    - **Google Cloud Storage (GCS)**: Leverages `STORAGE_EMULATOR_HOST` to switch the `google-cloud-storage` SDK to anonymous credentials inside Docker, while the host proxy refreshes and injects Google OAuth2 bearer tokens.
+    - **OpenAI / Anthropic / GitHub / W&B**: Injects respective API keys via `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GITHUB_API_URL`, and `WANDB_BASE_URL`.
+  - **Output Scrubbing**: As defense-in-depth, all command outputs (`stdout` and `stderr` in foreground commands, background checks, and output peeks) automatically scrub configured secrets with `[REDACTED_SECRET]`.
+  - Can be toggled with `--docker-auth-proxy` or `--no-docker-auth-proxy` (enabled by default).
 
 ### 4. Kernel-Level Linux Landlock Sandboxing
 On Linux (kernel version 5.13+), Chatty provides transparent, compile-on-demand process isolation using the Linux **Landlock LSM (Linux Security Module)**. 

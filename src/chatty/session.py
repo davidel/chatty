@@ -166,6 +166,7 @@ class SessionConfig:
   docker_host: Optional[str] = None
   docker_reset: bool = False
   docker_persistent: bool = True
+  docker_auth_proxy: bool = True
   sandbox_specified: bool = False
   mcp_config: Optional[str] = None
   enable_mcp: bool = True
@@ -345,6 +346,7 @@ class ChatbotSession(LLMMixin):
     docker_host: Optional[str] = None,
     docker_reset: bool = False,
     docker_persistent: bool = True,
+    docker_auth_proxy: bool = True,
     sandbox_specified: bool = False,
     mcp_config: Optional[str] = None,
     enable_mcp: bool = True,
@@ -403,6 +405,7 @@ class ChatbotSession(LLMMixin):
         docker_host=docker_host,
         docker_reset=docker_reset,
         docker_persistent=docker_persistent,
+        docker_auth_proxy=docker_auth_proxy,
         sandbox_specified=sandbox_specified,
         mcp_config=mcp_config,
         enable_mcp=enable_mcp
@@ -624,7 +627,8 @@ class ChatbotSession(LLMMixin):
         allowed_rw_paths=rw_paths,
         status_callback=_docker_status,
         persistent=self.config.docker_persistent,
-        reset_container=self.config.docker_reset
+        reset_container=self.config.docker_reset,
+        enable_auth_proxy=self.config.docker_auth_proxy
       )
       backend.initialize()
       if not self.config.headless:

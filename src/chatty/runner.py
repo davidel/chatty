@@ -210,6 +210,36 @@ class SubprocessRunner:
     result = self.tool_run_command(command)
     return detected_msg + result
 
+  def _scrub_secrets(self, text: str) -> str:
+    """Scrubs known sensitive credential tokens from command output."""
+    if not text:
+      return text
+    secrets = set()
+    backend = getattr(self.session, "backend", None)
+    if backend and getattr(backend, "auth_proxy", None):
+      try:
+        secrets.update(backend.auth_proxy.get_redaction_patterns())
+      except Exception:
+        pass
+    for env_name in (
+      "HF_TOKEN",
+      "HUGGING_FACE_HUB_TOKEN",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "R2_SECRET_ACCESS_KEY",
+      "AWS_SECRET_ACCESS_KEY",
+      "GITHUB_TOKEN",
+      "GH_TOKEN",
+      "WANDB_API_KEY"
+    ):
+      val = os.environ.get(env_name)
+      if val and len(val.strip()) >= 4:
+        secrets.add(val.strip())
+
+    for secret in secrets:
+      text = text.replace(secret, "[REDACTED_SECRET]")
+    return text
+
   def tool_run_command(self, command: str, output_filter: Optional[str] = None, tail_lines: Optional[int] = None, head_lines: Optional[int] = None, combine_stderr: bool = False) -> str:
     """Execute a shell command, transitioning to background execution if it takes too long."""
     logger.info(f"Running shell command: '{command}' (filter={output_filter}, tail={tail_lines}, head={head_lines}, combine_stderr={combine_stderr})")
@@ -284,6 +314,9 @@ class SubprocessRunner:
         if output_filter or tail_lines is not None or head_lines is not None:
           stdout = self.session._apply_output_filters(stdout, output_filter, head_lines, tail_lines)
           stderr = self.session._apply_output_filters(stderr, output_filter, head_lines, tail_lines)
+
+        stdout = self._scrub_secrets(stdout)
+        stderr = self._scrub_secrets(stderr)
 
         output = []
         if stdout:
@@ -400,6 +433,9 @@ class SubprocessRunner:
       stdout_content = self.session._apply_output_filters(stdout_content, actual_filter, actual_head, actual_tail)
       stderr_content = self.session._apply_output_filters(stderr_content, actual_filter, actual_head, actual_tail)
 
+    stdout_content = self._scrub_secrets(stdout_content)
+    stderr_content = self._scrub_secrets(stderr_content)
+
     output = []
     if stdout_content:
       output.append(f"Stdout:\n{truncate_output(stdout_content, max_chars=self.session.max_command_chars)}")
@@ -472,6 +508,9 @@ class SubprocessRunner:
     if output_filter or tail_lines is not None:
       stdout_content = self.session._apply_output_filters(stdout_content, output_filter, None, tail_lines)
       stderr_content = self.session._apply_output_filters(stderr_content, output_filter, None, tail_lines)
+
+    stdout_content = self._scrub_secrets(stdout_content)
+    stderr_content = self._scrub_secrets(stderr_content)
 
     output = []
     if stdout_content:

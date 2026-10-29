@@ -177,7 +177,8 @@ class DockerBackend(ExecutionBackend):
     container_name: Optional[str] = None,
     persistent: bool = True,
     reset_container: bool = False,
-    host_path_map: Optional[Union[str, Dict[str, str], List[Tuple[str, str]]]] = None
+    host_path_map: Optional[Union[str, Dict[str, str], List[Tuple[str, str]]]] = None,
+    enable_auth_proxy: bool = True
   ):
     self.session_id = session_id
     self.host_sandbox = os.path.abspath(host_sandbox)
@@ -193,6 +194,8 @@ class DockerBackend(ExecutionBackend):
     self.status_callback = status_callback
     self.persistent = persistent
     self.reset_on_start = reset_container
+    self.enable_auth_proxy = enable_auth_proxy
+    self.auth_proxy = None
     self.host_path_map = self._parse_host_path_map(
       host_path_map or os.environ.get("HOST_PATH_MAP") or os.environ.get("CHATTY_HOST_PATH_MAP")
     )
@@ -254,6 +257,19 @@ class DockerBackend(ExecutionBackend):
 
     if self.reset_on_start or rebuilt_image:
       subprocess.run([self.docker_bin, "rm", "-f", self.container_name], capture_output=True, env=self._get_docker_env())
+
+    if self.enable_auth_proxy and self.auth_proxy is None:
+      try:
+        from chatty.auth_proxy import create_default_credential_proxy
+        self.auth_proxy = create_default_credential_proxy()
+        if self.auth_proxy.routes:
+          self.auth_proxy.start()
+          self._notify(
+            f"Credential proxy active on port {self.auth_proxy.port} "
+            f"({len(self.auth_proxy.routes)} service routes configured)."
+          )
+      except Exception as e:
+        logger.warning(f"Failed to initialize credential proxy: {e}")
 
     self._start_container()
     atexit.register(self.cleanup)
@@ -460,6 +476,7 @@ class DockerBackend(ExecutionBackend):
 
     cmd.extend([
       "--init",
+      "--add-host", "host.docker.internal:host-gateway",
       "--shm-size=2g",
       "--label", "chatty.managed=true",
       "--label", f"chatty.session={self.session_id}",
@@ -496,6 +513,10 @@ class DockerBackend(ExecutionBackend):
       "-e", f"GIT_COMMITTER_NAME={git_name}",
       "-e", f"GIT_COMMITTER_EMAIL={git_email}"
     ])
+
+    if self.auth_proxy and self.auth_proxy.is_running:
+      for env_k, env_v in self.auth_proxy.get_container_env().items():
+        cmd.extend(["-e", f"{env_k}={env_v}"])
 
     mounted_destinations = {
       os.path.normpath(self.container_workspace),
@@ -598,9 +619,14 @@ class DockerBackend(ExecutionBackend):
     cmd_args = [
       self.docker_bin, "exec", "-i",
       "-w", exec_cwd,
+    ]
+    if self.auth_proxy and self.auth_proxy.is_running:
+      for env_k, env_v in self.auth_proxy.get_container_env().items():
+        cmd_args.extend(["-e", f"{env_k}={env_v}"])
+    cmd_args.extend([
       self.container_name,
       "/bin/sh", "-c", wrapped_cmd
-    ]
+    ])
     return cmd_args, False, None
 
   def terminate_task(self, task_id: str, proc: subprocess.Popen) -> None:
@@ -650,6 +676,12 @@ class DockerBackend(ExecutionBackend):
     if self._cleaned_up:
       return
     self._cleaned_up = True
+    if self.auth_proxy:
+      try:
+        self.auth_proxy.stop()
+      except Exception as e:
+        logger.debug(f"Error stopping credential proxy: {e}")
+      self.auth_proxy = None
     if self.is_running:
       logger.info(f"Stopping companion container '{self.container_name}'...")
       try:

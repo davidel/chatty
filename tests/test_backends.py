@@ -76,7 +76,8 @@ class TestDockerBackendUnit(unittest.TestCase):
       host_sandbox="/tmp/sandbox",
       image="test-image:latest",
       allowed_ro_paths=["/tmp/ro_dir"],
-      allowed_rw_paths=["/tmp/rw_dir"]
+      allowed_rw_paths=["/tmp/rw_dir"],
+      enable_auth_proxy=False
     )
     backend.initialize()
 
@@ -127,6 +128,42 @@ class TestDockerBackendUnit(unittest.TestCase):
     # Test container cleanup
     backend.cleanup()
     self.assertFalse(backend.is_running)
+
+  @patch("chatty.backends.is_docker_available", return_value=True)
+  @patch("shutil.which", return_value="/usr/bin/docker")
+  @patch("subprocess.run")
+  def test_docker_backend_with_auth_proxy(self, mock_run, mock_which, mock_avail):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch.dict(os.environ, {"HF_TOKEN": "hf_test_secret_abc"}):
+      backend = DockerBackend(
+        session_id="auth_s1",
+        host_sandbox="/tmp/sandbox",
+        image="test-image:latest",
+        enable_auth_proxy=True
+      )
+      backend.initialize()
+
+      self.assertIsNotNone(backend.auth_proxy)
+      self.assertTrue(backend.auth_proxy.is_running)
+
+      # Check docker run arguments contain --add-host and HF_ENDPOINT
+      run_calls = [
+        call for call in mock_run.call_args_list
+        if call[0] and len(call[0][0]) > 2 and call[0][0][1] == "run"
+      ]
+      self.assertTrue(len(run_calls) > 0)
+      run_cmd = run_calls[0][0][0]
+      self.assertIn("--add-host", run_cmd)
+      self.assertIn("host.docker.internal:host-gateway", run_cmd)
+      self.assertTrue(any(arg.startswith("HF_ENDPOINT=http://host.docker.internal:") for arg in run_cmd))
+
+      # Check docker exec arguments contain HF_ENDPOINT
+      cmd_args, _, _ = backend.build_command_args("python download.py")
+      self.assertTrue(any(arg.startswith("HF_ENDPOINT=http://host.docker.internal:") for arg in cmd_args))
+
+      backend.cleanup()
+      self.assertIsNone(backend.auth_proxy)
 
   @patch("chatty.backends.is_docker_available", return_value=True)
   @patch("shutil.which", return_value="/usr/bin/docker")
