@@ -1,3 +1,4 @@
+import io
 import os
 import sys
 import unittest
@@ -10,10 +11,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 from chatty.auth_proxy import (
   AuthProvider,
   BearerTokenProvider,
+  BoundedStream,
   CredentialProxy,
   GCSAuthProvider,
   HeaderAuthProvider,
+  ProxyRedirectHandler,
   ProxyRoute,
+  RWUrlFilter,
   SigV4AuthProvider,
   create_default_credential_proxy,
   is_allowed_client_ip
@@ -167,7 +171,7 @@ class TestCredentialProxyServer(unittest.TestCase):
     self.assertIn("HF_ENDPOINT", container_env)
     self.assertEqual(container_env["HF_ENDPOINT"], f"http://host.docker.internal:{self.proxy.port}/hf")
 
-  @patch("chatty.auth_proxy.urllib.request.urlopen")
+  @patch("chatty.auth_proxy.proxy_opener.open")
   def test_successful_request_dispatch(self, mock_urlopen):
     import http.client
     mock_resp = MagicMock()
@@ -189,7 +193,7 @@ class TestCredentialProxyServer(unittest.TestCase):
     upstream_req = mock_urlopen.call_args[0][0]
     self.assertEqual(upstream_req.full_url, "https://huggingface.co/api/whoami")
     self.assertEqual(upstream_req.headers.get("Authorization"), "Bearer hf_mock_secret_token")
-    self.assertEqual(upstream_req.headers.get("Host"), "huggingface.co")
+    self.assertEqual(upstream_req.host, "huggingface.co")
 
   def test_method_not_allowed(self):
     proxy_url = f"http://127.0.0.1:{self.proxy.port}/hf/api/delete_something"
@@ -219,3 +223,141 @@ class TestSecretScrubbing(unittest.TestCase):
       cleaned = runner._scrub_secrets(dirty_text)
       self.assertNotIn("hf_super_secret_token_123", cleaned)
       self.assertIn("[REDACTED_SECRET]", cleaned)
+
+
+class TestBoundedStream(unittest.TestCase):
+
+  def test_stream_reads_correctly(self):
+    raw = io.BytesIO(b"Hello Antigravity Cloud Storage")
+    stream = BoundedStream(raw, 17)
+    self.assertTrue(stream.readable())
+    self.assertFalse(stream.seekable())
+    self.assertFalse(stream.writable())
+
+    first = stream.read(5)
+    self.assertEqual(first, b"Hello")
+    rest = stream.read()
+    self.assertEqual(rest, b" Antigravity")
+    empty = stream.read(10)
+    self.assertEqual(empty, b"")
+
+
+class TestRWUrlFilter(unittest.TestCase):
+
+  def test_empty_filter(self):
+    rw = RWUrlFilter(None)
+    self.assertFalse(rw.is_write_allowed("/s3", "/my-bucket/key"))
+    self.assertFalse(rw.has_gcs_rules())
+
+  def test_matching_s3_and_r2(self):
+    rw = RWUrlFilter("s3://scratch-bucket;r2://artifacts/*;eval-bucket")
+    self.assertTrue(rw.is_write_allowed("/s3", "/scratch-bucket/model.bin"))
+    self.assertTrue(rw.is_write_allowed("/r2", "/artifacts/checkpoint-100/weights.pt"))
+    self.assertFalse(rw.is_write_allowed("/r2", "/other/checkpoint-100/weights.pt"))
+    self.assertTrue(rw.is_write_allowed("/s3", "/eval-bucket/report.json"))
+    self.assertFalse(rw.is_write_allowed("/s3", "/prod-bucket/secrets.env"))
+
+  def test_gcs_detection_and_matching(self):
+    rw = RWUrlFilter("gs://gcs-staging/*")
+    self.assertTrue(rw.has_gcs_rules())
+    self.assertTrue(rw.is_write_allowed("/gcs", "/b/gcs-staging/o/data.csv"))
+    self.assertTrue(rw.is_write_allowed("/gcs", "/gcs-staging/data.csv"))
+    self.assertFalse(rw.is_write_allowed("/gcs", "/b/gcs-prod/o/data.csv"))
+
+
+class TestSelectiveRWProxy(unittest.TestCase):
+
+  def setUp(self):
+    self.rw_filter = RWUrlFilter("s3://allowed-bucket;allowed-bucket/*")
+    self.proxy = CredentialProxy(rw_filter=self.rw_filter)
+    self.s3_route = ProxyRoute(
+      prefix="/s3",
+      target_base_url="https://s3.amazonaws.com",
+      auth_provider=SigV4AuthProvider(
+        access_key="AKIA123",
+        secret_key="SKIA456",
+        service="s3",
+        region="us-east-1"
+      ),
+      allowed_methods=frozenset({"GET", "HEAD", "PUT", "POST", "DELETE"}),
+      rw_filter=self.rw_filter
+    )
+    self.proxy.add_route(self.s3_route)
+    self.proxy.start()
+
+  def tearDown(self):
+    self.proxy.stop()
+
+  @patch("chatty.auth_proxy.proxy_opener.open")
+  def test_put_allowed_bucket_succeeds(self, mock_urlopen):
+    import http.client
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.getheaders.return_value = [("ETag", '"abc123etag"')]
+    mock_resp.read.side_effect = [b"", b""]
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+    conn = http.client.HTTPConnection("127.0.0.1", self.proxy.port, timeout=5)
+    conn.request("PUT", "/s3/allowed-bucket/test.txt", body=b"hello s3 content")
+    resp = conn.getresponse()
+    self.assertEqual(resp.status, 200)
+    conn.close()
+
+    mock_urlopen.assert_called_once()
+    upstream_req = mock_urlopen.call_args[0][0]
+    self.assertEqual(upstream_req.headers.get("X-amz-content-sha256"), "UNSIGNED-PAYLOAD")
+    self.assertIn("Authorization", upstream_req.headers)
+
+  def test_put_forbidden_bucket_returns_403(self):
+    proxy_url = f"http://127.0.0.1:{self.proxy.port}/s3/forbidden-bucket/test.txt"
+    req = urllib.request.Request(proxy_url, data=b"malicious write", method="PUT")
+    with self.assertRaises(urllib.error.HTTPError) as ctx:
+      urllib.request.urlopen(req)
+    self.assertEqual(ctx.exception.code, 403)
+    self.assertIn("CHATTY_RW_URLS", ctx.exception.reason)
+
+  @patch("chatty.auth_proxy.proxy_opener.open")
+  def test_get_allowed_on_any_bucket(self, mock_urlopen):
+    import http.client
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.getheaders.return_value = [("Content-Type", "text/plain")]
+    mock_resp.read.side_effect = [b"read data", b""]
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+    conn = http.client.HTTPConnection("127.0.0.1", self.proxy.port, timeout=5)
+    conn.request("GET", "/s3/any-other-bucket/test.txt")
+    resp = conn.getresponse()
+    self.assertEqual(resp.status, 200)
+    data = resp.read()
+    self.assertEqual(data, b"read data")
+    conn.close()
+
+
+class TestProxyRedirectHandler(unittest.TestCase):
+
+  def setUp(self):
+    self.handler = ProxyRedirectHandler()
+
+  def test_same_domain_redirect_followed(self):
+    req = urllib.request.Request("https://huggingface.co/api/datasets/test")
+    new_req = self.handler.redirect_request(
+      req, None, 307, "Temporary Redirect", {}, "https://huggingface.co/api/resolve-cache/test"
+    )
+    self.assertIsNotNone(new_req)
+    self.assertEqual(new_req.full_url, "https://huggingface.co/api/resolve-cache/test")
+
+  def test_relative_redirect_followed(self):
+    req = urllib.request.Request("https://huggingface.co/api/datasets/test")
+    new_req = self.handler.redirect_request(
+      req, None, 307, "Temporary Redirect", {}, "/api/resolve-cache/relative-test"
+    )
+    self.assertIsNotNone(new_req)
+    self.assertIn("/api/resolve-cache/relative-test", new_req.full_url)
+
+  def test_cross_domain_cdn_redirect_stopped(self):
+    req = urllib.request.Request("https://huggingface.co/datasets/uoft-cs/cifar10/resolve/main/data.parquet")
+    new_req = self.handler.redirect_request(
+      req, None, 302, "Found", {}, "https://us.aws.cdn.hf.co/xet-bridge/data.parquet"
+    )
+    self.assertIsNone(new_req)

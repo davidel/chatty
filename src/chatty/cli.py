@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import logging
+import os
 import sys
 from rich.console import Console
 
@@ -280,6 +281,13 @@ def main():
     default=True,
     help="Enable credential proxy for Docker companion container to safely inject tokens (HF_TOKEN, AWS, GCS, R2, etc.) without revealing them to the LLM."
   )
+  parser.add_argument(
+    "--docker-auth-proxy-rw-urls",
+    "--rw-urls",
+    dest="docker_auth_proxy_rw_urls",
+    default=os.environ.get("CHATTY_RW_URLS"),
+    help="Semicolon-separated list of cloud storage URLs/buckets permitted for write/delete operations (e.g. 's3://scratch;r2://artifacts/*'). Defaults to CHATTY_RW_URLS env var."
+  )
   
   args = parser.parse_args()
   
@@ -437,6 +445,7 @@ def main():
     docker_reset=args.docker_reset,
     docker_persistent=not args.docker_ephemeral,
     docker_auth_proxy=args.docker_auth_proxy,
+    docker_auth_proxy_rw_urls=args.docker_auth_proxy_rw_urls,
     mcp_config=args.mcp_config,
     enable_mcp=args.mcp
   ) as chat_session:

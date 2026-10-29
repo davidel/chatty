@@ -7,6 +7,8 @@ underlying secrets to the LLM or container filesystem.
 
 import abc
 import contextlib
+import fnmatch
+import io
 import ipaddress
 import logging
 import os
@@ -17,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 logger = logging.getLogger("chatty")
 
@@ -43,13 +45,135 @@ def is_allowed_client_ip(client_ip: str) -> bool:
     return False
 
 
+class BoundedStream(io.RawIOBase):
+  """Streams request body from client socket bounded by Content-Length without buffering into RAM."""
+
+  def __init__(self, raw_socket, length: int):
+    self.raw = raw_socket
+    self.remaining = length
+
+  def read(self, size: int = -1) -> bytes:
+    if self.remaining <= 0:
+      return b""
+    to_read = self.remaining if size < 0 else min(size, self.remaining)
+    chunk = self.raw.read(to_read)
+    if not chunk:
+      self.remaining = 0
+      return b""
+    self.remaining -= len(chunk)
+    return chunk
+
+  def readable(self) -> bool:
+    return True
+
+  def seekable(self) -> bool:
+    return False
+
+  def writable(self) -> bool:
+    return False
+
+
+class RWUrlFilter:
+  """Determines whether write operations (PUT, POST, DELETE, PATCH) are permitted for a route and subpath."""
+
+  def __init__(self, raw_rules: Optional[str] = None):
+    self.raw_rules = (raw_rules or "").strip()
+    self.patterns: List[str] = []
+    if self.raw_rules:
+      for part in self.raw_rules.split(";"):
+        p = part.strip()
+        if p:
+          self.patterns.append(p)
+
+  def has_gcs_rules(self) -> bool:
+    """Returns True if any rule targets or might target Google Cloud Storage."""
+    if not self.patterns:
+      return False
+    for pat in self.patterns:
+      pat_lower = pat.lower()
+      if pat == "*" or "gcs" in pat_lower or "gs://" in pat_lower or "google" in pat_lower:
+        return True
+      if "://" not in pat:
+        return True
+    return False
+
+  def is_write_allowed(self, prefix: str, subpath: str, target_base_url: str = "") -> bool:
+    """Checks if writing to prefix + subpath is allowed by any whitelist rule."""
+    if not self.patterns:
+      return False
+
+    svc = prefix.lstrip("/").lower()
+    clean_subpath = subpath.lstrip("/")
+
+    bucket_name = ""
+    obj_path = ""
+    if "/b/" in subpath:
+      parts = subpath.split("/b/")
+      if len(parts) > 1:
+        bucket_and_rest = parts[1].split("?")[0]
+        if "/o/" in bucket_and_rest:
+          b_parts = bucket_and_rest.split("/o/")
+          bucket_name = b_parts[0]
+          obj_path = b_parts[1]
+        else:
+          bucket_name = bucket_and_rest.split("/")[0]
+    elif clean_subpath:
+      sub_parts = clean_subpath.split("?")[0].split("/", 1)
+      bucket_name = sub_parts[0]
+      if len(sub_parts) > 1:
+        obj_path = sub_parts[1]
+
+    candidates: Set[str] = {
+      clean_subpath,
+      f"/{svc}/{clean_subpath}",
+      f"{svc}://{clean_subpath}",
+    }
+    if bucket_name:
+      candidates.add(bucket_name)
+      candidates.add(f"{svc}://{bucket_name}")
+      if svc in ("s3", "r2"):
+        candidates.add(f"s3://{bucket_name}")
+        candidates.add(f"r2://{bucket_name}")
+      if svc == "gcs":
+        candidates.add(f"gs://{bucket_name}")
+      if obj_path:
+        candidates.add(f"{bucket_name}/{obj_path}")
+        candidates.add(f"{svc}://{bucket_name}/{obj_path}")
+        if svc in ("s3", "r2"):
+          candidates.add(f"s3://{bucket_name}/{obj_path}")
+          candidates.add(f"r2://{bucket_name}/{obj_path}")
+        if svc == "gcs":
+          candidates.add(f"gs://{bucket_name}/{obj_path}")
+    if target_base_url:
+      target_clean = target_base_url.rstrip("/")
+      candidates.add(f"{target_clean}/{clean_subpath}")
+
+    for pattern in self.patterns:
+      pat = pattern.strip()
+      pat_base = pat[:-2] if pat.endswith("/*") else pat
+      for cand in candidates:
+        if (
+          fnmatch.fnmatch(cand, pat)
+          or fnmatch.fnmatch(cand, f"{pat}/*")
+          or fnmatch.fnmatch(cand, f"{pat}*")
+          or fnmatch.fnmatch(cand, pat_base)
+        ):
+          return True
+
+    return False
+
+
 class AuthProvider(abc.ABC):
   """Abstract base class for credential injectors."""
 
   @abc.abstractmethod
-  def get_headers(self, method: str, url: str, body: Optional[bytes]) -> Dict[str, str]:
+  def get_headers(self, method: str, url: str, body: Optional[Any] = None) -> Dict[str, str]:
     """Generates the required authentication headers for the upstream request."""
     pass
+
+  def clean_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
+    """Sanitizes incoming client headers before injecting credentials."""
+    return dict(headers)
 
   def get_secrets(self) -> List[str]:
     """Returns secret strings associated with this provider for output scrubbing."""
@@ -66,7 +190,10 @@ class BearerTokenProvider(AuthProvider):
     val = os.environ.get(self._token_or_env_var, self._token_or_env_var).strip()
     return val
 
-  def get_headers(self, method: str, url: str, body: Optional[bytes]) -> Dict[str, str]:
+  def clean_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
+    return {k: v for k, v in headers.items() if k.lower() != "authorization"}
+
+  def get_headers(self, method: str, url: str, body: Optional[Any] = None) -> Dict[str, str]:
     token = self._resolve_token()
     return {"Authorization": f"Bearer {token}"} if token else {}
 
@@ -86,7 +213,7 @@ class HeaderAuthProvider(AuthProvider):
     self._headers_fn = headers
     self._secrets_fn = secrets
 
-  def get_headers(self, method: str, url: str, body: Optional[bytes]) -> Dict[str, str]:
+  def get_headers(self, method: str, url: str, body: Optional[Any] = None) -> Dict[str, str]:
     try:
       return dict(self._headers_fn())
     except Exception as e:
@@ -105,24 +232,36 @@ class HeaderAuthProvider(AuthProvider):
 class SigV4AuthProvider(AuthProvider):
   """Signs S3/R2 requests dynamically using AWS Signature Version 4 (SigV4)."""
 
+  SIGV4_STALE_HEADERS = frozenset({
+    "authorization",
+    "x-amz-date",
+    "x-amz-security-token",
+    "x-amz-content-sha256"
+  })
+
   def __init__(
     self,
     access_key: Optional[str] = None,
     secret_key: Optional[str] = None,
     service: str = "s3",
-    region: str = "auto"
+    region: str = "auto",
+    use_unsigned_payload: bool = True
   ):
     self._access_key = access_key
     self._secret_key = secret_key
     self.service = service
     self.region = region
+    self.use_unsigned_payload = use_unsigned_payload
 
   def _get_credentials(self) -> Tuple[str, str]:
     ak = self._access_key or os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("R2_ACCESS_KEY_ID") or ""
     sk = self._secret_key or os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("R2_SECRET_ACCESS_KEY") or ""
     return ak.strip(), sk.strip()
 
-  def get_headers(self, method: str, url: str, body: Optional[bytes]) -> Dict[str, str]:
+  def clean_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
+    return {k: v for k, v in headers.items() if k.lower() not in self.SIGV4_STALE_HEADERS}
+
+  def get_headers(self, method: str, url: str, body: Optional[Any] = None) -> Dict[str, str]:
     ak, sk = self._get_credentials()
     if not ak or not sk:
       return {}
@@ -135,11 +274,19 @@ class SigV4AuthProvider(AuthProvider):
       signer = botocore.auth.SigV4Auth(creds, self.service, self.region)
       parsed = urllib.parse.urlparse(url)
       headers = {"Host": parsed.netloc}
+
+      is_write_method = method.upper() in {"PUT", "POST", "PATCH"}
+      if self.use_unsigned_payload and (body is not None or is_write_method):
+        headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD"
+        sign_data = None
+      else:
+        sign_data = body if isinstance(body, (bytes, bytearray)) else None
+
       aws_request = botocore.awsrequest.AWSRequest(
         method=method,
         url=url,
         headers=headers,
-        data=body
+        data=sign_data
       )
       signer.add_auth(aws_request)
       return dict(aws_request.headers)
@@ -204,7 +351,8 @@ class ProxyRoute:
     container_env_var: Optional[str] = None,
     allowed_methods: FrozenSet[str] = frozenset({"GET", "HEAD"}),
     path_rewriter: Optional[Callable[[str], str]] = None,
-    path_filter: Optional[Callable[[str], bool]] = None
+    path_filter: Optional[Callable[[str], bool]] = None,
+    rw_filter: Optional[RWUrlFilter] = None
   ):
     self.prefix = prefix.rstrip("/")
     self.target_base_url = target_base_url.rstrip("/")
@@ -213,11 +361,36 @@ class ProxyRoute:
     self.allowed_methods = allowed_methods
     self.path_rewriter = path_rewriter
     self.path_filter = path_filter
+    self.rw_filter = rw_filter
 
 
 class ThreadingAuthProxyServer(socketserver.ThreadingMixIn, HTTPServer):
   daemon_threads = True
   allow_reuse_address = True
+
+
+class ProxyRedirectHandler(urllib.request.HTTPRedirectHandler):
+  """Custom redirect handler for the credential proxy.
+
+  Follows internal redirects on the same domain (e.g. resolve-cache),
+  but stops at cross-domain redirects (e.g. presigned S3 / CloudFront CDN)
+  so that critical headers (like X-Repo-Commit, Location) are preserved and returned
+  to the sandboxed client.
+  """
+
+  def redirect_request(self, req, fp, code, msg, headers, newurl):
+    newurl = urllib.parse.urljoin(req.full_url, newurl)
+    parsed_new = urllib.parse.urlparse(newurl)
+    parsed_orig = urllib.parse.urlparse(req.full_url)
+    if parsed_new.netloc.lower() == parsed_orig.netloc.lower():
+      new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+      if new_req and "Host" in new_req.headers:
+        del new_req.headers["Host"]
+      return new_req
+    return None
+
+
+proxy_opener = urllib.request.build_opener(ProxyRedirectHandler)
 
 
 class AuthProxyHandler(BaseHTTPRequestHandler):
@@ -263,6 +436,15 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
       self.send_error(403, f"Method '{method}' is not permitted for '{route.prefix}'.")
       return
 
+    if method in {"PUT", "POST", "DELETE", "PATCH"} and route.rw_filter is not None:
+      if not route.rw_filter.is_write_allowed(route.prefix, subpath, route.target_base_url):
+        self.send_error(
+          403,
+          f"Write access ('{method}') to '{route.prefix}{subpath}' denied by policy. "
+          f"Target bucket or URL is not permitted by CHATTY_RW_URLS."
+        )
+        return
+
     if route.path_filter and not route.path_filter(subpath):
       self.send_error(403, f"Access to '{subpath}' is prohibited by policy.")
       return
@@ -275,18 +457,18 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
       k: v for k, v in self.headers.items()
       if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() != "host"
     }
-    headers["Host"] = urllib.parse.urlparse(route.target_base_url).netloc
+    headers = route.auth_provider.clean_headers(headers)
 
     content_len = int(self.headers.get("Content-Length", 0))
-    body = self.rfile.read(content_len) if content_len > 0 else None
+    body_stream = BoundedStream(self.rfile, content_len) if content_len > 0 else None
 
     # Inject authenticated headers dynamically on the host
-    auth_headers = route.auth_provider.get_headers(method, target_url, body)
+    auth_headers = route.auth_provider.get_headers(method, target_url, body_stream)
     headers.update(auth_headers)
 
-    req = urllib.request.Request(target_url, data=body, headers=headers, method=method)
+    req = urllib.request.Request(target_url, data=body_stream, headers=headers, method=method)
     try:
-      with urllib.request.urlopen(req, timeout=120) as resp:
+      with proxy_opener.open(req, timeout=120) as resp:
         self.send_response(resp.status)
         for k, v in resp.getheaders():
           if k.lower() not in HOP_BY_HOP_HEADERS:
@@ -313,9 +495,19 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 class CredentialProxy:
   """Manages the background HTTP proxy server lifecycle and registered routes."""
 
-  def __init__(self, routes: Optional[List[ProxyRoute]] = None, bind_host: str = "0.0.0.0"):
+  def __init__(
+    self,
+    routes: Optional[List[ProxyRoute]] = None,
+    bind_host: str = "0.0.0.0",
+    rw_filter: Optional[RWUrlFilter] = None
+  ):
     self.routes: List[ProxyRoute] = list(routes) if routes else []
     self.bind_host = bind_host
+    self.rw_filter = rw_filter
+    self.port: int = 0
+    self._server: Optional[ThreadingAuthProxyServer] = None
+    self._thread: Optional[threading.Thread] = None
+    self.is_running: bool = False
     self.port: int = 0
     self._server: Optional[ThreadingAuthProxyServer] = None
     self._thread: Optional[threading.Thread] = None
@@ -378,10 +570,21 @@ class CredentialProxy:
     return patterns
 
 
-def create_default_credential_proxy(env: Optional[Dict[str, str]] = None) -> CredentialProxy:
+def create_default_credential_proxy(
+  env: Optional[Dict[str, str]] = None,
+  rw_urls: Optional[str] = None
+) -> CredentialProxy:
   """Inspects host environment variables and creates a CredentialProxy with standard routes."""
   e = os.environ if env is None else env
-  proxy = CredentialProxy()
+  raw_rw = rw_urls if rw_urls is not None else e.get("CHATTY_RW_URLS")
+  rw_filter = RWUrlFilter(raw_rw)
+  proxy = CredentialProxy(rw_filter=rw_filter)
+
+  storage_rw_methods = frozenset({"GET", "HEAD", "PUT", "POST", "DELETE"})
+  storage_ro_methods = frozenset({"GET", "HEAD"})
+  has_rw = bool(rw_filter.patterns)
+  allowed_storage = storage_rw_methods if has_rw else storage_ro_methods
+  active_rw_filter = rw_filter if has_rw else None
 
   # Hugging Face
   hf_token = e.get("HF_TOKEN") or e.get("HUGGING_FACE_HUB_TOKEN")
@@ -429,7 +632,8 @@ def create_default_credential_proxy(env: Optional[Dict[str, str]] = None) -> Cre
       target_base_url=f"https://{cf_account}.r2.cloudflarestorage.com",
       auth_provider=SigV4AuthProvider(access_key=r2_ak, secret_key=r2_sk, service="s3", region="auto"),
       container_env_var="AWS_ENDPOINT_URL_S3",
-      allowed_methods=frozenset({"GET", "HEAD"})
+      allowed_methods=allowed_storage,
+      rw_filter=active_rw_filter
     ))
 
   # AWS S3 (when standard AWS credentials are set and distinct from R2)
@@ -443,19 +647,26 @@ def create_default_credential_proxy(env: Optional[Dict[str, str]] = None) -> Cre
       target_base_url=s3_host,
       auth_provider=SigV4AuthProvider(access_key=aws_ak, secret_key=aws_sk, service="s3", region=aws_region),
       container_env_var="AWS_ENDPOINT_URL",
-      allowed_methods=frozenset({"GET", "HEAD"})
+      allowed_methods=allowed_storage,
+      rw_filter=active_rw_filter
     ))
 
   # Google Cloud Storage
   gcp_creds = e.get("GOOGLE_APPLICATION_CREDENTIALS")
   if gcp_creds or e.get("ENABLE_GCS_PROXY") == "1":
     try:
+      gcs_scopes = (
+        ["https://www.googleapis.com/auth/devstorage.read_write"]
+        if (has_rw and rw_filter.has_gcs_rules())
+        else ["https://www.googleapis.com/auth/devstorage.read_only"]
+      )
       proxy.add_route(ProxyRoute(
         prefix="/gcs",
         target_base_url="https://storage.googleapis.com",
-        auth_provider=GCSAuthProvider(),
+        auth_provider=GCSAuthProvider(scopes=gcs_scopes),
         container_env_var="STORAGE_EMULATOR_HOST",
-        allowed_methods=frozenset({"GET", "HEAD"})
+        allowed_methods=allowed_storage,
+        rw_filter=active_rw_filter
       ))
     except Exception as ex:
       logger.debug(f"GCS proxy route skipped: {ex}")

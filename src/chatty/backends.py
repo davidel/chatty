@@ -178,7 +178,8 @@ class DockerBackend(ExecutionBackend):
     persistent: bool = True,
     reset_container: bool = False,
     host_path_map: Optional[Union[str, Dict[str, str], List[Tuple[str, str]]]] = None,
-    enable_auth_proxy: bool = True
+    enable_auth_proxy: bool = True,
+    rw_urls: Optional[str] = None
   ):
     self.session_id = session_id
     self.host_sandbox = os.path.abspath(host_sandbox)
@@ -195,6 +196,7 @@ class DockerBackend(ExecutionBackend):
     self.persistent = persistent
     self.reset_on_start = reset_container
     self.enable_auth_proxy = enable_auth_proxy
+    self.rw_urls = rw_urls or os.environ.get("CHATTY_RW_URLS")
     self.auth_proxy = None
     self.host_path_map = self._parse_host_path_map(
       host_path_map or os.environ.get("HOST_PATH_MAP") or os.environ.get("CHATTY_HOST_PATH_MAP")
@@ -261,12 +263,13 @@ class DockerBackend(ExecutionBackend):
     if self.enable_auth_proxy and self.auth_proxy is None:
       try:
         from chatty.auth_proxy import create_default_credential_proxy
-        self.auth_proxy = create_default_credential_proxy()
+        self.auth_proxy = create_default_credential_proxy(rw_urls=self.rw_urls)
         if self.auth_proxy.routes:
           self.auth_proxy.start()
+          rw_msg = f"; RW storage enabled for: {self.rw_urls}" if self.rw_urls else ""
           self._notify(
             f"Credential proxy active on port {self.auth_proxy.port} "
-            f"({len(self.auth_proxy.routes)} service routes configured)."
+            f"({len(self.auth_proxy.routes)} service routes configured{rw_msg})."
           )
       except Exception as e:
         logger.warning(f"Failed to initialize credential proxy: {e}")

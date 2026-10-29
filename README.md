@@ -112,6 +112,7 @@ python3 -m chatty [options]
 | `--docker-ephemeral` | *None* | flag | `False` | Run the companion container as ephemeral (destroy on session exit). |
 | `--docker-host` | *None* | string | *None* | Custom Docker host endpoint (e.g. `tcp://127.0.0.1:2375` or `unix:///run/user/1000/docker.sock`). Overrides `DOCKER_HOST`. |
 | `--docker-auth-proxy / --no-docker-auth-proxy` | *None* | flag | `True` | Enable or disable host credential proxy for the companion container (safely injects credentials like `HF_TOKEN`, AWS SigV4, GCS, Cloudflare R2, etc. without exposing secrets to the LLM). |
+| `--docker-auth-proxy-rw-urls / --rw-urls` | *None* | string | *None* | Semicolon-separated list of cloud storage URLs/buckets permitted for write/delete operations (e.g. `'s3://scratch;r2://artifacts/*;gs://staging'`). Defaults to `CHATTY_RW_URLS` environment variable. When omitted, all storage routes are strictly read-only. |
 | `--mcp-config` | *None* | string | *None* | Path to an MCP (Model Context Protocol) JSON configuration file. |
 | `--mcp / --no-mcp` | *None* | flag | `True` | Enable or disable Model Context Protocol (MCP) server integration. |
 
@@ -445,6 +446,7 @@ When the Docker backend is active, Chatty manages the entire lifecycle of an iso
     - **AWS S3 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)**: Routes to `https://s3.amazonaws.com` via `AWS_ENDPOINT_URL` and signs with AWS SigV4.
     - **Google Cloud Storage (GCS)**: Leverages `STORAGE_EMULATOR_HOST` to switch the `google-cloud-storage` SDK to anonymous credentials inside Docker, while the host proxy refreshes and injects Google OAuth2 bearer tokens.
     - **OpenAI / Anthropic / GitHub / W&B**: Injects respective API keys via `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GITHUB_API_URL`, and `WANDB_BASE_URL`.
+  - **Granular Storage Read/Write Whitelist**: Cloud storage routes (R2, S3, GCS) are read-only (`GET`/`HEAD`) by default for security. Write, upload, and delete operations (`PUT`/`POST`/`DELETE`) can be selectively enabled for specific buckets or URL patterns via `CHATTY_RW_URLS` or `--rw-urls` (e.g. `'s3://scratch;r2://artifacts/*;gs://staging'`). Upstream body streaming uses `UNSIGNED-PAYLOAD` and memory-bounded socket streams without loading file payloads into RAM.
   - **Output Scrubbing**: As defense-in-depth, all command outputs (`stdout` and `stderr` in foreground commands, background checks, and output peeks) automatically scrub configured secrets with `[REDACTED_SECRET]`.
   - Can be toggled with `--docker-auth-proxy` or `--no-docker-auth-proxy` (enabled by default).
 

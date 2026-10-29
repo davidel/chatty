@@ -1585,7 +1585,10 @@ def cmd_docker(session: Any, arg: str) -> bool:
     proxy_info = ""
     if getattr(backend, "auth_proxy", None) and getattr(backend.auth_proxy, "is_running", False):
       proxy_env = backend.auth_proxy.get_container_env()
-      proxy_info = f"[bold cyan]Auth Proxy:[/bold cyan] Active on port {backend.auth_proxy.port}\n"
+      rw_filter = getattr(backend.auth_proxy, "rw_filter", None)
+      rw_patterns = getattr(rw_filter, "patterns", []) if rw_filter else []
+      rw_str = "; ".join(rw_patterns) if rw_patterns else "None (Read-Only)"
+      proxy_info = f"[bold cyan]Auth Proxy:[/bold cyan] Active on port {backend.auth_proxy.port} (RW: {rw_str})\n"
       for k, v in proxy_env.items():
         proxy_info += f"  [dim]• {k}={v}[/dim]\n"
       proxy_info += "\n"
