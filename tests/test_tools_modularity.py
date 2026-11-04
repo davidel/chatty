@@ -123,6 +123,51 @@ scdiag-pretrain --model convvit \\
     with open(os.path.join(self.sandbox_dir, test_file), "r") as f:
       self.assertEqual(f.read(), "Line A\nLine B\n")
 
+  def test_brightdata_web_search(self):
+    from unittest.mock import patch, MagicMock
+
+    fake_response = MagicMock()
+    fake_response.json.return_value = {
+      "organic": [
+        {
+          "title": "Bright Data Result",
+          "link": "https://brightdata.com/example",
+          "description": "Example description from Bright Data"
+        }
+      ]
+    }
+    fake_response.raise_for_status = MagicMock()
+
+    env = {
+      "BRIGHTDATA_API_KEY": "test-key-123",
+      "BRIGHTDATA_ZONE": "custom_serp"
+    }
+    with patch.dict(os.environ, env, clear=True):
+      with patch("requests.post", return_value=fake_response) as mock_post:
+        res = tool_search_web("python programming", max_results=5)
+        mock_post.assert_called_once()
+        call_args, call_kwargs = mock_post.call_args
+        self.assertEqual(call_args[0], "https://api.brightdata.com/request")
+        self.assertEqual(call_kwargs["headers"]["Authorization"], "Bearer test-key-123")
+        self.assertEqual(call_kwargs["json"]["zone"], "custom_serp")
+        self.assertIn("Bright Data SERP API", res)
+        self.assertIn("Bright Data Result", res)
+        self.assertIn("https://brightdata.com/example", res)
+        self.assertIn("Example description from Bright Data", res)
+
+  def test_brightdata_web_search_empty(self):
+    from unittest.mock import patch, MagicMock
+
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"organic": []}
+    fake_response.raise_for_status = MagicMock()
+
+    env = {"BRIGHT_DATA_API_KEY": "test-key-fallback"}
+    with patch.dict(os.environ, env, clear=True):
+      with patch("requests.post", return_value=fake_response):
+        res = tool_search_web("empty query")
+        self.assertIn("[Bright Data SERP API] No results found.", res)
+
 
 
 if __name__ == "__main__":

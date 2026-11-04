@@ -19,7 +19,8 @@ def tool_search_web(query: str, max_results: int = 10) -> str:
   3. Google Custom Search: GOOGLE_API_KEY and GOOGLE_CSE_ID
   4. Serper: SERPER_API_KEY
   5. SerpApi: SERPAPI_API_KEY
-  6. Yahoo HTML Scraper (Fallback when no keys are provided)
+  6. Bright Data: BRIGHTDATA_API_KEY (or BRIGHT_DATA_API_KEY) and optional BRIGHTDATA_ZONE
+  7. Yahoo HTML Scraper (Fallback when no keys are provided)
   """
   results = []
   backend_used = ""
@@ -30,6 +31,8 @@ def tool_search_web(query: str, max_results: int = 10) -> str:
   google_cx = os.environ.get("GOOGLE_CSE_ID")
   serper_key = os.environ.get("SERPER_API_KEY")
   serpapi_key = os.environ.get("SERPAPI_API_KEY")
+  brightdata_key = os.environ.get("BRIGHTDATA_API_KEY") or os.environ.get("BRIGHT_DATA_API_KEY")
+  brightdata_zone = os.environ.get("BRIGHTDATA_ZONE") or os.environ.get("BRIGHT_DATA_ZONE", "serp")
 
   try:
     if tavily_key:
@@ -128,6 +131,28 @@ def tool_search_web(query: str, max_results: int = 10) -> str:
           "title": item.get("title", ""),
           "url": item.get("link", ""),
           "snippet": item.get("snippet", "")
+        })
+
+    elif brightdata_key:
+      backend_used = "Bright Data SERP API"
+      url = "https://api.brightdata.com/request"
+      headers = {
+        "Authorization": f"Bearer {brightdata_key}",
+        "Content-Type": "application/json"
+      }
+      payload = {
+        "zone": brightdata_zone,
+        "url": f"https://www.google.com/search?q={quote_plus(query)}&num={max_results}&hl=en",
+        "format": "json"
+      }
+      r = requests.post(url, json=payload, headers=headers, timeout=15)
+      r.raise_for_status()
+      data = r.json()
+      for item in data.get("organic", []):
+        results.append({
+          "title": item.get("title", ""),
+          "url": item.get("link", ""),
+          "snippet": item.get("description", "") or item.get("snippet", "")
         })
 
     else:

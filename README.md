@@ -356,6 +356,7 @@ Updating models via CLI arguments or interactive slash commands (`/model`, `/ora
   - **Google Custom Search**: Set `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` (legacy Google search engine).
   - **Serper**: Set `SERPER_API_KEY` (Google search proxy).
   - **SerpApi**: Set `SERPAPI_API_KEY` (Google search proxy).
+  - **Bright Data**: Set `BRIGHTDATA_API_KEY` (or `BRIGHT_DATA_API_KEY`) and optionally `BRIGHTDATA_ZONE` (defaults to `serp`).
   - **Yahoo Scraper**: Default fallback if no keys are provided (unreliable for heavy use).
 
 ### Command & Background Execution
