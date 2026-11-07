@@ -322,3 +322,7 @@ class TestRoundTableCommandsAndTool(unittest.TestCase):
 
     # Should read and print without errors
     self.assertTrue(cmd_roundtable_log(self.session, ""))
+
+  def test_show_status_with_roundtable(self):
+    # Verifies that show_status() executes cleanly on real ChatbotSession without NameError
+    self.session.show_status()

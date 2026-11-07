@@ -177,7 +177,12 @@ class SessionConfig:
 
 
 from chatty.ui import LazyMarkdown, optional_live, ChattyCompleter, LiveScreenLayout
-from chatty.models_config import find_workspace_root, save_model_for_task, save_models_for_tasks
+from chatty.models_config import (
+  find_workspace_root,
+  get_saved_models,
+  save_model_for_task,
+  save_models_for_tasks
+)
 
 
 def resolve_path(path_str: str, workspace_root: str) -> str:
