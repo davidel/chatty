@@ -5,7 +5,8 @@ import logging
 import re
 import sys
 import select
-from typing import List, Dict, Any, Tuple, Optional
+import uuid
+from typing import List, Dict, Any, Tuple, Optional, Set
 
 import openai
 from chatty.tools import execute_tool, get_available_formatters, TOOLS_SCHEMA
@@ -290,6 +291,187 @@ class LLMMixin:
       return match.group(0)
 
     return pattern.sub(replace_match, query)
+
+  def call_model_stream(
+    self,
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    panel_title: str = "Assistant",
+    border_style: str = "cyan",
+    timeout: Optional[float] = None,
+    fail_fast: bool = False
+  ) -> Tuple[str, List[Dict[str, Any]], str]:
+    """Streams completion from an LLM model with Rich live panels, reasoning capture,
+    usage tracking, and tool extraction. Returns (content, tool_calls, reasoning).
+    """
+    actual_model, extra_body = self._resolve_model_and_provider(model_id)
+    self._throttle_request()
+
+    req_timeout = timeout or getattr(self.config, "api_timeout", 60.0)
+    kwargs: Dict[str, Any] = {
+      "model": actual_model,
+      "messages": messages,
+      "stream": True,
+      "timeout": req_timeout,
+    }
+    if tools:
+      kwargs["tools"] = tools
+    if extra_body:
+      kwargs["extra_body"] = extra_body
+
+    content_accumulated = ""
+    tool_calls_accumulated: List[Dict[str, Any]] = []
+    reasoning_accumulated = ""
+    usage_metadata = None
+
+    panels = [{
+      "title": panel_title,
+      "content": Text.from_markup(f"Connecting to [bold cyan]{escape(model_id)}[/bold cyan]..."),
+      "border_style": border_style,
+    }]
+
+    try:
+      with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not self.headless, refresh_per_second=10, transient=True) as live:
+        self._active_live = live
+        try:
+          stream = self._create_completion(**kwargs)
+          for chunk in stream:
+            if hasattr(chunk, "usage") and chunk.usage:
+              usage_metadata = chunk.usage
+            elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
+              usage_metadata = chunk.model_extra["usage"]
+
+            if not chunk.choices:
+              continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            # Extract reasoning/thinking
+            val = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+            if val is None and hasattr(delta, "model_extra") and delta.model_extra:
+              val = delta.model_extra.get("reasoning") or delta.model_extra.get("reasoning_content")
+            if val is None and isinstance(delta, dict):
+              val = delta.get("reasoning") or delta.get("reasoning_content")
+            if val and isinstance(val, str):
+              if reasoning_accumulated and val.startswith(reasoning_accumulated):
+                reasoning_accumulated = val
+              else:
+                reasoning_accumulated += val
+
+            # Extract tool calls
+            if hasattr(delta, "tool_calls") and delta.tool_calls:
+              for tc in delta.tool_calls:
+                idx = getattr(tc, "index", 0)
+                while len(tool_calls_accumulated) <= idx:
+                  tool_calls_accumulated.append({
+                    "id": "",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                  })
+                if hasattr(tc, "id") and tc.id:
+                  tool_calls_accumulated[idx]["id"] += tc.id
+                if hasattr(tc, "function") and tc.function:
+                  fn = tc.function
+                  if hasattr(fn, "name") and fn.name:
+                    tool_calls_accumulated[idx]["function"]["name"] += fn.name
+                  if hasattr(fn, "arguments") and fn.arguments:
+                    tool_calls_accumulated[idx]["function"]["arguments"] += fn.arguments
+
+            # Extract content
+            if delta.content:
+              content_accumulated += delta.content
+
+            # Update Live Screen Panel
+            status_lines = []
+            if reasoning_accumulated.strip() and not content_accumulated:
+              t_count = self.count_tokens_estimate(reasoning_accumulated)
+              disp_think = truncate_thinking_by_line(reasoning_accumulated)
+              status_lines.append(f"[dim]• Thinking (~{t_count} tok):[/dim]\n[italic dim]{escape(disp_think[-300:])}[/italic dim]")
+            if content_accumulated:
+              status_lines.append(escape(content_accumulated[-600:]))
+            if tool_calls_accumulated:
+              tc_names = [tc.get("function", {}).get("name") for tc in tool_calls_accumulated if tc.get("function", {}).get("name")]
+              if tc_names:
+                status_lines.append(f"[bold yellow]Tools:[/bold yellow] {', '.join(tc_names)}")
+
+            if status_lines:
+              panels[0]["content"] = Text.from_markup("\n".join(status_lines))
+
+        finally:
+          self._active_live = None
+
+    except Exception as e:
+      logger.exception(f"Error during stream from {model_id}: {e}")
+      formatted_err = self._format_api_error(e)
+      if fail_fast:
+        if not self.headless:
+          self._print(f"[bold red]Error calling {model_id}:[/bold red] {formatted_err}")
+        raise RuntimeError(f"Error calling model '{model_id}': {formatted_err}") from e
+      if not content_accumulated:
+        content_accumulated = f"Error consulting {model_id}: {formatted_err}"
+
+    # Fallback: If no structured tool calls were emitted, check for XML/text tool calls
+    if tools and not tool_calls_accumulated and content_accumulated:
+      parsed_calls = self.extract_tool_calls_from_text(content_accumulated)
+      if parsed_calls:
+        tool_calls_accumulated = parsed_calls
+        content_accumulated = ""
+
+    # Track tokens
+    p_tok = getattr(usage_metadata, "prompt_tokens", 0) if usage_metadata else self.count_tokens_estimate(str(messages))
+    c_tok = getattr(usage_metadata, "completion_tokens", 0) if usage_metadata else (
+      self.count_tokens_estimate(content_accumulated) + self.count_tokens_estimate(reasoning_accumulated)
+    )
+    if model_id not in self.model_usage:
+      self.model_usage[model_id] = {"prompt_tokens": 0, "completion_tokens": 0}
+    self.model_usage[model_id]["prompt_tokens"] += p_tok
+    self.model_usage[model_id]["completion_tokens"] += c_tok
+
+    return content_accumulated, tool_calls_accumulated, reasoning_accumulated
+
+  def execute_subagent_tools(
+    self,
+    tool_calls: List[Dict[str, Any]],
+    allowed_tools: Optional[Set[str]] = None,
+    log_label: str = "tool"
+  ) -> List[Dict[str, Any]]:
+    """Executes a batch of subagent tool calls with permission checks and error handling."""
+    results: List[Dict[str, Any]] = []
+    for tc in tool_calls:
+      if not tc.get("id"):
+        tc["id"] = f"call_{uuid.uuid4().hex[:12]}"
+      t_name = tc.get("function", {}).get("name", "")
+      t_args_raw = tc.get("function", {}).get("arguments", "")
+
+      try:
+        args_parsed = json.loads(t_args_raw) if isinstance(t_args_raw, str) else (t_args_raw or {})
+      except Exception:
+        try:
+          args_parsed = json.loads(repair_json(t_args_raw))
+        except Exception:
+          args_parsed = {}
+
+      if allowed_tools is not None and t_name not in allowed_tools:
+        t_result = f"Error: Tool '{t_name}' is not permitted in {log_label}. Allowed: {', '.join(sorted(allowed_tools))}."
+      else:
+        token = active_session_var.set(self)
+        try:
+          logger.info(f"{log_label} executing: {t_name} with {args_parsed}")
+          t_result = execute_tool(t_name, args_parsed, self)
+        except Exception as e:
+          t_result = f"Error executing {t_name}: {str(e)}"
+        finally:
+          active_session_var.reset(token)
+
+      results.append({
+        "role": "tool",
+        "tool_call_id": tc["id"],
+        "name": t_name,
+        "content": str(t_result),
+      })
+    return results
 
   def consult_oracle(self, query: str) -> str:
     """Consults an oracle model for suggestions/assistance."""

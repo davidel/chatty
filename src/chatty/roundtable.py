@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import time
-import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -15,10 +15,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from chatty.tools import TOOLS_SCHEMA, execute_tool
-from chatty.safety import active_session_var
-from chatty.ui import optional_live, LiveScreenLayout
-from chatty.llm import is_safe_to_interrupt, detect_repetition_loop, truncate_thinking_by_line
+from chatty.tools import TOOLS_SCHEMA
+from chatty.llm import truncate_thinking_by_line
 from chatty.utils import repair_json
 from chatty.models_config import get_saved_models, get_project_chatty_dir
 
@@ -289,121 +287,20 @@ def _call_llm_stream(
   messages: List[Dict[str, Any]],
   tools: Optional[List[Dict[str, Any]]] = None,
   panel_title: str = "Round Table",
-  border_style: str = "cyan"
+  border_style: str = "cyan",
+  fail_fast: bool = True
 ) -> Tuple[str, List[Dict[str, Any]], str]:
-  """Calls an LLM with streaming into Rich panels. Returns (content, tool_calls, reasoning)."""
-  actual_model, extra_body = session._resolve_model_and_provider(model_id)
-  session._throttle_request()
-
+  """Calls an LLM with streaming into Rich panels via session.call_model_stream."""
   timeout = getattr(session.config, "roundtable_timeout", 120.0)
-  kwargs: Dict[str, Any] = {
-    "model": actual_model,
-    "messages": messages,
-    "stream": True,
-    "timeout": timeout,
-  }
-  if tools:
-    kwargs["tools"] = tools
-  if extra_body:
-    kwargs["extra_body"] = extra_body
-
-  content_accumulated = ""
-  tool_calls_accumulated: List[Dict[str, Any]] = []
-  reasoning_accumulated = ""
-  current_max_thinking = getattr(session.config, "max_thinking_chars", 8000)
-  usage_metadata = None
-
-  panels = [{
-    "title": panel_title,
-    "content": Text.from_markup(f"Connecting to [bold cyan]{escape(model_id)}[/bold cyan]..."),
-    "border_style": border_style,
-  }]
-
-  with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not session.headless, refresh_per_second=10, transient=True) as live:
-    session._active_live = live
-    try:
-      stream = session._create_completion(**kwargs)
-      for chunk in stream:
-        if hasattr(chunk, "usage") and chunk.usage:
-          usage_metadata = chunk.usage
-        elif hasattr(chunk, "model_extra") and chunk.model_extra and "usage" in chunk.model_extra:
-          usage_metadata = chunk.model_extra["usage"]
-
-        if not chunk.choices:
-          continue
-
-        choice = chunk.choices[0]
-        delta = choice.delta
-
-        # Extract reasoning/thinking
-        val = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
-        if val is None and hasattr(delta, "model_extra") and delta.model_extra:
-          val = delta.model_extra.get("reasoning") or delta.model_extra.get("reasoning_content")
-        if val is None and isinstance(delta, dict):
-          val = delta.get("reasoning") or delta.get("reasoning_content")
-        if val and isinstance(val, str):
-          if reasoning_accumulated and val.startswith(reasoning_accumulated):
-            reasoning_accumulated = val
-          else:
-            reasoning_accumulated += val
-
-        # Extract tool calls
-        if hasattr(delta, "tool_calls") and delta.tool_calls:
-          for tc in delta.tool_calls:
-            idx = getattr(tc, "index", 0)
-            while len(tool_calls_accumulated) <= idx:
-              tool_calls_accumulated.append({
-                "id": "",
-                "type": "function",
-                "function": {"name": "", "arguments": ""},
-              })
-            if hasattr(tc, "id") and tc.id:
-              tool_calls_accumulated[idx]["id"] += tc.id
-            if hasattr(tc, "function") and tc.function:
-              fn = tc.function
-              if hasattr(fn, "name") and fn.name:
-                tool_calls_accumulated[idx]["function"]["name"] += fn.name
-              if hasattr(fn, "arguments") and fn.arguments:
-                tool_calls_accumulated[idx]["function"]["arguments"] += fn.arguments
-
-        # Extract content
-        if delta.content:
-          content_accumulated += delta.content
-
-        # Update Live Screen Panel
-        status_lines = []
-        if reasoning_accumulated.strip() and not content_accumulated:
-          t_count = session.count_tokens_estimate(reasoning_accumulated)
-          disp_think = truncate_thinking_by_line(reasoning_accumulated)
-          status_lines.append(f"[dim]• Thinking (~{t_count} tok):[/dim]\n[italic dim]{escape(disp_think[-300:])}[/italic dim]")
-        if content_accumulated:
-          status_lines.append(escape(content_accumulated[-600:]))
-        if tool_calls_accumulated:
-          tc_names = [tc.get("function", {}).get("name") for tc in tool_calls_accumulated if tc.get("function", {}).get("name")]
-          if tc_names:
-            status_lines.append(f"[bold yellow]Tools:[/bold yellow] {', '.join(tc_names)}")
-
-        if status_lines:
-          panels[0]["content"] = Text.from_markup("\n".join(status_lines))
-
-    except Exception as e:
-      logger.exception(f"Error during stream from {model_id}: {e}")
-      if not content_accumulated:
-        content_accumulated = f"Error consulting {model_id}: {str(e)}"
-    finally:
-      session._active_live = None
-
-  # Track tokens
-  p_tok = getattr(usage_metadata, "prompt_tokens", 0) if usage_metadata else session.count_tokens_estimate(str(messages))
-  c_tok = getattr(usage_metadata, "completion_tokens", 0) if usage_metadata else (
-    session.count_tokens_estimate(content_accumulated) + session.count_tokens_estimate(reasoning_accumulated)
+  return session.call_model_stream(
+    model_id=model_id,
+    messages=messages,
+    tools=tools,
+    panel_title=panel_title,
+    border_style=border_style,
+    timeout=timeout,
+    fail_fast=fail_fast
   )
-  if model_id not in session.model_usage:
-    session.model_usage[model_id] = {"prompt_tokens": 0, "completion_tokens": 0}
-  session.model_usage[model_id]["prompt_tokens"] += p_tok
-  session.model_usage[model_id]["completion_tokens"] += c_tok
-
-  return content_accumulated, tool_calls_accumulated, reasoning_accumulated
 
 
 def _run_expert_turn(
@@ -416,7 +313,7 @@ def _run_expert_turn(
   round_num: int,
   prior_expert_critiques: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
-  """Runs a single expert turn with up to 2 tool loops, returning structured review dict."""
+  """Runs a single expert turn with tool execution loops and synthesis nudge."""
   allowed_tools = ROUNDTABLE_VERIFICATION_TOOL_NAMES
   verification_tools = [
     t for t in TOOLS_SCHEMA
@@ -451,19 +348,20 @@ def _run_expert_turn(
   ]
 
   panel_title = f"🤖 Expert {expert_idx}/{total_experts} ({expert_model}) [Round {round_num}]"
-  max_tool_loops = 2
+  allowed_loops = 5
+  tool_loops_executed = 0
   final_content = ""
   total_reasoning = ""
 
-  for loop_idx in range(max_tool_loops + 1):
-    tools = verification_tools if loop_idx < max_tool_loops else None
+  while tool_loops_executed < allowed_loops:
     content, tool_calls, reasoning = _call_llm_stream(
       session=session,
       model_id=expert_model,
       messages=messages,
-      tools=tools,
+      tools=verification_tools,
       panel_title=panel_title,
       border_style="yellow",
+      fail_fast=True,
     )
     if reasoning:
       total_reasoning += ("\n" + reasoning if total_reasoning else reasoning)
@@ -479,38 +377,57 @@ def _run_expert_turn(
       "tool_calls": tool_calls,
     })
 
-    # Execute tools
-    for tc in tool_calls:
-      if not tc.get("id"):
-        tc["id"] = f"call_{uuid.uuid4().hex[:12]}"
-      t_name = tc.get("function", {}).get("name", "")
-      t_args_raw = tc.get("function", {}).get("arguments", "")
+    # Execute tools via centralized helper
+    tool_results = session.execute_subagent_tools(
+      tool_calls,
+      allowed_tools=allowed_tools,
+      log_label=f"Expert {expert_idx} ({expert_model})"
+    )
+    messages.extend(tool_results)
+    tool_loops_executed += 1
 
-      try:
-        args_parsed = json.loads(t_args_raw) if isinstance(t_args_raw, str) else (t_args_raw or {})
-      except Exception:
+    # If reached the current loop limit, ask user whether to continue
+    if tool_loops_executed >= allowed_loops:
+      user_allowed_more = False
+      if not getattr(session, "headless", False):
         try:
-          args_parsed = json.loads(repair_json(t_args_raw))
-        except Exception:
-          args_parsed = {}
+          pause_ctx = session._pause_live() if hasattr(session, "_pause_live") else nullcontext()
+          with pause_ctx:
+            session._print(
+              f"\n[bold yellow]⚠️  Expert {expert_idx} ({expert_model}) completed {allowed_loops} tool loops. Allow 5 more tool loops? [bold green]\\[Y/n][/bold green] [/bold yellow]",
+              end=""
+            )
+            resp = input().strip().lower()
+            if resp not in ("n", "no"):
+              user_allowed_more = True
+              allowed_loops += 5
+        except (KeyboardInterrupt, EOFError):
+          user_allowed_more = False
 
-      if t_name not in allowed_tools:
-        t_result = f"Error: Tool '{t_name}' not permitted in round table."
-      else:
-        token = active_session_var.set(session)
-        try:
-          t_result = execute_tool(t_name, args_parsed, session)
-        except Exception as e:
-          t_result = f"Error executing {t_name}: {str(e)}"
-        finally:
-          active_session_var.reset(token)
+      if not user_allowed_more:
+        break
 
-      messages.append({
-        "role": "tool",
-        "tool_call_id": tc["id"],
-        "name": t_name,
-        "content": str(t_result),
-      })
+  # If loop limit was reached without final output, prompt model to synthesize evaluation
+  if not final_content:
+    messages.append({
+      "role": "user",
+      "content": (
+        "Tool investigation limit reached. Please synthesize all gathered findings "
+        "and output your final evaluation in the required JSON format now."
+      )
+    })
+    synth_content, _, synth_reasoning = _call_llm_stream(
+      session=session,
+      model_id=expert_model,
+      messages=messages,
+      tools=None,
+      panel_title=f"{panel_title} (Final Evaluation)",
+      border_style="yellow",
+      fail_fast=True,
+    )
+    if synth_reasoning:
+      total_reasoning += ("\n" + synth_reasoning if total_reasoning else synth_reasoning)
+    final_content = synth_content
 
   # Parse structured JSON review from the final content
   parsed_data = _parse_structured_json(final_content)
@@ -621,157 +538,183 @@ def run_roundtable(
   ))
 
   transcript: List[Dict[str, Any]] = []
-
-  # STEP 1: Moderator decomposes query into initial candidate points (P1, P2, ...)
-  decomp_prompt = build_moderator_decomposition_prompt(expanded_query)
-  decomp_messages = [
-    {"role": "system", "content": "You are a senior technical architect acting as a round-table moderator."},
-    {"role": "user", "content": decomp_prompt},
-  ]
-  decomp_content, _, _ = _call_llm_stream(
-    session=session,
-    model_id=moderator_model,
-    messages=decomp_messages,
-    panel_title="👑 Moderator: Decomposing Problem into Points",
-    border_style="purple",
-  )
-  transcript.append({
-    "role": "moderator_decomposition",
-    "raw": decomp_content,
-  })
-
-  parsed_decomp = _parse_structured_json(decomp_content)
   points: List[RoundTablePoint] = []
-  if parsed_decomp and "points" in parsed_decomp:
-    for idx, raw_pt in enumerate(parsed_decomp["points"]):
-      pid = raw_pt.get("id") or f"P{idx + 1}"
-      stmt = raw_pt.get("statement") or str(raw_pt)
-      rat = raw_pt.get("rationale") or ""
-      points.append(RoundTablePoint(id=pid, statement=stmt, rationale=rat, status=PointStatus.PROPOSED))
-  else:
-    # Fallback if decomposition JSON failed
-    points = [
-      RoundTablePoint(id="P1", statement=decomp_content.strip()[:300], status=PointStatus.PROPOSED)
-    ]
-
-  console.print(_format_points_table(points))
-
-  # STEP 2: Multi-Round Sequential Deliberation Loop
   rounds_completed = 0
-  for round_num in range(1, max_rounds + 1):
-    rounds_completed = round_num
-    console.print(f"\n[bold yellow]─── Round {round_num}/{max_rounds} ───[/bold yellow]")
 
-    round_critiques: List[Dict[str, Any]] = []
-
-    # Sequential pass across all experts
-    for exp_idx, exp_model in enumerate(panel_models, 1):
-      review = _run_expert_turn(
-        session=session,
-        expert_idx=exp_idx,
-        total_experts=len(panel_models),
-        expert_model=exp_model,
-        query=expanded_query,
-        points=points,
-        round_num=round_num,
-        prior_expert_critiques=round_critiques,
-      )
-      round_critiques.append(review)
-      transcript.append({
-        "role": "expert",
-        "round": round_num,
-        "expert_idx": exp_idx,
-        "model": exp_model,
-        "raw_output": review["raw_output"],
-        "reasoning_summary": review.get("reasoning_summary", ""),
-      })
-
-    # Moderator Reconciliation Turn
-    reconcile_prompt = build_moderator_reconciliation_prompt(
-      points=points,
-      round_num=round_num,
-      max_rounds=max_rounds,
-      sequential_critiques=round_critiques,
-    )
-    reconcile_messages = [
-      {"role": "system", "content": "You are the round-table moderator reconciling expert evaluations."},
-      {"role": "user", "content": reconcile_prompt},
+  try:
+    # STEP 1: Moderator decomposes query into initial candidate points (P1, P2, ...)
+    decomp_prompt = build_moderator_decomposition_prompt(expanded_query)
+    decomp_messages = [
+      {"role": "system", "content": "You are a senior technical architect acting as a round-table moderator."},
+      {"role": "user", "content": decomp_prompt},
     ]
-    reconcile_content, _, _ = _call_llm_stream(
+    decomp_content, _, _ = _call_llm_stream(
       session=session,
       model_id=moderator_model,
-      messages=reconcile_messages,
-      panel_title=f"👑 Moderator: Reconciling Round {round_num}",
+      messages=decomp_messages,
+      panel_title="👑 Moderator: Decomposing Problem into Points",
       border_style="purple",
+      fail_fast=True,
     )
     transcript.append({
-      "role": "moderator_reconciliation",
-      "round": round_num,
-      "raw": reconcile_content,
+      "role": "moderator_decomposition",
+      "raw": decomp_content,
     })
 
-    parsed_reconcile = _parse_structured_json(reconcile_content)
-    if parsed_reconcile and "points" in parsed_reconcile:
-      updated_points: List[RoundTablePoint] = []
-      for pt_data in parsed_reconcile["points"]:
-        pid = pt_data.get("id", f"P{len(updated_points)+1}")
-        stmt = pt_data.get("statement", "")
-        stat = pt_data.get("status", PointStatus.PROPOSED)
-        rat = pt_data.get("rationale", "")
-        ce = pt_data.get("counterexamples", [])
-        to = pt_data.get("tradeoff", "")
-        updated_points.append(RoundTablePoint(
-          id=pid,
-          statement=stmt,
-          status=stat,
-          rationale=rat,
-          counterexamples=ce if isinstance(ce, list) else [str(ce)],
-          tradeoff=to,
-        ))
-      if updated_points:
-        points = updated_points
+    parsed_decomp = _parse_structured_json(decomp_content)
+    if parsed_decomp and "points" in parsed_decomp:
+      for idx, raw_pt in enumerate(parsed_decomp["points"]):
+        pid = raw_pt.get("id") or f"P{idx + 1}"
+        stmt = raw_pt.get("statement") or str(raw_pt)
+        rat = raw_pt.get("rationale") or ""
+        points.append(RoundTablePoint(id=pid, statement=stmt, rationale=rat, status=PointStatus.PROPOSED))
+    else:
+      # Fallback if decomposition JSON failed
+      points = [
+        RoundTablePoint(id="P1", statement=decomp_content.strip()[:300], status=PointStatus.PROPOSED)
+      ]
 
     console.print(_format_points_table(points))
 
-    # Check for early consensus: if all points are CONFIRMED
-    all_confirmed = all(p.status == PointStatus.CONFIRMED for p in points)
-    if all_confirmed:
-      console.print("[bold green]✨ Full consensus achieved across all points![/bold green]")
-      break
+    # STEP 2: Multi-Round Sequential Deliberation Loop
+    for round_num in range(1, max_rounds + 1):
+      rounds_completed = round_num
+      console.print(f"\n[bold yellow]─── Round {round_num}/{max_rounds} ───[/bold yellow]")
 
-  # STEP 3: Final Moderator Synthesis
-  synthesis_prompt = build_moderator_synthesis_prompt(expanded_query, points, rounds_completed)
-  synth_messages = [
-    {"role": "system", "content": "You are the round-table moderator compiling the final consensus synthesis."},
-    {"role": "user", "content": synthesis_prompt},
-  ]
-  final_synthesis, _, _ = _call_llm_stream(
-    session=session,
-    model_id=moderator_model,
-    messages=synth_messages,
-    panel_title="👑 Moderator: Final Consensus Synthesis",
-    border_style="green",
-  )
+      round_critiques: List[Dict[str, Any]] = []
 
-  # STEP 4: Persist Last Deliberation Audit Log
-  audit_md = _format_audit_log(
-    query=query,
-    panel_models=panel_models,
-    moderator_model=moderator_model,
-    total_rounds=rounds_completed,
-    points=points,
-    transcript=transcript,
-    final_synthesis=final_synthesis,
-  )
+      # Sequential pass across all experts
+      for exp_idx, exp_model in enumerate(panel_models, 1):
+        review = _run_expert_turn(
+          session=session,
+          expert_idx=exp_idx,
+          total_experts=len(panel_models),
+          expert_model=exp_model,
+          query=expanded_query,
+          points=points,
+          round_num=round_num,
+          prior_expert_critiques=round_critiques,
+        )
+        round_critiques.append(review)
+        transcript.append({
+          "role": "expert",
+          "round": round_num,
+          "expert_idx": exp_idx,
+          "model": exp_model,
+          "raw_output": review["raw_output"],
+          "reasoning_summary": review.get("reasoning_summary", ""),
+        })
 
-  chatty_dir = get_project_chatty_dir(getattr(session, "sandbox", None), create=True)
-  if chatty_dir:
-    log_path = os.path.join(chatty_dir, "roundtable_last.md")
-    try:
-      with open(log_path, "w", encoding="utf-8") as f:
-        f.write(audit_md)
-      logger.info(f"Saved round table audit log to {log_path}")
-    except Exception as e:
-      logger.error(f"Failed to write roundtable audit log: {e}")
+      # Moderator Reconciliation Turn
+      reconcile_prompt = build_moderator_reconciliation_prompt(
+        points=points,
+        round_num=round_num,
+        max_rounds=max_rounds,
+        sequential_critiques=round_critiques,
+      )
+      reconcile_messages = [
+        {"role": "system", "content": "You are the round-table moderator reconciling expert evaluations."},
+        {"role": "user", "content": reconcile_prompt},
+      ]
+      reconcile_content, _, _ = _call_llm_stream(
+        session=session,
+        model_id=moderator_model,
+        messages=reconcile_messages,
+        panel_title=f"👑 Moderator: Reconciling Round {round_num}",
+        border_style="purple",
+        fail_fast=True,
+      )
+      transcript.append({
+        "role": "moderator_reconciliation",
+        "round": round_num,
+        "raw": reconcile_content,
+      })
 
-  return final_synthesis
+      parsed_reconcile = _parse_structured_json(reconcile_content)
+      if parsed_reconcile and "points" in parsed_reconcile:
+        updated_points: List[RoundTablePoint] = []
+        for pt_data in parsed_reconcile["points"]:
+          pid = pt_data.get("id", f"P{len(updated_points)+1}")
+          stmt = pt_data.get("statement", "")
+          stat = pt_data.get("status", PointStatus.PROPOSED)
+          rat = pt_data.get("rationale", "")
+          ce = pt_data.get("counterexamples", [])
+          to = pt_data.get("tradeoff", "")
+          updated_points.append(RoundTablePoint(
+            id=pid,
+            statement=stmt,
+            status=stat,
+            rationale=rat,
+            counterexamples=ce if isinstance(ce, list) else [str(ce)],
+            tradeoff=to,
+          ))
+        if updated_points:
+          points = updated_points
+
+      console.print(_format_points_table(points))
+
+      # Check for early consensus: if all points are CONFIRMED
+      all_confirmed = all(p.status == PointStatus.CONFIRMED for p in points)
+      if all_confirmed:
+        console.print("[bold green]✨ Full consensus achieved across all points![/bold green]")
+        break
+
+    # STEP 3: Final Moderator Synthesis
+    synthesis_prompt = build_moderator_synthesis_prompt(expanded_query, points, rounds_completed)
+    synth_messages = [
+      {"role": "system", "content": "You are the round-table moderator compiling the final consensus synthesis."},
+      {"role": "user", "content": synthesis_prompt},
+    ]
+    final_synthesis, _, _ = _call_llm_stream(
+      session=session,
+      model_id=moderator_model,
+      messages=synth_messages,
+      panel_title="👑 Moderator: Final Consensus Synthesis",
+      border_style="green",
+      fail_fast=True,
+    )
+
+    # STEP 4: Persist Last Deliberation Audit Log
+    audit_md = _format_audit_log(
+      query=query,
+      panel_models=panel_models,
+      moderator_model=moderator_model,
+      total_rounds=rounds_completed,
+      points=points,
+      transcript=transcript,
+      final_synthesis=final_synthesis,
+    )
+    chatty_dir = get_project_chatty_dir(getattr(session, "sandbox", None), create=True)
+    if chatty_dir:
+      log_path = os.path.join(chatty_dir, "roundtable_last.md")
+      try:
+        with open(log_path, "w", encoding="utf-8") as f:
+          f.write(audit_md)
+        logger.info(f"Saved round table audit log to {log_path}")
+      except Exception as e:
+        logger.error(f"Failed to write roundtable audit log: {e}")
+
+    return final_synthesis
+
+  except RuntimeError as e:
+    logger.error(f"Round table aborted due to model failure: {e}")
+    console.print(f"[bold red]❌ Round Table Aborted:[/bold red] {e}")
+    abort_msg = f"Round Table aborted: {e}"
+    audit_md = _format_audit_log(
+      query=query,
+      panel_models=panel_models,
+      moderator_model=moderator_model,
+      total_rounds=rounds_completed,
+      points=points,
+      transcript=transcript,
+      final_synthesis=abort_msg,
+    )
+    chatty_dir = get_project_chatty_dir(getattr(session, "sandbox", None), create=True)
+    if chatty_dir:
+      log_path = os.path.join(chatty_dir, "roundtable_last.md")
+      try:
+        with open(log_path, "w", encoding="utf-8") as f:
+          f.write(audit_md)
+      except Exception:
+        pass
+    return abort_msg

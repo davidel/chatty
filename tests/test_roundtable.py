@@ -16,6 +16,7 @@ from chatty.roundtable import (
   build_moderator_reconciliation_prompt,
   build_moderator_synthesis_prompt,
   _format_audit_log,
+  _run_expert_turn,
   run_roundtable,
 )
 from chatty.session import ChatbotSession
@@ -270,6 +271,135 @@ class TestRoundTableWorkflow(unittest.TestCase):
       content = f.read()
     self.assertIn("SPLIT", content)
     self.assertIn("Memory efficiency", content)
+
+  @patch("chatty.roundtable._call_llm_stream")
+  def test_run_roundtable_fail_fast_aborts_on_api_error(self, mock_call_llm):
+    decomp_resp = json.dumps({
+      "points": [{"id": "P1", "statement": "Assertion"}]
+    })
+    # Step 1: decomp succeeds; Step 2: expert 1 raises 403 error
+    mock_call_llm.side_effect = [
+      (decomp_resp, [], ""),
+      RuntimeError("Error calling model 'expert-1': 403 Forbidden: Model not available in region"),
+    ]
+
+    result = run_roundtable(
+      self.session,
+      query="Test fail fast",
+      max_rounds=2
+    )
+
+    self.assertIn("Round Table aborted", result)
+    self.assertIn("403 Forbidden", result)
+    # Check that mock was only called twice (decomposition + expert 1 abort)
+    self.assertEqual(mock_call_llm.call_count, 2)
+    # Verify audit log recorded the abort
+    audit_file = os.path.join(self.sandbox_dir, ".chatty", "roundtable_last.md")
+    self.assertTrue(os.path.isfile(audit_file))
+    with open(audit_file, "r", encoding="utf-8") as f:
+      content = f.read()
+    self.assertIn("Round Table aborted", content)
+    self.assertIn("403 Forbidden", content)
+
+  @patch("chatty.roundtable._call_llm_stream")
+  def test_expert_turn_tool_limit_synthesis_nudge(self, mock_call_llm):
+    # Simulate 5 tool loops followed by synthesis
+    tool_call_dummy = [{
+      "id": "tc1",
+      "type": "function",
+      "function": {"name": "read_file", "arguments": json.dumps({"path": "foo.txt"})},
+    }]
+    review_json = json.dumps({
+      "reviews": [{"point_id": "P1", "verdict": "CONFIRMED", "verification_rationale": "Verified"}]
+    })
+
+    # First 5 calls return tool_calls, 6th call (synthesis with tools=None) returns review_json
+    mock_call_llm.side_effect = [
+      ("", tool_call_dummy, "thinking"),
+      ("", tool_call_dummy, "thinking"),
+      ("", tool_call_dummy, "thinking"),
+      ("", tool_call_dummy, "thinking"),
+      ("", tool_call_dummy, "thinking"),
+      (review_json, [], "final thinking"),
+    ]
+
+    with patch.object(self.session, "execute_subagent_tools", return_value=[{"role": "tool", "content": "file contents"}]):
+      review = _run_expert_turn(
+        session=self.session,
+        expert_idx=1,
+        total_experts=2,
+        expert_model="expert-1",
+        query="Verify foo",
+        points=[RoundTablePoint(id="P1", statement="Check foo", status=PointStatus.PROPOSED)],
+        round_num=1,
+        prior_expert_critiques=[],
+      )
+
+    self.assertEqual(mock_call_llm.call_count, 6)
+    # Check that final call was made with tools=None
+    last_call_kwargs = mock_call_llm.call_args_list[-1].kwargs
+    self.assertIsNone(last_call_kwargs.get("tools"))
+    # Check that synthesis nudge was injected in messages
+    final_messages = last_call_kwargs.get("messages", [])
+    self.assertTrue(any(m.get("content") and "Tool investigation limit reached" in m["content"] for m in final_messages))
+    self.assertEqual(len(review["reviews"]), 1)
+    self.assertEqual(review["reviews"][0]["verdict"], "CONFIRMED")
+
+  @patch("builtins.input", return_value="y")
+  @patch("chatty.roundtable._call_llm_stream")
+  def test_expert_turn_interactive_continuation_approved(self, mock_call_llm, mock_input):
+    self.session.headless = False
+    tool_call_dummy = [{
+      "id": "tc1",
+      "type": "function",
+      "function": {"name": "read_file", "arguments": json.dumps({"path": "foo.txt"})},
+    }]
+    review_json = json.dumps({
+      "reviews": [{"point_id": "P1", "verdict": "CONFIRMED"}]
+    })
+
+    # 6 tool loops allowed because user says 'y', then 7th returns final review
+    mock_call_llm.side_effect = [
+      ("", tool_call_dummy, ""),
+      ("", tool_call_dummy, ""),
+      ("", tool_call_dummy, ""),
+      ("", tool_call_dummy, ""),
+      ("", tool_call_dummy, ""),
+      ("", tool_call_dummy, ""),
+      (review_json, [], ""),
+    ]
+
+    with patch.object(self.session, "execute_subagent_tools", return_value=[{"role": "tool", "content": "file contents"}]):
+      review = _run_expert_turn(
+        session=self.session,
+        expert_idx=1,
+        total_experts=2,
+        expert_model="expert-1",
+        query="Verify foo",
+        points=[RoundTablePoint(id="P1", statement="Check foo", status=PointStatus.PROPOSED)],
+        round_num=1,
+        prior_expert_critiques=[],
+      )
+
+    self.assertEqual(mock_call_llm.call_count, 7)
+    self.assertEqual(mock_input.call_count, 1)
+    self.assertEqual(len(review["reviews"]), 1)
+
+  def test_execute_subagent_tools_permissions(self):
+    tool_calls = [
+      {"id": "call_1", "function": {"name": "read_file", "arguments": '{"path": "test.txt"}'}},
+      {"id": "call_2", "function": {"name": "run_shell_command", "arguments": '{"command": "rm -rf /"}'}},
+    ]
+    with patch("chatty.llm.execute_tool", return_value="read ok"):
+      results = self.session.execute_subagent_tools(
+        tool_calls,
+        allowed_tools={"read_file"},
+        log_label="Test subagent"
+      )
+
+    self.assertEqual(len(results), 2)
+    self.assertEqual(results[0]["content"], "read ok")
+    self.assertIn("Error: Tool 'run_shell_command' is not permitted", results[1]["content"])
 
 
 class TestRoundTableCommandsAndTool(unittest.TestCase):
