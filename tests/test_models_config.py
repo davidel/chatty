@@ -47,6 +47,19 @@ class TestModelsConfig(unittest.TestCase):
     self.assertEqual(data["oracle"], "model-oracle")
     self.assertEqual(data["discovery"], "model-scout")
 
+  def test_roundtable_models_persistence(self):
+    save_model_for_task("roundtable_models", ["model-a", "model-b"], sandbox=self.sandbox_dir)
+    save_model_for_task("roundtable_moderator", "model-mod", sandbox=self.sandbox_dir)
+
+    saved = get_saved_models(sandbox=self.sandbox_dir)
+    self.assertEqual(saved.get("roundtable_models"), ["model-a", "model-b"])
+    self.assertEqual(saved.get("roundtable_moderator"), "model-mod")
+
+    # Also test comma-separated string saving
+    save_model_for_task("roundtable", "model-c, model-d", sandbox=self.sandbox_dir)
+    saved2 = get_saved_models(sandbox=self.sandbox_dir)
+    self.assertEqual(saved2.get("roundtable_models"), ["model-c", "model-d"])
+
   def test_aliases_handling(self):
     chatty_dir = os.path.join(self.sandbox_dir, ".chatty")
     os.makedirs(chatty_dir, exist_ok=True)

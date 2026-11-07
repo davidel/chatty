@@ -178,11 +178,11 @@ class ChattyCompleter(Completer):
           sub_doc = Document(path_text, cursor_position=len(path_text))
           for completion in self.path_completer.get_completions(sub_doc, complete_event):
             yield completion
-        elif cmd in ('/model', '/models', '/oracle', '/discovery_model', '/discover_model'):
+        elif cmd in ('/model', '/models', '/oracle', '/discovery_model', '/discover_model', '/roundtable_models', '/roundtable_moderator'):
           sub_text = parts[1] if len(parts) > 1 else ""
           is_models_add = (cmd == '/models' and sub_text.startswith('add '))
           is_models_info = (cmd == '/models' and sub_text.startswith('info '))
-          if is_models_add or is_models_info or cmd in ('/model', '/oracle', '/discovery_model', '/discover_model'):
+          if is_models_add or is_models_info or cmd in ('/model', '/oracle', '/discovery_model', '/discover_model', '/roundtable_models', '/roundtable_moderator'):
             if is_models_add:
               prefix = sub_text[4:]
             elif is_models_info:
@@ -245,6 +245,10 @@ def show_help(session: Any):
     ("/model [ID|name]", "View or switch the current LLM model by ID or name"),
     ("/models [add <name> | remove <ID/name> | available [--refresh] | search <query> | info <ID/name>]", "List, add, remove, search, or view details of LLM models"),
     ("/oracle [name]", "View or switch the oracle model used for suggestions"),
+    ("/roundtable <problem> / /deliberate", "Run multi-model expert round table deliberation on a problem"),
+    ("/roundtable_models [models]", "View or configure the models used in the round table panel"),
+    ("/roundtable_moderator [name]", "View or switch the round table moderator model"),
+    ("/roundtable_log", "Display the audit log from the last round table deliberation"),
     ("/discover <task>", "Run discovery agent to scout codebase context for a task"),
     ("/discovery_model [name] / /discover_model", "View or switch the model used for discovery"),
     ("/research <query> / /web_research", "Run web scout agent to research online documentation or issues"),
@@ -297,8 +301,16 @@ def show_status(session: Any):
   table.add_column("Value", style="green")
   table.add_row("Provider", session.provider)
   table.add_row("Model", session.model)
-  table.add_row("Oracle Model", session.get_oracle_model() or "Not configured")
-  table.add_row("Discovery Model", session.get_discovery_model() or "Not configured")
+  table.add_row("Oracle Model", str(session.get_oracle_model()) if session.get_oracle_model() else "Not configured")
+  rt_models = session.get_roundtable_models() if hasattr(session, "get_roundtable_models") else []
+  if isinstance(rt_models, (list, tuple)):
+    rt_str = ", ".join(str(m) for m in rt_models) if rt_models else "Default"
+  else:
+    rt_str = str(rt_models) if rt_models else "Default"
+  table.add_row("Round Table Panel", rt_str)
+  rt_mod = session.get_roundtable_moderator() if hasattr(session, "get_roundtable_moderator") else None
+  table.add_row("Round Table Moderator", str(rt_mod) if rt_mod else "Default")
+  table.add_row("Discovery Model", str(session.get_discovery_model()) if session.get_discovery_model() else "Not configured")
   table.add_row("Discovery Loops", f"{session.discovery_loops} loops")
   table.add_row("Sandbox Path", session.sandbox)
 

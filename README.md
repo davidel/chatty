@@ -14,6 +14,7 @@ Chatty provides a local terminal loop that allows an LLM agent to interact with 
 
 - **Multi-Provider Flexibility**: Switch seamlessly between local Ollama instances, cloud-based OpenRouter endpoints, or any custom API provider (such as Anthropic, Chatty, DeepSeek, Groq, etc.) via LiteLLM integration.
 - **Oracle Query Delegation**: Consult a more advanced oracle model dynamically during a session via the [ask_oracle](file:///tmp/chatty/src/chatty/tools/__init__.py#L668) tool or the `/oracle` slash command.
+- **Multi-Model Round Table Deliberation**: Form a panel of expert models (e.g. local Ollama or budget OpenRouter models) to sequentially debate and refine architectural decisions and complex logic on named propositions ($P_1, P_2, \dots$) until consensus or explicit trade-offs are reached.
 - **Sandboxed Execution Backends**: Restricts file modifications and commands strictly to a sandbox root (default `./sandbox`). Supports a companion Docker container for hermetic isolation and reproducible toolchains, Linux Landlock kernel-level filesystem sandboxing, and direct execution.
 - **User-Space AST Validation**: Parses Python scripts executed via shell commands and blocks direct filesystem operations unless explicitly permitted or whitelisted by the user.
 - **Interactive UI**: Status bars showing the provider, active model, token counter, active loop count, and sandbox directory path. Autocomplete and multiline inputs are fully integrated.
@@ -103,6 +104,9 @@ python3 -m chatty [options]
 | `--repo-map-tokens` | *None* | integer | `1024` | Target token budget for the repository map. |
 | `--discovery-model` | *None* | string | *Auto-resolved* | Model identifier for the discovery/scout agent. If omitted, reuses the saved discovery model from `.chatty/models.json` if available; otherwise dynamically selects a fast, low-cost coding model on OpenRouter, a local coder model on Ollama, or falls back to the active model. |
 | `--discovery-loops` | *None* | integer | `50` | Maximum tool execution loops allowed for the discovery agent. |
+| `--roundtable-models` | `-rm` | string | *None* | Comma-separated model identifiers for the round table expert panel. If omitted, loads saved models from `.chatty/models.json` or falls back to active model. |
+| `--roundtable-moderator` | *None* | string | *None* | Model identifier for the round table moderator. If omitted, loads saved moderator from `.chatty/models.json` or falls back to active model. |
+| `--roundtable-timeout` | *None* | float | `120.0` | Timeout in seconds for round table expert API requests and streams. |
 | `--backend` | `-B` | string | `auto` | Execution backend for shell commands: `auto` (default: Docker if available, else Landlock on Linux, else fails if `--sandbox` specified), `docker` (companion container), `landlock` (Linux Landlock LSM), or `none` (direct host execution). |
 | `--docker-image` | *None* | string | `chatty-sandbox:<user>` | Docker image tag to use for the companion container. |
 | `--docker-base-image` | *None* | string | `debian:stable-slim` | Base image to use when building the companion container. |
@@ -163,6 +167,10 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/model` | `[ID\|name]` | View active model name or switch to another model by name or 1-based index/ID. |
 | `/models` | `[add <name>\|remove <ID\|name>\|available [--refresh]\|search <query>\|info <ID\|name>]` | List, add, remove, search, or view details of LLM models. |
 | `/oracle` | `[name]` | View active oracle model name or switch to another oracle model by name. |
+| `/roundtable` / `/deliberate` | `<query>` | Summon multi-model expert round table to deliberate on an architectural problem or bug. |
+| `/roundtable_models` | `[models]` | View or switch the models configured for the round table expert panel (comma-separated). |
+| `/roundtable_moderator` | `[name]` | View or switch the model acting as the round table moderator. |
+| `/roundtable_log` | None | Displays the formatted markdown audit log from the last round table deliberation. |
 | `/discover` | `<task>` | Run discovery agent to scout codebase context for a given task. |
 | `/discovery_model` / `/discover_model` | `[name]` | View or switch the model used for discovery agent. |
 | `/research` / `/web_research` | `<query>` | Run web scout agent to research technical documentation, issues, or APIs online. |
@@ -243,6 +251,61 @@ Autonomously searches the web, inspects documentation pages and GitHub issues, a
 - **Configurable Scout Model**: Switch models anytime using `/discovery_model <model>` (with full Tab completion) or `--discovery-model <model>`.
 - **Intelligent Provider Defaults**: Automatically selects a fast, low-cost coding model on OpenRouter (dynamically filtered by cost bounds and popularity) or a local model on Ollama, ensuring exploration does not burn expensive primary model tokens.
 - **Configurable Turns**: Control maximum investigation iterations via `--discovery-loops <N>` (default: 50).
+
+### Multi-Model Round Table Deliberation (`/roundtable` & `ask_roundtable`)
+
+Different LLMs often provide wildly different answers to complex architectural or algorithmic questions. Smaller, cheaper models (e.g. 7B/8B local Ollama models or free/budget OpenRouter endpoints) frequently hallucinate edge cases or miss subtle requirements when operating in isolation. 
+
+The **Round Table** engine coordinates an adversarial panel of models to progressively refine an answer by cross-checking each other's reasoning:
+
+```
+                      [ User Query / ask_roundtable ]
+                                    │
+                                    ▼
+                        ┌───────────────────────┐
+                        │    Moderator Model    │
+                        │ (Initial Points P1-Pk)│
+                        └───────────┬───────────┘
+                                    │
+    ┌───────────────────────────────┴───────────────────────────────┐
+    ▼                                                               ▼
+┌───────────────────────────────────────┐       ┌───────────────────────────────────────┐
+│  Expert 1 (Adversarial Review)        │       │  Expert 2 (Cross-Checks Exp 1 & Pk)   │
+│  - Counterexamples & invariants       │ ─────►│  - Validates Exp 1 objections         │
+│  - Emits structured verdict           │       │  - Emits structured verdict           │
+└───────────────────────────────────────┘       └───────────────────┬───────────────────┘
+                                                                    │
+                                                                    ▼
+                                                ┌───────────────────────────────────────┐
+                                                │  Moderator Reconciliation             │
+                                                │  - Evaluates counterexamples          │
+                                                │  - Updates statuses (CONFIRMED/REVISED)
+                                                └───────────────────┬───────────────────┘
+                                                                    │
+                                            (Loop up to 3 rounds until consensus)
+                                                                    │
+                                                                    ▼
+                                                [ Final Synthesis & Audit Trail ]
+```
+
+#### Key Architectural Principles
+1. **Named Points ($P_1, P_2, \dots$) State Machine:**
+   The deliberation decomposes the problem into atomic, verifiable assertions ($P_1, P_2, \dots$). Each point transitions through explicit states:
+   * `PROPOSED`: Initial assertion or architectural proposition.
+   * `CONFIRMED`: Verified with an explicit invariant proof or edge-case verification rationale.
+   * `REVISED`: A concrete counterexample was demonstrated, and the proposition was amended.
+   * `CONTESTED`: An active failure scenario or objection was raised and is under review.
+   * `SPLIT`: If irreducible disagreement persists after the maximum rounds (default: 3), the Moderator documents the competing trade-offs (e.g. throughput vs memory) rather than forcing an artificial consensus.
+2. **Sequential Turns:**
+   Deliberation proceeds sequentially within each round. Expert 2 sees Expert 1's stated objections and counterexamples, and Expert 3 cross-checks all prior critiques, enabling progressive refinement.
+3. **Popperian Anti-Sycophancy:**
+   Models are instructed that empty praise or generic agreement is discarded. Approving a point requires providing a `verification_rationale`. If any model demonstrates a reproducible counterexample, it strictly outweighs generic confirmations.
+4. **Private Scratchpad, Public Utterance:**
+   Internal thinking tokens (`<think>` or `reasoning_content`) from reasoning models are streamed live to the user in Rich terminal panels, but stripped from prompts sent to peer models. This prevents cognitive contagion and eliminates token bloat.
+5. **Read-Only Verification Tools:**
+   Experts have access to inspection tools (`read_file`, `search_grep`, `find_symbol`, `search_web`, etc.) capped at 2 loops per turn, allowing them to verify real code or documentation before making claims.
+6. **Audit Trail Persistence:**
+   The full transcript—including round-by-round critiques, reasoning scratchpads, and point status tables—is automatically saved to `.chatty/roundtable_last.md` and can be inspected anytime via the `/roundtable_log` slash command.
 
 ---
 
@@ -327,16 +390,22 @@ The configuration syntax follows the standard `mcpServers` format:
 Chatty instructs the agent to store all temporary test scripts, one-off execution snippets, scratchpad notes, and intermediate debug files inside `.chatty/scratch/` (relative to the sandbox root) to prevent workspace clutter and avoid polluting `git status`. When exiting Chatty, if any files exist in `.chatty/scratch/`, the CLI interactively prompts whether you want to clean them up or preserve them.
 
 ### Persistent Task Model Selections (`.chatty/models.json`)
-Chatty remembers your latest model selections for each task (`main`, `oracle`, `discovery`) inside the project's `.chatty/models.json` file.
-When launching Chatty in a project without specifying model options on the command line (`--model`, `--oracle-model`, `--discovery-model`), Chatty automatically reuses the latest selections recorded in `.chatty/models.json`:
+Chatty remembers your latest model selections for each task (`main`, `oracle`, `discovery`, `roundtable_models`, `roundtable_moderator`) inside the project's `.chatty/models.json` file.
+When launching Chatty in a project without specifying model options on the command line (`--model`, `--oracle-model`, `--discovery-model`, `--roundtable-models`, `--roundtable-moderator`), Chatty automatically reuses the latest selections recorded in `.chatty/models.json`:
 ```json
 {
   "main": "qwen2.5-coder:7b",
   "oracle": "deepseek-coder",
-  "discovery": "google/gemini-2.5-flash:free"
+  "discovery": "google/gemini-2.5-flash:free",
+  "roundtable_models": [
+    "ollama/qwen2.5-coder:7b",
+    "ollama/llama3.2:3b",
+    "openrouter/google/gemini-2.0-flash-lite:free"
+  ],
+  "roundtable_moderator": "ollama/qwen2.5-coder:7b"
 }
 ```
-Updating models via CLI arguments or interactive slash commands (`/model`, `/oracle`, `/discovery_model`) automatically persists the selection for that task to `.chatty/models.json`.
+Updating models via CLI arguments or interactive slash commands (`/model`, `/oracle`, `/discovery_model`, `/roundtable_models`, `/roundtable_moderator`) automatically persists the selection for that task to `.chatty/models.json`.
 
 
 ### Code Search & Diagnostics
@@ -371,6 +440,7 @@ Updating models via CLI arguments or interactive slash commands (`/model`, `/ora
 - **`sleep`**: Pauses execution for a specified number of seconds.
 - **`ask_question`**: Prompts the user with a question or selectable options to confirm decisions or resolve ambiguity.
 - **`ask_oracle`**: Consults a more advanced oracle model for advice or suggestions when stuck on a difficult reasoning step, logic problem, or complex code generation.
+- **`ask_roundtable`**: Consults a panel of expert models to deliberate on a complex architectural decision, bug diagnosis, or algorithm design through structured point-by-point consensus.
 
 ---
 

@@ -590,6 +590,27 @@ TOOLS_SCHEMA = [
   {
     "type": "function",
     "function": {
+      "name": "ask_roundtable",
+      "description": "Consult a panel of expert models to deliberate on a complex architectural decision, bug diagnosis, or algorithm design through structured point-by-point consensus. Use this when facing difficult design trade-offs, concurrency issues, or uncertain implementation strategies.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The specific question, architectural dilemma, or bug to deliberate. You can reference local files with '@PATH' (e.g., '@src/server.py') to expand their contents."
+          },
+          "max_rounds": {
+            "type": "integer",
+            "description": "Maximum deliberation rounds to run before concluding (default: 3)."
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "discover_context",
       "description": "Delegate codebase reconnaissance and context gathering to a fast scout discovery agent. The discovery agent explores the workspace using read-only search and outline tools to build a curated dossier of relevant files, exact line spans, key symbols, and architectural notes for a given task, without modifying any files.",
       "parameters": {

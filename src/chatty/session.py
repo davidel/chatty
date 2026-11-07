@@ -158,6 +158,9 @@ class SessionConfig:
   repo_map_tokens: int = 1024
   discovery_model: Optional[str] = None
   discovery_loops: int = 50
+  roundtable_models: List[str] = field(default_factory=list)
+  roundtable_moderator: Optional[str] = None
+  roundtable_timeout: float = 120.0
   backend: str = "auto"
   docker_image: Optional[str] = None
   docker_base_image: Optional[str] = None
@@ -339,6 +342,9 @@ class ChatbotSession(LLMMixin):
     repo_map_tokens: int = 1024,
     discovery_model: Optional[str] = None,
     discovery_loops: int = 50,
+    roundtable_models: Optional[List[str]] = None,
+    roundtable_moderator: Optional[str] = None,
+    roundtable_timeout: float = 120.0,
     backend: Optional[str] = None,
     docker_image: Optional[str] = None,
     docker_base_image: Optional[str] = None,
@@ -399,6 +405,9 @@ class ChatbotSession(LLMMixin):
         repo_map_tokens=repo_map_tokens,
         discovery_model=discovery_model,
         discovery_loops=discovery_loops,
+        roundtable_models=roundtable_models or [],
+        roundtable_moderator=roundtable_moderator,
+        roundtable_timeout=roundtable_timeout,
         backend=backend or "auto",
         docker_image=docker_image,
         docker_base_image=docker_base_image,
@@ -700,8 +709,15 @@ class ChatbotSession(LLMMixin):
           os.chdir(abs_val)
         except Exception as e:
           logger.error(f"Failed to change directory to new sandbox: {e}")
-      elif name in ("model", "oracle_model", "discovery_model") and value:
-        task_name = "main" if name == "model" else ("oracle" if name == "oracle_model" else "discovery")
+      elif name in ("model", "oracle_model", "discovery_model", "roundtable_models", "roundtable_moderator") and value:
+        if name == "model":
+          task_name = "main"
+        elif name == "oracle_model":
+          task_name = "oracle"
+        elif name == "discovery_model":
+          task_name = "discovery"
+        else:
+          task_name = name
         sandbox_dir = getattr(self, "sandbox", None)
         save_model_for_task(task_name, value, sandbox=sandbox_dir)
     else:
@@ -956,6 +972,36 @@ class ChatbotSession(LLMMixin):
     """Runs web research using the scout agent."""
     from chatty.discovery import run_web_research
     return run_web_research(self, query, max_loops=max_loops)
+
+  def get_roundtable_models(self) -> List[str]:
+    """Returns configured roundtable models list, or saved from .chatty, or fallback to active model."""
+    configured = getattr(self.config, "roundtable_models", None)
+    if configured:
+      return list(configured)
+    saved = get_saved_models(getattr(self, "sandbox", None))
+    saved_models = saved.get("roundtable_models")
+    if saved_models:
+      return list(saved_models)
+    return [self.model] if self.model else []
+
+  def get_roundtable_moderator(self) -> Optional[str]:
+    """Returns configured roundtable moderator, or saved from .chatty, or active model."""
+    configured = getattr(self.config, "roundtable_moderator", None)
+    if configured:
+      return configured
+    saved = get_saved_models(getattr(self, "sandbox", None))
+    return saved.get("roundtable_moderator") or self.model
+
+  def run_roundtable(
+    self,
+    query: str,
+    models: Optional[List[str]] = None,
+    moderator: Optional[str] = None,
+    max_rounds: int = 3
+  ) -> str:
+    """Runs a multi-model consensus deliberation."""
+    from chatty.roundtable import run_roundtable
+    return run_roundtable(self, query, models=models, moderator=moderator, max_rounds=max_rounds)
 
   def tool_run_tests(self, command: str = None) -> str:
     """Run tests in the sandbox, auto-detecting the testing framework if no command is provided."""
@@ -1546,6 +1592,8 @@ class ChatbotSession(LLMMixin):
       "oracle_model": getattr(self, "oracle_model", None),
       "discovery_model": getattr(self, "discovery_model", None),
       "discovery_loops": getattr(self, "discovery_loops", 50),
+      "roundtable_models": getattr(self, "roundtable_models", []),
+      "roundtable_moderator": getattr(self, "roundtable_moderator", None),
       "context_size": self.context_size,
       "sandbox": self.sandbox,
       "max_loops": self.max_loops,
@@ -1586,6 +1634,10 @@ class ChatbotSession(LLMMixin):
       self.discovery_model = session_data["discovery_model"]
     if "discovery_loops" in session_data:
       self.discovery_loops = session_data["discovery_loops"]
+    if "roundtable_models" in session_data:
+      self.roundtable_models = session_data["roundtable_models"]
+    if "roundtable_moderator" in session_data:
+      self.roundtable_moderator = session_data["roundtable_moderator"]
     if "context_size" in session_data:
       self.context_size = session_data["context_size"]
     if "sandbox" in session_data:

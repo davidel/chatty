@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 from chatty.backup import ensure_gitignore_ignores_chatty
 
 logger = logging.getLogger("chatty")
@@ -64,7 +64,7 @@ def get_project_chatty_dir(sandbox: Optional[str] = None, create: bool = False) 
     return None
 
 
-def get_saved_models(sandbox: Optional[str] = None) -> Dict[str, str]:
+def get_saved_models(sandbox: Optional[str] = None) -> Dict[str, Any]:
   """Loads remembered models for each task from the project's .chatty/models.json."""
   candidates = []
   if sandbox:
@@ -91,15 +91,23 @@ def get_saved_models(sandbox: Optional[str] = None) -> Dict[str, str]:
 
     normalized = {}
     for k, v in data.items():
+      k_norm = k.strip().lower()
+      if k_norm in ("roundtable", "roundtable_models", "roundtable-models"):
+        if isinstance(v, list):
+          normalized["roundtable_models"] = [str(x).strip() for x in v if str(x).strip()]
+        elif isinstance(v, str) and v.strip():
+          normalized["roundtable_models"] = [x.strip() for x in v.split(",") if x.strip()]
+        continue
       if not isinstance(v, str) or not v.strip():
         continue
-      k_norm = k.strip().lower()
       if k_norm in ("main", "model", "chat"):
         normalized["main"] = v.strip()
       elif k_norm in ("oracle", "oracle_model"):
         normalized["oracle"] = v.strip()
       elif k_norm in ("discovery", "discovery_model", "scout"):
         normalized["discovery"] = v.strip()
+      elif k_norm in ("roundtable_moderator", "roundtable-moderator", "moderator"):
+        normalized["roundtable_moderator"] = v.strip()
       else:
         normalized[k_norm] = v.strip()
     return normalized
@@ -108,9 +116,9 @@ def get_saved_models(sandbox: Optional[str] = None) -> Dict[str, str]:
     return {}
 
 
-def save_model_for_task(task: str, model_name: str, sandbox: Optional[str] = None) -> None:
+def save_model_for_task(task: str, model_name: Any, sandbox: Optional[str] = None) -> None:
   """Saves a model selection for a specific task into .chatty/models.json."""
-  if not task or not model_name:
+  if not task or model_name is None:
     return
 
   chatty_dir = get_project_chatty_dir(sandbox=sandbox, create=True)
@@ -135,8 +143,18 @@ def save_model_for_task(task: str, model_name: str, sandbox: Optional[str] = Non
     task_norm = "oracle"
   elif task_norm in ("discovery_model", "scout"):
     task_norm = "discovery"
+  elif task_norm in ("roundtable", "roundtable_models", "roundtable-models"):
+    task_norm = "roundtable_models"
+  elif task_norm in ("roundtable_moderator", "roundtable-moderator", "moderator"):
+    task_norm = "roundtable_moderator"
 
-  data[task_norm] = model_name.strip()
+  if task_norm == "roundtable_models":
+    if isinstance(model_name, list):
+      data[task_norm] = [str(x).strip() for x in model_name if str(x).strip()]
+    elif isinstance(model_name, str):
+      data[task_norm] = [x.strip() for x in model_name.split(",") if x.strip()]
+  else:
+    data[task_norm] = str(model_name).strip()
 
   try:
     with open(models_file, "w", encoding="utf-8") as f:

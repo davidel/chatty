@@ -1534,6 +1534,90 @@ def cmd_web_research(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_roundtable(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    console.print("[bold red]Error: Please specify a topic, question, or architecture problem for the round table to deliberate.[/bold red]")
+    console.print("Usage: /roundtable <question or problem description>")
+    return True
+
+  synthesis = session.run_roundtable(arg)
+  if not synthesis:
+    console.print("[yellow]Round table completed without returning a synthesis.[/yellow]")
+    return True
+
+  from rich.markdown import Markdown
+  console.print(Panel(
+    Markdown(synthesis),
+    title="[bold green]🏛️ Round Table Consensus[/bold green]",
+    border_style="green"
+  ))
+
+  session.messages.append({
+    "role": "user",
+    "content": f"[Round Table Consensus for: '{arg}']:\n\n{synthesis}"
+  })
+  session.messages.append({
+    "role": "assistant",
+    "content": f"Understood. I have reviewed the round table consensus for '{arg}'. How would you like to proceed with the implementation?"
+  })
+  console.print("[bold green]Consensus loaded into active conversation context.[/bold green]")
+  return True
+
+
+def cmd_roundtable_models(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    models = session.get_roundtable_models()
+    if models:
+      console.print(f"Current round table panel models: [bold cyan]{', '.join(models)}[/bold cyan]")
+    else:
+      console.print("No round table panel models configured (defaults to active session model).")
+    return True
+
+  new_models = [m.strip() for m in arg.split(",") if m.strip()]
+  session.roundtable_models = new_models
+  console.print(f"Switched round table panel models to: [bold green]{', '.join(new_models)}[/bold green]")
+  return True
+
+
+def cmd_roundtable_moderator(session: Any, arg: str) -> bool:
+  arg = arg.strip()
+  if not arg:
+    mod = session.get_roundtable_moderator()
+    if mod:
+      console.print(f"Current round table moderator: [bold cyan]{mod}[/bold cyan]")
+    else:
+      console.print(f"Round table moderator not configured (defaulting to active model: [bold cyan]{session.model}[/bold cyan]).")
+    return True
+
+  session.roundtable_moderator = arg
+  console.print(f"Switched round table moderator to: [bold green]{arg}[/bold green]")
+  return True
+
+
+def cmd_roundtable_log(session: Any, arg: str) -> bool:
+  from chatty.models_config import get_project_chatty_dir
+  chatty_dir = get_project_chatty_dir(getattr(session, "sandbox", None))
+  if not chatty_dir:
+    console.print("[yellow]No .chatty directory found in this project.[/yellow]")
+    return True
+
+  log_path = os.path.join(chatty_dir, "roundtable_last.md")
+  if not os.path.isfile(log_path):
+    console.print("[yellow]No previous round table audit log found at .chatty/roundtable_last.md.[/yellow]")
+    return True
+
+  try:
+    with open(log_path, "r", encoding="utf-8") as f:
+      content = f.read()
+    from rich.markdown import Markdown
+    console.print(Markdown(content))
+  except Exception as e:
+    console.print(f"[bold red]Error reading round table audit log: {e}[/bold red]")
+  return True
+
+
 def cmd_docker(session: Any, arg: str) -> bool:
   if not hasattr(session, "backend") or session.backend.get_name() != "docker":
     backend_name = session.backend.get_name() if hasattr(session, "backend") else "none"
@@ -1850,6 +1934,11 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/model": cmd_model,
   "/models": cmd_models,
   "/oracle": cmd_oracle,
+  "/roundtable": cmd_roundtable,
+  "/deliberate": cmd_roundtable,
+  "/roundtable_models": cmd_roundtable_models,
+  "/roundtable_moderator": cmd_roundtable_moderator,
+  "/roundtable_log": cmd_roundtable_log,
   "/discover": cmd_discover,
   "/discovery_model": cmd_discovery_model,
   "/discover_model": cmd_discovery_model,

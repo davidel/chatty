@@ -357,6 +357,18 @@ def handle_ask_oracle(arguments: Dict[str, Any], session: Any) -> str:
   return session.consult_oracle(query)
 
 
+def handle_ask_roundtable(arguments: Dict[str, Any], session: Any) -> str:
+  query = arguments.get("query", "").strip()
+  if not query:
+    return "Error: Missing parameter 'query'."
+  max_rounds = arguments.get("max_rounds", 3)
+  try:
+    max_rounds = int(max_rounds)
+  except Exception:
+    max_rounds = 3
+  return session.run_roundtable(query, max_rounds=max_rounds)
+
+
 def handle_discover_context(arguments: Dict[str, Any], session: Any) -> str:
   task = arguments.get("task", "").strip()
   if not task:
@@ -400,6 +412,7 @@ TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any], Any], str]] = {
   "ask_question": handle_ask_question,
   "search_web": handle_search_web,
   "ask_oracle": handle_ask_oracle,
+  "ask_roundtable": handle_ask_roundtable,
   "discover_context": handle_discover_context,
   "web_research": handle_web_research,
   "get_outline": handle_get_outline,

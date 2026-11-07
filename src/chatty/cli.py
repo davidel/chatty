@@ -42,6 +42,14 @@ def main():
     help="Maximum tool loops allowed for the discovery agent (default: 50)."
   )
   parser.add_argument(
+    "--roundtable-models", "-rm",
+    help="Model identifier(s) for the round table expert panel (comma-separated)."
+  )
+  parser.add_argument(
+    "--roundtable-moderator",
+    help="Model identifier to use as the round table moderator (defaults to active model)."
+  )
+  parser.add_argument(
     "--context-size", "-c",
     type=int,
     default=8192,
@@ -215,6 +223,12 @@ def main():
     type=float,
     default=None,
     help="Timeout in seconds for discovery agent API requests and streams (default: inherits --api-timeout)."
+  )
+  parser.add_argument(
+    "--roundtable-timeout",
+    type=float,
+    default=120.0,
+    help="Timeout in seconds for round table expert API requests and streams (default: 120.0)."
   )
   parser.add_argument(
     "--profile",
@@ -391,10 +405,26 @@ def main():
     if not args.headless:
       console.print(f"[bold blue]Info:[/bold blue] Loaded saved discovery model from .chatty: [bold green]{discovery_model}[/bold green]")
 
+  roundtable_models = None
+  if args.roundtable_models:
+    roundtable_models = [m.strip() for m in args.roundtable_models.split(",") if m.strip()]
+  elif "roundtable_models" in saved_models:
+    roundtable_models = saved_models["roundtable_models"]
+    if not args.headless:
+      console.print(f"[bold blue]Info:[/bold blue] Loaded saved round table models from .chatty: [bold green]{', '.join(roundtable_models)}[/bold green]")
+
+  roundtable_moderator = args.roundtable_moderator
+  if not roundtable_moderator and "roundtable_moderator" in saved_models:
+    roundtable_moderator = saved_models["roundtable_moderator"]
+    if not args.headless:
+      console.print(f"[bold blue]Info:[/bold blue] Loaded saved round table moderator from .chatty: [bold green]{roundtable_moderator}[/bold green]")
+
   save_models_for_tasks({
     "main": model,
     "oracle": oracle_model,
-    "discovery": discovery_model
+    "discovery": discovery_model,
+    "roundtable_models": roundtable_models,
+    "roundtable_moderator": roundtable_moderator
   }, sandbox=sandbox_dir if sandbox_specified else None)
   
   # Initialize and execute chat session
@@ -436,6 +466,9 @@ def main():
     repo_map_tokens=args.repo_map_tokens,
     discovery_model=discovery_model,
     discovery_loops=args.discovery_loops,
+    roundtable_models=roundtable_models,
+    roundtable_moderator=roundtable_moderator,
+    roundtable_timeout=args.roundtable_timeout,
     backend=args.backend,
     docker_image=args.docker_image,
     docker_base_image=args.docker_base_image,
