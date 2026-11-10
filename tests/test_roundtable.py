@@ -424,13 +424,35 @@ class TestRoundTableCommandsAndTool(unittest.TestCase):
 
     # Test /roundtable slash command
     self.assertTrue(cmd_roundtable(self.session, "Test question"))
-    mock_run_rt.assert_called_with(self.session, "Test question", models=None, moderator=None, max_rounds=3)
+    mock_run_rt.assert_called_with(
+      self.session,
+      "Test question",
+      models=None,
+      moderator=None,
+      max_rounds=3,
+      relevant_files=None,
+      context=None
+    )
     self.assertEqual(len(self.session.messages), 2)
     self.assertIn("Synthesized Consensus", self.session.messages[0]["content"])
 
-    # Test tool handler
-    tool_res = handle_ask_roundtable({"query": "Tool question", "max_rounds": 2}, self.session)
+    # Test tool handler with relevant_files and context
+    tool_res = handle_ask_roundtable({
+      "query": "Tool question",
+      "max_rounds": 2,
+      "relevant_files": ["src/app.py"],
+      "context": "Background note"
+    }, self.session)
     self.assertEqual(tool_res, "Synthesized Consensus")
+    mock_run_rt.assert_called_with(
+      self.session,
+      "Tool question",
+      models=None,
+      moderator=None,
+      max_rounds=2,
+      relevant_files=["src/app.py"],
+      context="Background note"
+    )
 
   def test_cmd_roundtable_log(self):
     chatty_dir = os.path.join(self.sandbox_dir, ".chatty")
@@ -494,3 +516,75 @@ class TestRoundTableCommandsAndTool(unittest.TestCase):
       self.assertEqual(reasoning, "Thinking deep thoughts...")
       self.assertEqual(tool_calls, [])
       self.assertIn("expert-1", self.session.model_usage)
+
+  def test_roundtable_tool_cache_memoization(self):
+    # Verifies that duplicate tool calls across expert subagents hit the tool_cache
+    tool_cache = {}
+    tool_call = [{"id": "c1", "function": {"name": "read_file", "arguments": '{"path": "test.txt"}'}}]
+
+    with patch("chatty.llm.execute_tool", return_value="hello from disk") as mock_exec:
+      # First execution: cache miss, executes tool
+      res1 = self.session.execute_subagent_tools(
+        tool_call,
+        allowed_tools={"read_file"},
+        tool_cache=tool_cache
+      )
+      self.assertEqual(mock_exec.call_count, 1)
+      self.assertEqual(res1[0]["content"], "hello from disk")
+
+      # Second execution with same tool and args: cache hit, mock_exec not called again
+      res2 = self.session.execute_subagent_tools(
+        tool_call,
+        allowed_tools={"read_file"},
+        tool_cache=tool_cache
+      )
+      self.assertEqual(mock_exec.call_count, 1)
+      self.assertEqual(res2[0]["content"], "hello from disk")
+
+  def test_roundtable_evidence_ledger_and_initial_context(self):
+    # Tests that initial_context (relevant_files and context) and evidence_ledger are injected into expert prompts
+    dummy_file = os.path.join(self.sandbox_dir, "auth.py")
+    with open(dummy_file, "w", encoding="utf-8") as f:
+      f.write("def verify_jwt(): pass")
+
+    tool_call_dummy = [{
+      "id": "tc1",
+      "type": "function",
+      "function": {"name": "read_file", "arguments": json.dumps({"path": "auth.py"})},
+    }]
+    review_json = json.dumps({
+      "reviews": [{"point_id": "P1", "verdict": "CONFIRMED"}]
+    })
+
+    evidence_ledger = []
+    tool_cache = {}
+
+    with patch("chatty.roundtable._call_llm_stream") as mock_call_llm, \
+         patch.object(self.session, "execute_subagent_tools", return_value=[{"role": "tool", "content": "def verify_jwt(): pass"}]):
+      mock_call_llm.side_effect = [
+        ("", tool_call_dummy, ""),
+        (review_json, [], ""),
+      ]
+
+      review = _run_expert_turn(
+        session=self.session,
+        expert_idx=1,
+        total_experts=2,
+        expert_model="expert-1",
+        query="Check auth",
+        points=[RoundTablePoint(id="P1", statement="Verify token", status=PointStatus.PROPOSED)],
+        round_num=1,
+        prior_expert_critiques=[],
+        initial_context="BACKGROUND CONTEXT / NOTES:\nSpecial auth rule",
+        evidence_ledger=evidence_ledger,
+        tool_cache=tool_cache,
+      )
+
+      # Evidence ledger should have recorded the read_file call
+      self.assertEqual(len(evidence_ledger), 1)
+      self.assertEqual(evidence_ledger[0]["tool"], "read_file")
+      self.assertIn("verify_jwt", evidence_ledger[0]["summary"])
+
+      # First call to model should contain the initial_context
+      first_call_msgs = mock_call_llm.call_args_list[0].kwargs["messages"]
+      self.assertTrue(any("Special auth rule" in m.get("content", "") for m in first_call_msgs))

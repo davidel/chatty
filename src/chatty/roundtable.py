@@ -145,9 +145,68 @@ def _format_points_table(points: List[RoundTablePoint]) -> Table:
   return table
 
 
-def build_moderator_decomposition_prompt(query: str) -> str:
+def _build_initial_context(
+  session: Any,
+  relevant_files: Optional[List[str]] = None,
+  context: Optional[str] = None
+) -> str:
+  """Builds background context block from explicit context and relevant files."""
+  sections = []
+  if context and str(context).strip():
+    sections.append(f"BACKGROUND CONTEXT / NOTES:\n{str(context).strip()}")
+
+  if relevant_files:
+    from chatty.safety import get_safe_path
+    sandbox = getattr(session, "sandbox", None)
+    for fpath in relevant_files:
+      fpath_clean = str(fpath).strip()
+      if not fpath_clean:
+        continue
+      try:
+        safe_path = get_safe_path(sandbox, fpath_clean, write=False) if sandbox else fpath_clean
+        if os.path.isfile(safe_path):
+          with open(safe_path, "r", encoding="utf-8", errors="replace") as f:
+            f_content = f.read()
+          if len(f_content) > 12000:
+            f_content = f_content[:6000] + "\n\n... [truncated for context limit] ...\n\n" + f_content[-6000:]
+          sections.append(f"FILE CONTENT: `{fpath_clean}`:\n```\n{f_content}\n```")
+        else:
+          sections.append(f"NOTE: File `{fpath_clean}` was specified but not found on disk.")
+      except Exception as e:
+        sections.append(f"NOTE: Failed to read `{fpath_clean}`: {e}")
+
+  return "\n\n".join(sections)
+
+
+def _summarize_evidence(tool_name: str, args: Dict[str, Any], result: str) -> str:
+  """Creates a concise excerpt of evidence gathered by a tool call."""
+  res_clean = (result or "").strip()
+  if len(res_clean) > 800:
+    res_clean = res_clean[:400] + "\n... [truncated] ...\n" + res_clean[-400:]
+  args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+  return f"`{tool_name}({args_str})`:\n{res_clean}"
+
+
+def _format_evidence_ledger_for_prompt(evidence_ledger: List[Dict[str, Any]]) -> str:
+  """Formats peer evidence into a markdown block for expert prompts."""
+  if not evidence_ledger:
+    return ""
+  lines = [
+    "EVIDENCE & SOURCES DISCOVERED BY PEERS (SHARED EVIDENCE LEDGER):",
+    "Peers have inspected the following files/sources. You can use this ground truth directly without re-reading the exact same files:",
+  ]
+  for item in evidence_ledger:
+    expert_lbl = item.get("expert", "Peer")
+    summary = item.get("summary", "")
+    lines.append(f"\n--- Discovered by {expert_lbl} ---\n{summary}")
+  return "\n".join(lines)
+
+
+def build_moderator_decomposition_prompt(query: str, initial_context: str = "") -> str:
+  context_part = f"{initial_context}\n\n" if initial_context else ""
   return (
     f"USER INQUIRY / TASK:\n{query}\n\n"
+    f"{context_part}"
     "You are the Moderator of an adversarial technical round table. "
     "Your first task is to break down the user's technical inquiry into a set of discrete, "
     "atomic, and verifiable points (named P1, P2, P3, ...).\n\n"
@@ -263,12 +322,15 @@ def build_moderator_reconciliation_prompt(
 def build_moderator_synthesis_prompt(
   query: str,
   points: List[RoundTablePoint],
-  rounds_run: int
+  rounds_run: int,
+  initial_context: str = ""
 ) -> str:
   points_context = _format_points_for_prompt(points)
+  context_part = f"BACKGROUND CONTEXT:\n{initial_context}\n\n" if initial_context else ""
   return (
     "You are the Moderator delivering the final synthesized consensus from the expert round table.\n\n"
-    f"ORIGINAL QUERY: {query}\n"
+    f"ORIGINAL QUERY: {query}\n\n"
+    f"{context_part}"
     f"ROUNDS CONDUCTED: {rounds_run}\n\n"
     f"FINAL REFINED POINTS:\n{points_context}\n\n"
     "Please synthesize a comprehensive, rigorous final technical recommendation.\n"
@@ -313,7 +375,10 @@ def _run_expert_turn(
   query: str,
   points: List[RoundTablePoint],
   round_num: int,
-  prior_expert_critiques: List[Dict[str, Any]]
+  prior_expert_critiques: List[Dict[str, Any]],
+  initial_context: str = "",
+  evidence_ledger: Optional[List[Dict[str, Any]]] = None,
+  tool_cache: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
   """Runs a single expert turn with tool execution loops and synthesis nudge."""
   allowed_tools = ROUNDTABLE_VERIFICATION_TOOL_NAMES
@@ -329,6 +394,14 @@ def _run_expert_turn(
     f"TASK / QUESTION:\n{query}\n\n"
     f"CURRENT CANDIDATE POINTS (ROUND {round_num}):\n{points_context}\n\n"
   )
+
+  if initial_context:
+    user_prompt += f"{initial_context}\n\n"
+
+  if evidence_ledger:
+    evidence_block = _format_evidence_ledger_for_prompt(evidence_ledger)
+    if evidence_block:
+      user_prompt += f"{evidence_block}\n\n"
 
   if prior_expert_critiques:
     critiques_summary = json.dumps(prior_expert_critiques, indent=2)
@@ -395,10 +468,33 @@ def _run_expert_turn(
     tool_results = session.execute_subagent_tools(
       tool_calls,
       allowed_tools=allowed_tools,
-      log_label=f"Expert {expert_idx} ({expert_model})"
+      log_label=f"Expert {expert_idx} ({expert_model})",
+      tool_cache=tool_cache
     )
     messages.extend(tool_results)
     tool_loops_executed += 1
+
+    # Record into evidence ledger for peer experts
+    if evidence_ledger is not None:
+      for tc, tr in zip(tool_calls, tool_results):
+        t_name = tc.get("function", {}).get("name", "")
+        raw_args = tc.get("function", {}).get("arguments", "{}")
+        try:
+          p_args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+        except Exception:
+          p_args = {}
+        t_res_content = tr.get("content", "")
+        exists = any(
+          e.get("tool") == t_name and e.get("args") == p_args
+          for e in evidence_ledger
+        )
+        if not exists and not t_res_content.startswith("Error:"):
+          evidence_ledger.append({
+            "tool": t_name,
+            "args": p_args,
+            "summary": _summarize_evidence(t_name, p_args, t_res_content),
+            "expert": f"Expert {expert_idx} ({expert_model})"
+          })
 
     # If reached the current loop limit, ask user whether to continue
     if tool_loops_executed >= allowed_loops:
@@ -533,11 +629,16 @@ def run_roundtable(
   query: str,
   models: Optional[List[str]] = None,
   moderator: Optional[str] = None,
-  max_rounds: int = 3
+  max_rounds: int = 3,
+  relevant_files: Optional[List[str]] = None,
+  context: Optional[str] = None
 ) -> str:
   """Runs the full round-table deliberation workflow."""
   expanded_query = session._expand_query_files(query) if hasattr(session, "_expand_query_files") else query
   saved = get_saved_models(getattr(session, "sandbox", None))
+  initial_context = _build_initial_context(session, relevant_files=relevant_files, context=context)
+  deliberation_tool_cache: Dict[str, str] = {}
+  evidence_ledger: List[Dict[str, Any]] = []
 
   # Resolve panel models
   panel_models = models or getattr(session, "roundtable_models", None) or saved.get("roundtable_models")
@@ -549,13 +650,19 @@ def run_roundtable(
   # Resolve moderator model
   moderator_model = moderator or getattr(session, "roundtable_moderator", None) or saved.get("roundtable_moderator") or session.model
 
+  info_lines = [
+    f"[bold cyan]Topic:[/bold cyan] {escape(query)}",
+    f"[bold green]Panel ({len(panel_models)}):[/bold green] {', '.join(panel_models)}",
+    f"[bold purple]Moderator:[/bold purple] {moderator_model}",
+    f"[bold yellow]Max Rounds:[/bold yellow] {max_rounds}"
+  ]
+  if relevant_files:
+    info_lines.append(f"[bold blue]Provided Files ({len(relevant_files)}):[/bold blue] {', '.join(relevant_files)}")
+  if context:
+    info_lines.append(f"[bold dim]Context Provided:[/bold dim] {escape(str(context)[:120])}...")
+
   console.print(Panel(
-    Text.from_markup(
-      f"[bold cyan]Topic:[/bold cyan] {escape(query)}\n"
-      f"[bold green]Panel ({len(panel_models)}):[/bold green] {', '.join(panel_models)}\n"
-      f"[bold purple]Moderator:[/bold purple] {moderator_model}\n"
-      f"[bold yellow]Max Rounds:[/bold yellow] {max_rounds}"
-    ),
+    Text.from_markup("\n".join(info_lines)),
     title="🏛️ Summoning the Round Table",
     border_style="cyan"
   ))
@@ -566,7 +673,7 @@ def run_roundtable(
 
   try:
     # STEP 1: Moderator decomposes query into initial candidate points (P1, P2, ...)
-    decomp_prompt = build_moderator_decomposition_prompt(expanded_query)
+    decomp_prompt = build_moderator_decomposition_prompt(expanded_query, initial_context=initial_context)
     decomp_messages = [
       {"role": "system", "content": "You are a senior technical architect acting as a round-table moderator."},
       {"role": "user", "content": decomp_prompt},
@@ -625,6 +732,9 @@ def run_roundtable(
           points=points,
           round_num=round_num,
           prior_expert_critiques=round_critiques,
+          initial_context=initial_context,
+          evidence_ledger=evidence_ledger,
+          tool_cache=deliberation_tool_cache,
         )
         round_critiques.append(review)
         transcript.append({
@@ -699,7 +809,12 @@ def run_roundtable(
         break
 
     # STEP 3: Final Moderator Synthesis
-    synthesis_prompt = build_moderator_synthesis_prompt(expanded_query, points, rounds_completed)
+    synthesis_prompt = build_moderator_synthesis_prompt(
+      expanded_query,
+      points,
+      rounds_completed,
+      initial_context=initial_context
+    )
     synth_messages = [
       {"role": "system", "content": "You are the round-table moderator compiling the final consensus synthesis."},
       {"role": "user", "content": synthesis_prompt},

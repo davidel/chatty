@@ -602,6 +602,15 @@ TOOLS_SCHEMA = [
           "max_rounds": {
             "type": "integer",
             "description": "Maximum deliberation rounds to run before concluding (default: 3)."
+          },
+          "relevant_files": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional list of local file paths providing direct context for the deliberation (e.g. ['src/server.py', 'src/auth.py']). Their contents will be automatically gathered and provided directly to all round-table models."
+          },
+          "context": {
+            "type": "string",
+            "description": "Optional background context, error trace, or architectural requirements to supply directly to the panel."
           }
         },
         "required": ["query"]

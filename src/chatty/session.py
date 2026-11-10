@@ -1008,11 +1008,21 @@ class ChatbotSession(LLMMixin):
     query: str,
     models: Optional[List[str]] = None,
     moderator: Optional[str] = None,
-    max_rounds: int = 3
+    max_rounds: int = 3,
+    relevant_files: Optional[List[str]] = None,
+    context: Optional[str] = None
   ) -> str:
     """Runs a multi-model consensus deliberation."""
     from chatty.roundtable import run_roundtable
-    return run_roundtable(self, query, models=models, moderator=moderator, max_rounds=max_rounds)
+    return run_roundtable(
+      self,
+      query,
+      models=models,
+      moderator=moderator,
+      max_rounds=max_rounds,
+      relevant_files=relevant_files,
+      context=context
+    )
 
   def tool_run_tests(self, command: str = None) -> str:
     """Run tests in the sandbox, auto-detecting the testing framework if no command is provided."""

@@ -511,7 +511,8 @@ class LLMMixin:
     self,
     tool_calls: List[Dict[str, Any]],
     allowed_tools: Optional[Set[str]] = None,
-    log_label: str = "tool"
+    log_label: str = "tool",
+    tool_cache: Optional[Dict[str, str]] = None
   ) -> List[Dict[str, Any]]:
     """Executes a batch of subagent tool calls with permission checks and error handling."""
     results: List[Dict[str, Any]] = []
@@ -532,14 +533,21 @@ class LLMMixin:
       if allowed_tools is not None and t_name not in allowed_tools:
         t_result = f"Error: Tool '{t_name}' is not permitted in {log_label}. Allowed: {', '.join(sorted(allowed_tools))}."
       else:
-        token = active_session_var.set(self)
-        try:
-          logger.info(f"{log_label} executing: {t_name} with {args_parsed}")
-          t_result = execute_tool(t_name, args_parsed, self)
-        except Exception as e:
-          t_result = f"Error executing {t_name}: {str(e)}"
-        finally:
-          active_session_var.reset(token)
+        cache_key = f"{t_name}:{json.dumps(args_parsed, sort_keys=True)}" if tool_cache is not None else None
+        if cache_key and cache_key in tool_cache:
+          logger.info(f"{log_label} tool execution cache hit: {t_name} with {args_parsed}")
+          t_result = tool_cache[cache_key]
+        else:
+          token = active_session_var.set(self)
+          try:
+            logger.info(f"{log_label} executing: {t_name} with {args_parsed}")
+            t_result = execute_tool(t_name, args_parsed, self)
+          except Exception as e:
+            t_result = f"Error executing {t_name}: {str(e)}"
+          finally:
+            active_session_var.reset(token)
+          if cache_key is not None:
+            tool_cache[cache_key] = str(t_result)
 
       results.append({
         "role": "tool",

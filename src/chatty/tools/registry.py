@@ -366,7 +366,16 @@ def handle_ask_roundtable(arguments: Dict[str, Any], session: Any) -> str:
     max_rounds = int(max_rounds)
   except Exception:
     max_rounds = 3
-  return session.run_roundtable(query, max_rounds=max_rounds)
+  relevant_files = arguments.get("relevant_files")
+  if relevant_files and not isinstance(relevant_files, list):
+    relevant_files = [str(relevant_files)]
+  context = arguments.get("context", "")
+  return session.run_roundtable(
+    query,
+    max_rounds=max_rounds,
+    relevant_files=relevant_files,
+    context=context
+  )
 
 
 def handle_discover_context(arguments: Dict[str, Any], session: Any) -> str:
