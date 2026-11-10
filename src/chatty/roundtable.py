@@ -288,7 +288,8 @@ def _call_llm_stream(
   tools: Optional[List[Dict[str, Any]]] = None,
   panel_title: str = "Round Table",
   border_style: str = "cyan",
-  fail_fast: bool = True
+  fail_fast: bool = True,
+  tool_calls_count: int = 0
 ) -> Tuple[str, List[Dict[str, Any]], str]:
   """Calls an LLM with streaming into Rich panels via session.call_model_stream."""
   timeout = getattr(session.config, "roundtable_timeout", 120.0)
@@ -299,7 +300,8 @@ def _call_llm_stream(
     panel_title=panel_title,
     border_style=border_style,
     timeout=timeout,
-    fail_fast=fail_fast
+    fail_fast=fail_fast,
+    tool_calls_count=tool_calls_count
   )
 
 
@@ -348,8 +350,9 @@ def _run_expert_turn(
   ]
 
   panel_title = f"🤖 Expert {expert_idx}/{total_experts} ({expert_model}) [Round {round_num}]"
-  allowed_loops = 5
+  allowed_loops = getattr(session.config, "roundtable_max_tool_calls", 10) if hasattr(session, "config") else getattr(session, "roundtable_max_tool_calls", 10)
   tool_loops_executed = 0
+  cumulative_tool_calls = 0
   final_content = ""
   total_reasoning = ""
 
@@ -362,6 +365,7 @@ def _run_expert_turn(
       panel_title=panel_title,
       border_style="yellow",
       fail_fast=True,
+      tool_calls_count=cumulative_tool_calls
     )
     if reasoning:
       total_reasoning += ("\n" + reasoning if total_reasoning else reasoning)
@@ -370,12 +374,22 @@ def _run_expert_turn(
       final_content = content
       break
 
+    cumulative_tool_calls += len(tool_calls)
+
     # Format assistant message with tool calls (pruning internal reasoning from context)
     messages.append({
       "role": "assistant",
       "content": content or None,
       "tool_calls": tool_calls,
     })
+
+    tool_names = [tc.get("function", {}).get("name", "tool") for tc in tool_calls]
+    if not getattr(session, "headless", False):
+      console.print(
+        f"[dim]  🔧 Expert {expert_idx}/{total_experts} ({expert_model}) "
+        f"executing {len(tool_calls)} tool call(s) ({', '.join(tool_names)}) "
+        f"[total: {cumulative_tool_calls} tool call(s)]...[/dim]"
+      )
 
     # Execute tools via centralized helper
     tool_results = session.execute_subagent_tools(
@@ -424,10 +438,19 @@ def _run_expert_turn(
       panel_title=f"{panel_title} (Final Evaluation)",
       border_style="yellow",
       fail_fast=True,
+      tool_calls_count=cumulative_tool_calls
     )
     if synth_reasoning:
       total_reasoning += ("\n" + synth_reasoning if total_reasoning else synth_reasoning)
     final_content = synth_content
+
+  if not getattr(session, "headless", False):
+    t_tok = session.count_tokens_estimate(total_reasoning)
+    o_tok = session.count_tokens_estimate(final_content)
+    console.print(
+      f"[bold green]✓[/bold green] [dim]Expert {expert_idx}/{total_experts} ({expert_model}) "
+      f"finished deliberation • Thinking: ~{t_tok:,} tok • Output: ~{o_tok:,} tok • Tool calls: {cumulative_tool_calls}[/dim]"
+    )
 
   # Parse structured JSON review from the final content
   parsed_data = _parse_structured_json(final_content)
@@ -548,14 +571,22 @@ def run_roundtable(
       {"role": "system", "content": "You are a senior technical architect acting as a round-table moderator."},
       {"role": "user", "content": decomp_prompt},
     ]
-    decomp_content, _, _ = _call_llm_stream(
+    decomp_content, _, decomp_reasoning = _call_llm_stream(
       session=session,
       model_id=moderator_model,
       messages=decomp_messages,
       panel_title="👑 Moderator: Decomposing Problem into Points",
       border_style="purple",
       fail_fast=True,
+      tool_calls_count=0
     )
+    if not getattr(session, "headless", False):
+      t_tok = session.count_tokens_estimate(decomp_reasoning)
+      o_tok = session.count_tokens_estimate(decomp_content)
+      console.print(
+        f"[dim]👑 Moderator ({moderator_model}) decomposed problem "
+        f"• Thinking: ~{t_tok:,} tok • Output: ~{o_tok:,} tok[/dim]"
+      )
     transcript.append({
       "role": "moderator_decomposition",
       "raw": decomp_content,
@@ -616,14 +647,22 @@ def run_roundtable(
         {"role": "system", "content": "You are the round-table moderator reconciling expert evaluations."},
         {"role": "user", "content": reconcile_prompt},
       ]
-      reconcile_content, _, _ = _call_llm_stream(
+      reconcile_content, _, reconcile_reasoning = _call_llm_stream(
         session=session,
         model_id=moderator_model,
         messages=reconcile_messages,
         panel_title=f"👑 Moderator: Reconciling Round {round_num}",
         border_style="purple",
         fail_fast=True,
+        tool_calls_count=0
       )
+      if not getattr(session, "headless", False):
+        t_tok = session.count_tokens_estimate(reconcile_reasoning)
+        o_tok = session.count_tokens_estimate(reconcile_content)
+        console.print(
+          f"[dim]👑 Moderator ({moderator_model}) reconciled Round {round_num} "
+          f"• Thinking: ~{t_tok:,} tok • Output: ~{o_tok:,} tok[/dim]"
+        )
       transcript.append({
         "role": "moderator_reconciliation",
         "round": round_num,
@@ -665,14 +704,22 @@ def run_roundtable(
       {"role": "system", "content": "You are the round-table moderator compiling the final consensus synthesis."},
       {"role": "user", "content": synthesis_prompt},
     ]
-    final_synthesis, _, _ = _call_llm_stream(
+    final_synthesis, _, synth_reasoning = _call_llm_stream(
       session=session,
       model_id=moderator_model,
       messages=synth_messages,
       panel_title="👑 Moderator: Final Consensus Synthesis",
       border_style="green",
       fail_fast=True,
+      tool_calls_count=0
     )
+    if not getattr(session, "headless", False):
+      t_tok = session.count_tokens_estimate(synth_reasoning)
+      o_tok = session.count_tokens_estimate(final_synthesis)
+      console.print(
+        f"[dim]👑 Moderator ({moderator_model}) completed final synthesis "
+        f"• Thinking: ~{t_tok:,} tok • Output: ~{o_tok:,} tok[/dim]"
+      )
 
     # STEP 4: Persist Last Deliberation Audit Log
     audit_md = _format_audit_log(

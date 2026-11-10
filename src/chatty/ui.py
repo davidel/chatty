@@ -96,6 +96,7 @@ class LiveScreenLayout:
         rendered_panel = Panel(
           SegmentsRenderable(scrolled),
           title=p["title"],
+          subtitle=p.get("subtitle"),
           border_style=p["border_style"],
           height=h
         )

@@ -17,6 +17,7 @@ from chatty.safety import active_session_var
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.markdown import Markdown
+from rich.table import Table
 from rich.text import Text
 from rich.markup import escape
 
@@ -300,7 +301,8 @@ class LLMMixin:
     panel_title: str = "Assistant",
     border_style: str = "cyan",
     timeout: Optional[float] = None,
-    fail_fast: bool = False
+    fail_fast: bool = False,
+    tool_calls_count: int = 0
   ) -> Tuple[str, List[Dict[str, Any]], str]:
     """Streams completion from an LLM model with Rich live panels, reasoning capture,
     usage tracking, and tool extraction. Returns (content, tool_calls, reasoning).
@@ -325,14 +327,57 @@ class LLMMixin:
     reasoning_accumulated = ""
     usage_metadata = None
 
+    lazy_refresh_interval = getattr(self.config, "roundtable_refresh_interval", 2.5) if hasattr(self, "config") else 2.5
+    last_status_refresh = 0.0
+    cached_thinking_tokens = 0
+    cached_output_tokens = 0
+    cached_tool_calls = tool_calls_count
+
+    def _build_status_bar(t_tok: int, o_tok: int, n_tools: int) -> Table:
+      status_table = Table(
+        show_header=False,
+        show_edge=False,
+        show_lines=False,
+        box=None,
+        padding=0,
+        expand=True,
+        style="#e0e0e0 on #222222"
+      )
+      status_table.add_column()
+      status_table.add_row(Text.from_markup(
+        f" [bold]Model:[/bold] [yellow]{escape(model_id)}[/yellow] |"
+        f" [bold]Thinking:[/bold] [cyan]~{t_tok:,}[/cyan] tok |"
+        f" [bold]Output:[/bold] [green]~{o_tok:,}[/green] tok |"
+        f" [bold]Tool Calls:[/bold] [magenta]{n_tools}[/magenta] "
+      ))
+      return status_table
+
+    def _build_panel_content(t_tok: int, o_tok: int, n_tools: int) -> Text:
+      status_lines = [
+        f"[dim]• Status: Thinking: ~{t_tok:,} tok | Output: ~{o_tok:,} tok | Tool calls: {n_tools}[/dim]\n"
+      ]
+      if reasoning_accumulated.strip() and not content_accumulated:
+        disp_think = truncate_thinking_by_line(reasoning_accumulated)
+        status_lines.append(f"[dim]• Thinking:[/dim]\n[italic dim]{escape(disp_think[-300:])}[/italic dim]")
+      elif content_accumulated:
+        status_lines.append(escape(content_accumulated[-600:]))
+      if tool_calls_accumulated:
+        tc_names = [tc.get("function", {}).get("name") for tc in tool_calls_accumulated if tc.get("function", {}).get("name")]
+        if tc_names:
+          status_lines.append(f"[bold yellow]Tools:[/bold yellow] {', '.join(tc_names)}")
+      return Text.from_markup("\n".join(status_lines))
+
+    current_status_bar = _build_status_bar(0, 0, tool_calls_count)
+
     panels = [{
       "title": panel_title,
+      "subtitle": f"[dim]Thinking: ~0 tok | Output: ~0 tok | Tools: {tool_calls_count}[/dim]",
       "content": Text.from_markup(f"Connecting to [bold cyan]{escape(model_id)}[/bold cyan]..."),
       "border_style": border_style,
     }]
 
     try:
-      with optional_live(LiveScreenLayout(panels, None), console=console, enabled=not self.headless, refresh_per_second=10, transient=True) as live:
+      with optional_live(LiveScreenLayout(panels, current_status_bar), console=console, enabled=not self.headless, refresh_per_second=10, transient=True) as live:
         self._active_live = live
         try:
           stream = self._create_completion(**kwargs)
@@ -383,21 +428,52 @@ class LLMMixin:
             if delta.content:
               content_accumulated += delta.content
 
-            # Update Live Screen Panel
-            status_lines = []
-            if reasoning_accumulated.strip() and not content_accumulated:
-              t_count = self.count_tokens_estimate(reasoning_accumulated)
-              disp_think = truncate_thinking_by_line(reasoning_accumulated)
-              status_lines.append(f"[dim]• Thinking (~{t_count} tok):[/dim]\n[italic dim]{escape(disp_think[-300:])}[/italic dim]")
-            if content_accumulated:
-              status_lines.append(escape(content_accumulated[-600:]))
-            if tool_calls_accumulated:
-              tc_names = [tc.get("function", {}).get("name") for tc in tool_calls_accumulated if tc.get("function", {}).get("name")]
-              if tc_names:
-                status_lines.append(f"[bold yellow]Tools:[/bold yellow] {', '.join(tc_names)}")
+            # Lazy 2..5s refresh for token counting and status display
+            now = time.time()
+            if now - last_status_refresh >= lazy_refresh_interval or last_status_refresh == 0.0:
+              last_status_refresh = now
+              cached_thinking_tokens = self.count_tokens_estimate(reasoning_accumulated)
+              cached_output_tokens = self.count_tokens_estimate(content_accumulated)
+              cached_tool_calls = tool_calls_count + len(tool_calls_accumulated)
+              panels[0]["content"] = _build_panel_content(
+                cached_thinking_tokens,
+                cached_output_tokens,
+                cached_tool_calls
+              )
+              panels[0]["subtitle"] = (
+                f"[dim]Thinking: ~{cached_thinking_tokens:,} tok | "
+                f"Output: ~{cached_output_tokens:,} tok | "
+                f"Tools: {cached_tool_calls}[/dim]"
+              )
+              current_status_bar = _build_status_bar(
+                cached_thinking_tokens,
+                cached_output_tokens,
+                cached_tool_calls
+              )
+              if live is not None:
+                live.update(LiveScreenLayout(panels, current_status_bar))
 
-            if status_lines:
-              panels[0]["content"] = Text.from_markup("\n".join(status_lines))
+          # Final status update after stream completion
+          cached_thinking_tokens = self.count_tokens_estimate(reasoning_accumulated)
+          cached_output_tokens = self.count_tokens_estimate(content_accumulated)
+          cached_tool_calls = tool_calls_count + len(tool_calls_accumulated)
+          panels[0]["content"] = _build_panel_content(
+            cached_thinking_tokens,
+            cached_output_tokens,
+            cached_tool_calls
+          )
+          panels[0]["subtitle"] = (
+            f"[dim]Thinking: ~{cached_thinking_tokens:,} tok | "
+            f"Output: ~{cached_output_tokens:,} tok | "
+            f"Tools: {cached_tool_calls}[/dim]"
+          )
+          current_status_bar = _build_stream_status_bar(
+            cached_thinking_tokens,
+            cached_output_tokens,
+            cached_tool_calls
+          )
+          if live is not None:
+            live.update(LiveScreenLayout(panels, current_status_bar))
 
         finally:
           self._active_live = None
@@ -1424,7 +1500,7 @@ class LLMMixin:
           # Execute tool
           token = active_session_var.set(self)
           try:
-            if t_name in ("ask_question", "discover_context", "ask_oracle", "web_research"):
+            if t_name in ("ask_question", "discover_context", "ask_oracle", "web_research", "ask_roundtable"):
               logger.info(f"Executing tool {t_name} (id={t_id}) with arguments: {args_parsed}")
               t_result = execute_tool(t_name, args_parsed, self)
             else:

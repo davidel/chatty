@@ -303,7 +303,7 @@ class TestRoundTableWorkflow(unittest.TestCase):
 
   @patch("chatty.roundtable._call_llm_stream")
   def test_expert_turn_tool_limit_synthesis_nudge(self, mock_call_llm):
-    # Simulate 5 tool loops followed by synthesis
+    # Simulate default 10 tool loops followed by synthesis
     tool_call_dummy = [{
       "id": "tc1",
       "type": "function",
@@ -313,13 +313,8 @@ class TestRoundTableWorkflow(unittest.TestCase):
       "reviews": [{"point_id": "P1", "verdict": "CONFIRMED", "verification_rationale": "Verified"}]
     })
 
-    # First 5 calls return tool_calls, 6th call (synthesis with tools=None) returns review_json
-    mock_call_llm.side_effect = [
-      ("", tool_call_dummy, "thinking"),
-      ("", tool_call_dummy, "thinking"),
-      ("", tool_call_dummy, "thinking"),
-      ("", tool_call_dummy, "thinking"),
-      ("", tool_call_dummy, "thinking"),
+    # First 10 calls return tool_calls, 11th call (synthesis with tools=None) returns review_json
+    mock_call_llm.side_effect = [("", tool_call_dummy, "thinking")] * 10 + [
       (review_json, [], "final thinking"),
     ]
 
@@ -335,7 +330,7 @@ class TestRoundTableWorkflow(unittest.TestCase):
         prior_expert_critiques=[],
       )
 
-    self.assertEqual(mock_call_llm.call_count, 6)
+    self.assertEqual(mock_call_llm.call_count, 11)
     # Check that final call was made with tools=None
     last_call_kwargs = mock_call_llm.call_args_list[-1].kwargs
     self.assertIsNone(last_call_kwargs.get("tools"))
@@ -358,14 +353,8 @@ class TestRoundTableWorkflow(unittest.TestCase):
       "reviews": [{"point_id": "P1", "verdict": "CONFIRMED"}]
     })
 
-    # 6 tool loops allowed because user says 'y', then 7th returns final review
-    mock_call_llm.side_effect = [
-      ("", tool_call_dummy, ""),
-      ("", tool_call_dummy, ""),
-      ("", tool_call_dummy, ""),
-      ("", tool_call_dummy, ""),
-      ("", tool_call_dummy, ""),
-      ("", tool_call_dummy, ""),
+    # 10 loops initially, then user approves 5 more -> 11th loop runs, 12th returns final review
+    mock_call_llm.side_effect = [("", tool_call_dummy, "")] * 11 + [
       (review_json, [], ""),
     ]
 
@@ -381,7 +370,7 @@ class TestRoundTableWorkflow(unittest.TestCase):
         prior_expert_critiques=[],
       )
 
-    self.assertEqual(mock_call_llm.call_count, 7)
+    self.assertEqual(mock_call_llm.call_count, 12)
     self.assertEqual(mock_input.call_count, 1)
     self.assertEqual(len(review["reviews"]), 1)
 
@@ -456,3 +445,52 @@ class TestRoundTableCommandsAndTool(unittest.TestCase):
   def test_show_status_with_roundtable(self):
     # Verifies that show_status() executes cleanly on real ChatbotSession without NameError
     self.session.show_status()
+
+  def test_roundtable_custom_max_tool_calls(self):
+    self.session.config.roundtable_max_tool_calls = 3
+    tool_call_dummy = [{
+      "id": "tc1",
+      "type": "function",
+      "function": {"name": "read_file", "arguments": json.dumps({"path": "foo.txt"})},
+    }]
+    review_json = json.dumps({
+      "reviews": [{"point_id": "P1", "verdict": "CONFIRMED"}]
+    })
+
+    with patch("chatty.roundtable._call_llm_stream") as mock_call_llm, \
+         patch.object(self.session, "execute_subagent_tools", return_value=[{"role": "tool", "content": "contents"}]):
+      mock_call_llm.side_effect = [("", tool_call_dummy, "")] * 3 + [(review_json, [], "")]
+      review = _run_expert_turn(
+        session=self.session,
+        expert_idx=1,
+        total_experts=2,
+        expert_model="expert-1",
+        query="Verify custom max",
+        points=[RoundTablePoint(id="P1", statement="Custom max", status=PointStatus.PROPOSED)],
+        round_num=1,
+        prior_expert_critiques=[],
+      )
+      self.assertEqual(mock_call_llm.call_count, 4)
+
+  def test_call_model_stream_status_display(self):
+    # Tests that call_model_stream executes and tracks thinking/output tokens and tool calls
+    chunk1 = MagicMock()
+    chunk1.choices = [MagicMock(delta=MagicMock(content=None, tool_calls=None, reasoning="Thinking deep thoughts..."))]
+    chunk1.usage = None
+    chunk1.model_extra = None
+
+    chunk2 = MagicMock()
+    chunk2.choices = [MagicMock(delta=MagicMock(content="Here is the output.", tool_calls=None, reasoning=None))]
+    chunk2.usage = None
+    chunk2.model_extra = None
+
+    with patch.object(self.session, "_create_completion", return_value=[chunk1, chunk2]):
+      content, tool_calls, reasoning = self.session.call_model_stream(
+        model_id="expert-1",
+        messages=[{"role": "user", "content": "hello"}],
+        tool_calls_count=2
+      )
+      self.assertEqual(content, "Here is the output.")
+      self.assertEqual(reasoning, "Thinking deep thoughts...")
+      self.assertEqual(tool_calls, [])
+      self.assertIn("expert-1", self.session.model_usage)

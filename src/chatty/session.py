@@ -161,6 +161,8 @@ class SessionConfig:
   roundtable_models: List[str] = field(default_factory=list)
   roundtable_moderator: Optional[str] = None
   roundtable_timeout: float = 120.0
+  roundtable_max_tool_calls: int = 10
+  roundtable_refresh_interval: float = 2.5
   backend: str = "auto"
   docker_image: Optional[str] = None
   docker_base_image: Optional[str] = None
@@ -350,6 +352,8 @@ class ChatbotSession(LLMMixin):
     roundtable_models: Optional[List[str]] = None,
     roundtable_moderator: Optional[str] = None,
     roundtable_timeout: float = 120.0,
+    roundtable_max_tool_calls: int = 10,
+    roundtable_refresh_interval: float = 2.5,
     backend: Optional[str] = None,
     docker_image: Optional[str] = None,
     docker_base_image: Optional[str] = None,
@@ -413,6 +417,8 @@ class ChatbotSession(LLMMixin):
         roundtable_models=roundtable_models or [],
         roundtable_moderator=roundtable_moderator,
         roundtable_timeout=roundtable_timeout,
+        roundtable_max_tool_calls=roundtable_max_tool_calls,
+        roundtable_refresh_interval=roundtable_refresh_interval,
         backend=backend or "auto",
         docker_image=docker_image,
         docker_base_image=docker_base_image,

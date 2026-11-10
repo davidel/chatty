@@ -231,6 +231,12 @@ def main():
     help="Timeout in seconds for round table expert API requests and streams (default: 120.0)."
   )
   parser.add_argument(
+    "--roundtable-max-tool-calls",
+    type=int,
+    default=10,
+    help="Default maximum tool loops per round table expert turn (default: 10)."
+  )
+  parser.add_argument(
     "--profile",
     type=str,
     default="coder",
@@ -469,6 +475,7 @@ def main():
     roundtable_models=roundtable_models,
     roundtable_moderator=roundtable_moderator,
     roundtable_timeout=args.roundtable_timeout,
+    roundtable_max_tool_calls=args.roundtable_max_tool_calls,
     backend=args.backend,
     docker_image=args.docker_image,
     docker_base_image=args.docker_base_image,
