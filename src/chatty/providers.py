@@ -182,7 +182,7 @@ class OpenRouterProvider(BaseProvider):
   def get_default_url(self) -> str:
     return "https://openrouter.ai/api/v1"
 
-  def get_default_model(self, api_key: Optional[str] = None) -> str:
+  def get_default_model(self, api_key: Optional[str] = None, profile: Optional[str] = None) -> str:
     try:
       cached = load_cached_models()
       if cached:
@@ -317,7 +317,7 @@ class GenericProvider(BaseProvider):
   def get_default_url(self) -> Optional[str]:
     return None
 
-  def get_default_model(self, api_key: Optional[str] = None) -> Optional[str]:
+  def get_default_model(self, api_key: Optional[str] = None, profile: Optional[str] = None) -> Optional[str]:
     return None
 
   def init_client(self, url: Optional[str], api_key: Optional[str]) -> LiteLLMClientStub:

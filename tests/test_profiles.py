@@ -7,7 +7,7 @@ from chatty.profiles import get_profile, AgentProfile, CODING_TOOLS
 from chatty.session import ChatbotSession, SessionConfig
 from chatty.tools import execute_tool
 from chatty.commands import cmd_config
-from chatty.providers import OllamaProvider, OpenRouterProvider
+from chatty.providers import OllamaProvider, OpenRouterProvider, GenericProvider
 
 
 class TestAgentProfiles(unittest.TestCase):
@@ -152,12 +152,32 @@ class TestAgentProfiles(unittest.TestCase):
       {"id": "qwen/qwen-2.5-coder-32b", "pricing_input": 0.05, "pricing_output": 0.10, "supported_parameters": ["tools"]}
     ]
     or_prov = OpenRouterProvider()
+    self.assertTrue(bool(or_prov.get_default_model(profile="coder")))
+    self.assertTrue(bool(or_prov.get_default_model(profile="general")))
+
+    gen_prov = GenericProvider("custom")
+    self.assertIsNone(gen_prov.get_default_model(profile="coder"))
+    self.assertIsNone(gen_prov.get_default_model(profile="general"))
+
     with patch.object(or_prov, "fetch_models", return_value=mock_models):
       chosen_coder = or_prov.get_default_discovery_model(profile="coder")
       self.assertEqual(chosen_coder, "qwen/qwen-2.5-coder-32b")
 
       chosen_general = or_prov.get_default_discovery_model(profile="general")
       self.assertEqual(chosen_general, "deepseek/deepseek-chat")
+
+  @patch("chatty.cli.ChatbotSession")
+  def test_cli_startup_with_profile_and_default_openrouter(self, mock_session_class):
+    mock_instance = MagicMock()
+    mock_session_class.return_value.__enter__.return_value = mock_instance
+
+    from chatty.cli import main
+    with patch("sys.argv", ["chatty", "--sandbox", self.sandbox_dir, "--headless", "--profile", "coder"]):
+      main()
+
+    call_kwargs = mock_session_class.call_args[1]
+    self.assertEqual(call_kwargs.get("profile"), "coder")
+    self.assertTrue(bool(call_kwargs.get("model")))
 
 
 if __name__ == "__main__":
