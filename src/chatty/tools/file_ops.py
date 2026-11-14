@@ -129,21 +129,32 @@ def tool_read_file(sandbox_dir: str, path: str, start_line: int = None, end_line
         
       lines = f.readlines()
       total_lines = len(lines)
-      
+      if total_lines == 0:
+        return ""
+
       s = 1 if start_line is None else start_line
-      e = total_lines if end_line is None else end_line
-      
       if s < 1 or s > total_lines:
         return f"Error: start_line {start_line} is out of range. The file '{path}' has {total_lines} lines."
-      if e < s or e > total_lines:
-        return f"Error: end_line {end_line} is invalid (must be between start_line {s} and total file lines {total_lines})."
-        
+
+      e = total_lines if end_line is None else end_line
+      if e < s:
+        return f"Error: end_line {end_line} cannot be less than start_line {s}."
+
+      was_clamped = False
+      if e > total_lines:
+        e = total_lines
+        was_clamped = True
+
       selected_lines = lines[s-1:e]
       if line_numbers:
         content = "".join(f"{s + idx}: {line}" for idx, line in enumerate(selected_lines))
       else:
         content = "".join(selected_lines)
-        
+
+      if was_clamped:
+        sep = "\n\n" if not content.endswith("\n") else "\n"
+        content += f"{sep}[WARNING: Requested end_line ({end_line}) exceeds total file lines ({total_lines}). Returned lines {s} to {total_lines} (end of file).]"
+
       if len(content) > max_chars:
         content = content[:max_chars] + f"\n\n[WARNING: File '{path}' section is too large and has been truncated.]"
       return content
@@ -1655,21 +1666,32 @@ def tool_read_file_backup(
         
       lines = f.readlines()
       total_lines = len(lines)
-      
+      if total_lines == 0:
+        return ""
+
       s = 1 if start_line is None else start_line
-      e = total_lines if end_line is None else end_line
-      
       if s < 1 or s > total_lines:
         return f"Error: start_line {start_line} is out of range. The backup file has {total_lines} lines."
-      if e < s or e > total_lines:
-        return f"Error: end_line {end_line} is invalid (must be between start_line {s} and total backup file lines {total_lines})."
-        
+
+      e = total_lines if end_line is None else end_line
+      if e < s:
+        return f"Error: end_line {end_line} cannot be less than start_line {s}."
+
+      was_clamped = False
+      if e > total_lines:
+        e = total_lines
+        was_clamped = True
+
       selected_lines = lines[s-1:e]
       if line_numbers:
         content = "".join(f"{s + idx}: {line}" for idx, line in enumerate(selected_lines))
       else:
         content = "".join(selected_lines)
-        
+
+      if was_clamped:
+        sep = "\n\n" if not content.endswith("\n") else "\n"
+        content += f"{sep}[WARNING: Requested end_line ({end_line}) exceeds total backup file lines ({total_lines}). Returned lines {s} to {total_lines} (end of file).]"
+
       if len(content) > max_chars:
         content = content[:max_chars] + f"\n\n[WARNING: Backup file section is too large and has been truncated.]"
       return content

@@ -35,6 +35,32 @@ class TestToolsModularity(unittest.TestCase):
     read_res = tool_read_file(self.sandbox_dir, "test.txt")
     self.assertEqual(read_res, "Hello Modular Tools")
 
+  def test_read_file_clamping_and_bounds(self):
+    tool_write_file(self.sandbox_dir, "multi.txt", "line1\nline2\nline3\n")
+
+    # 1. Clamp when end_line exceeds total lines
+    res = tool_read_file(self.sandbox_dir, "multi.txt", start_line=2, end_line=10)
+    self.assertIn("line2\nline3\n", res)
+    self.assertIn("WARNING: Requested end_line (10) exceeds total file lines (3)", res)
+
+    # 2. Clamp with line_numbers=True
+    res_ln = tool_read_file(self.sandbox_dir, "multi.txt", start_line=2, end_line=10, line_numbers=True)
+    self.assertIn("2: line2\n3: line3\n", res_ln)
+    self.assertIn("WARNING: Requested end_line (10) exceeds total file lines (3)", res_ln)
+
+    # 3. start_line out of range is a hard error
+    res_err = tool_read_file(self.sandbox_dir, "multi.txt", start_line=5, end_line=10)
+    self.assertEqual(res_err, "Error: start_line 5 is out of range. The file 'multi.txt' has 3 lines.")
+
+    # 4. end_line < start_line is a hard error
+    res_inv = tool_read_file(self.sandbox_dir, "multi.txt", start_line=2, end_line=1)
+    self.assertEqual(res_inv, "Error: end_line 1 cannot be less than start_line 2.")
+
+    # 5. Empty file returns empty string
+    tool_write_file(self.sandbox_dir, "empty.txt", "")
+    res_empty = tool_read_file(self.sandbox_dir, "empty.txt", start_line=1, end_line=5)
+    self.assertEqual(res_empty, "")
+
   def test_search_ops_modular(self):
     tool_write_file(self.sandbox_dir, "test_search.py", "print('hello')")
     locate_res = tool_locate_files(self.sandbox_dir, "*.py")

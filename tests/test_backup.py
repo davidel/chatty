@@ -138,6 +138,11 @@ v3
     read_res_ln = tool_read_file_backup(self.sandbox_dir, "backup_test.txt", ts, line_numbers=True)
     self.assertEqual(read_res_ln.strip(), "1: v1")
 
+    # 6. Read with end_line beyond total lines (clamped with warning)
+    read_res_clamped = tool_read_file_backup(self.sandbox_dir, "backup_test.txt", ts, start_line=1, end_line=10)
+    self.assertIn("v1", read_res_clamped)
+    self.assertIn("WARNING: Requested end_line (10) exceeds total backup file lines (1)", read_res_clamped)
+
   def test_outside_sandbox_file_backup_stay_in_backups_dir(self):
     from unittest.mock import MagicMock
     from chatty.safety import active_session_var
