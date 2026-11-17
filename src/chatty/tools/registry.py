@@ -219,8 +219,14 @@ def handle_peek_task_output(arguments: Dict[str, Any], session: Any) -> str:
       tail_lines = int(tail_lines)
     except (ValueError, TypeError):
       return "Error: tail_lines must be a valid integer."
+  head_lines = arguments.get("head_lines")
+  if head_lines is not None:
+    try:
+      head_lines = int(head_lines)
+    except (ValueError, TypeError):
+      return "Error: head_lines must be a valid integer."
   output_filter = arguments.get("output_filter")
-  return session.tool_peek_task_output(task_id, tail_lines=tail_lines, output_filter=output_filter)
+  return session.tool_peek_task_output(task_id, tail_lines=tail_lines, output_filter=output_filter, head_lines=head_lines)
 
 
 def handle_locate_files(arguments: Dict[str, Any], session: Any) -> str:
@@ -280,12 +286,16 @@ def handle_fetch_url(arguments: Dict[str, Any], session: Any) -> str:
 
 def handle_sleep(arguments: Dict[str, Any], session: Any) -> str:
   if session and getattr(session, "background_commands", None):
-    active_tasks = list(session.background_commands.keys())
-    return (
-      f"Error: Using the 'sleep' tool is prohibited while background tasks ({', '.join(active_tasks)}) are active. "
-      "To wait for background commands to progress or finish, you MUST call 'check_background_command' "
-      "with the 'timeout' parameter instead."
-    )
+    active_tasks = [
+      tid for tid, task in session.background_commands.items()
+      if task.get("status") is None and (not task.get("proc") or task["proc"].poll() is None)
+    ]
+    if active_tasks:
+      return (
+        f"Error: Using the 'sleep' tool is prohibited while background tasks ({', '.join(active_tasks)}) are active. "
+        "To wait for background commands to progress or finish, you MUST call 'check_background_command' "
+        "with the 'timeout' parameter instead."
+      )
   seconds = arguments.get("seconds")
   if seconds is None:
     return "Error: Missing parameter 'seconds'."
@@ -412,6 +422,8 @@ TOOL_REGISTRY: Dict[str, Callable[[Dict[str, Any], Any], str]] = {
   "check_background_command": handle_check_background_command,
   "kill_process": handle_kill_process,
   "peek_task_output": handle_peek_task_output,
+  "peek_command_output": handle_peek_task_output,
+  "peek-command-output": handle_peek_task_output,
   "locate_files": handle_locate_files,
   "get_file_info": handle_get_file_info,
   "list_file_backups": handle_list_file_backups,

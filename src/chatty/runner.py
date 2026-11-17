@@ -249,6 +249,7 @@ class SubprocessRunner:
       return validation_err
 
     task_id = f"task_{self.session.next_task_id}"
+    self.session.next_task_id += 1
     stdout_f = None
     stderr_f = None
     try:
@@ -306,10 +307,20 @@ class SubprocessRunner:
             stderr = f.read()
         else:
           stderr = ""
-        for f in (stdout_f, stderr_f):
-          if f:
-            with contextlib.suppress(FileNotFoundError, OSError):
-              os.unlink(f.name)
+
+        self.session.background_commands[task_id] = {
+          "proc": proc,
+          "command": command,
+          "stdout_path": stdout_f.name,
+          "stderr_path": stderr_f.name if stderr_f else None,
+          "stdout_file": None,
+          "stderr_file": None,
+          "status": proc.returncode,
+          "output_filter": output_filter,
+          "tail_lines": tail_lines,
+          "head_lines": head_lines
+        }
+        self.session._prune_background_commands()
 
         if output_filter or tail_lines is not None or head_lines is not None:
           stdout = self.session._apply_output_filters(stdout, output_filter, head_lines, tail_lines)
@@ -323,12 +334,10 @@ class SubprocessRunner:
           output.append(f"Stdout:\n{truncate_output(stdout, max_chars=self.session.max_command_chars)}")
         if stderr:
           output.append(f"Stderr:\n{truncate_output(stderr, max_chars=self.session.max_command_chars)}")
-        status = f"Command exited with code {proc.returncode}."
+        status = f"Command exited with code {proc.returncode} (Task ID: {task_id})."
         logger.info(f"Command completed in foreground. Exit code: {proc.returncode}")
         return "\n".join(output) + f"\n{status}" if output else status
       except subprocess.TimeoutExpired:
-        task_id = f"task_{self.session.next_task_id}"
-        self.session.next_task_id += 1
         logger.info(f"Command timed out. Transitioned to background. Task ID: {task_id}")
         self.session._print(
           f"\n[bold yellow]⚙️  Command took > 10s and is now running in the background. "
@@ -465,8 +474,9 @@ class SubprocessRunner:
   def tool_peek_task_output(
     self,
     task_id: str,
-    tail_lines: int = 20,
-    output_filter: Optional[str] = None
+    tail_lines: Optional[int] = 20,
+    output_filter: Optional[str] = None,
+    head_lines: Optional[int] = None
   ) -> str:
     """Peek at the currently accumulated output of a background task without blocking."""
     logger.info(f"Peeking at background task output: '{task_id}' (tail_lines={tail_lines})")
@@ -475,9 +485,9 @@ class SubprocessRunner:
       logger.warning(f"Peek background task failed: Task ID '{task_id}' not found")
       return f"Error: Task ID '{task_id}' not found."
 
-    proc = task["proc"]
+    proc = task.get("proc")
     status = task.get("status")
-    if status is None:
+    if status is None and proc:
       status = proc.poll()
       if status is not None:
         task["status"] = status
@@ -505,9 +515,9 @@ class SubprocessRunner:
       stdout_content = f"Error reading output: {e}"
       stderr_content = ""
 
-    if output_filter or tail_lines is not None:
-      stdout_content = self.session._apply_output_filters(stdout_content, output_filter, None, tail_lines)
-      stderr_content = self.session._apply_output_filters(stderr_content, output_filter, None, tail_lines)
+    if output_filter or tail_lines is not None or head_lines is not None:
+      stdout_content = self.session._apply_output_filters(stdout_content, output_filter, head_lines, tail_lines)
+      stderr_content = self.session._apply_output_filters(stderr_content, output_filter, head_lines, tail_lines)
 
     stdout_content = self._scrub_secrets(stdout_content)
     stderr_content = self._scrub_secrets(stderr_content)
@@ -523,11 +533,12 @@ class SubprocessRunner:
       resource_usage = self.session._format_pgroup_resources(getattr(proc, "pid", None))
       if resource_usage:
         status_msg += f" ({resource_usage})"
+      peek_output = "\n".join(output) if output else "(No output generated yet)"
     else:
       status_msg = f"Status: Task '{task_id}' FINISHED with exit code {status}"
       self.session._prune_background_commands()
+      peek_output = "\n".join(output) if output else "(No output generated)"
 
-    peek_output = "\n".join(output) if output else "(No output generated yet)"
     return f"{status_msg}.\n{peek_output}"
 
   def tool_kill_process(self, task_id: str) -> str:
@@ -589,7 +600,7 @@ class SubprocessRunner:
 
     def get_task_num(tid):
       try:
-        return int(tid.split("_")[1])
+        return int(tid.split("_")[-1])
       except (IndexError, ValueError):
         return 0
 

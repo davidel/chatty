@@ -1050,11 +1050,12 @@ class ChatbotSession(LLMMixin):
   def tool_peek_task_output(
     self,
     task_id: str,
-    tail_lines: int = 20,
-    output_filter: Optional[str] = None
+    tail_lines: Optional[int] = 20,
+    output_filter: Optional[str] = None,
+    head_lines: Optional[int] = None
   ) -> str:
     """Peek at the currently accumulated output of a background task without blocking."""
-    return self.runner.tool_peek_task_output(task_id, tail_lines, output_filter)
+    return self.runner.tool_peek_task_output(task_id, tail_lines, output_filter, head_lines)
 
   def tool_kill_process(self, task_id: str) -> str:
     """Terminate a background task/process by its Task ID."""

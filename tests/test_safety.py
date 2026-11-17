@@ -549,6 +549,57 @@ class TestCommandSafety(unittest.TestCase):
     except Exception:
       pass
 
+  def test_peek_exited_command_output(self):
+    from chatty.tools import execute_tool
+
+    cmd_res = self.session.tool_run_command("printf 'first\\nsecond\\nthird\\n'")
+    self.assertIn("Command exited with code 0", cmd_res)
+    self.assertIn("Task ID: task_1", cmd_res)
+
+    peek_res = execute_tool("peek_task_output", {"task_id": "task_1", "tail_lines": 2}, self.session)
+    self.assertIn("FINISHED with exit code 0", peek_res)
+    self.assertIn("second", peek_res)
+    self.assertIn("third", peek_res)
+    self.assertNotIn("first", peek_res)
+
+    peek_head = execute_tool("peek_task_output", {"task_id": "task_1", "head_lines": 1, "tail_lines": 0}, self.session)
+    self.assertIn("FINISHED with exit code 0", peek_head)
+    self.assertIn("first", peek_head)
+    self.assertNotIn("second", peek_head)
+
+    peek_filter = execute_tool("peek_task_output", {"task_id": "task_1", "output_filter": "second"}, self.session)
+    self.assertIn("FINISHED with exit code 0", peek_filter)
+    self.assertIn("second", peek_filter)
+    self.assertNotIn("first", peek_filter)
+    self.assertNotIn("third", peek_filter)
+
+    alias_res = execute_tool("peek_command_output", {"task_id": "task_1", "tail_lines": 1}, self.session)
+    self.assertIn("FINISHED with exit code 0", alias_res)
+    self.assertIn("third", alias_res)
+
+    dash_alias_res = execute_tool("peek-command-output", {"task_id": "task_1", "tail_lines": 1}, self.session)
+    self.assertIn("FINISHED with exit code 0", dash_alias_res)
+    self.assertIn("third", dash_alias_res)
+
+  def test_peek_exited_command_pruning(self):
+    from chatty.tools import execute_tool
+
+    self.session.max_completed_tasks = 2
+    self.session.tool_run_command("echo task1_out")
+    self.session.tool_run_command("echo task2_out")
+    self.session.tool_run_command("echo task3_out")
+
+    peek_task1 = execute_tool("peek_task_output", {"task_id": "task_1"}, self.session)
+    self.assertIn("Error: Task ID 'task_1' not found", peek_task1)
+
+    peek_task2 = execute_tool("peek_task_output", {"task_id": "task_2"}, self.session)
+    self.assertIn("FINISHED with exit code 0", peek_task2)
+    self.assertIn("task2_out", peek_task2)
+
+    peek_task3 = execute_tool("peek_task_output", {"task_id": "task_3"}, self.session)
+    self.assertIn("FINISHED with exit code 0", peek_task3)
+    self.assertIn("task3_out", peek_task3)
+
 
 from chatty.safety import validate_command_safety
 

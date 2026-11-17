@@ -412,17 +412,21 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "peek_task_output",
-      "description": "Peek at the currently accumulated output of a background task without blocking or changing its running status.",
+      "description": "Peek at the currently accumulated output of a background task or inspect the output of an exited command task without blocking or changing its running status.",
       "parameters": {
         "type": "object",
         "properties": {
           "task_id": {
             "type": "string",
-            "description": "The Task ID of the background command (e.g. 'task_1')."
+            "description": "The Task ID of the command (e.g. 'task_1')."
           },
           "tail_lines": {
             "type": "integer",
             "description": "Optional. The number of recent lines of the output to peek (default: 20)."
+          },
+          "head_lines": {
+            "type": "integer",
+            "description": "Optional. The number of initial lines of the output to peek."
           },
           "output_filter": {
             "type": "string",
