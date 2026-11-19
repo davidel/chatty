@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -531,6 +532,110 @@ class TestDockerBackendUnit(unittest.TestCase):
     ]
     self.assertEqual(len(start_calls), 1)
     self.assertEqual(start_calls[0][0][0][2], backend.container_name)
+
+  def test_save_container_metadata(self):
+    temp_dir = tempfile.mkdtemp()
+    try:
+      backend = DockerBackend(session_id="meta_test", host_sandbox=temp_dir)
+      backend._save_container_metadata()
+      meta_file = os.path.join(temp_dir, ".chatty", "docker_container.json")
+      self.assertTrue(os.path.exists(meta_file))
+      with open(meta_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+      self.assertEqual(data["container_name"], backend.container_name)
+      self.assertEqual(data["host_sandbox"], backend.host_sandbox)
+      self.assertEqual(data["image"], backend.image)
+    finally:
+      shutil.rmtree(temp_dir, ignore_errors=True)
+
+  @patch("subprocess.run")
+  def test_migrate_container_if_needed_no_move(self, mock_run):
+    temp_dir = tempfile.mkdtemp()
+    try:
+      backend = DockerBackend(session_id="meta_test", host_sandbox=temp_dir)
+      meta_file = backend.metadata_file
+      os.makedirs(os.path.dirname(meta_file), exist_ok=True)
+      with open(meta_file, "w", encoding="utf-8") as f:
+        json.dump({
+          "container_name": "chatty-old-123",
+          "host_sandbox": temp_dir,
+          "image": "chatty-sandbox:test"
+        }, f)
+      migrated = backend._migrate_container_if_needed()
+      self.assertFalse(migrated)
+      self.assertEqual(mock_run.call_count, 0)
+    finally:
+      shutil.rmtree(temp_dir, ignore_errors=True)
+
+  @patch("subprocess.run")
+  def test_scrub_container_caches(self, mock_run):
+    backend = DockerBackend(session_id="scrub_test", host_sandbox="/tmp/sandbox")
+    backend.scrub_container_caches("my-container")
+    mock_run.assert_called_once()
+    args = mock_run.call_args[0][0]
+    self.assertEqual(args[:7], ["docker", "exec", "-u", "0", "my-container", "/bin/sh", "-c"])
+    self.assertIn("apt-get clean", args[7])
+    self.assertIn("apk", args[7])
+    self.assertIn("dnf", args[7])
+    self.assertIn("pacman", args[7])
+
+  @patch("subprocess.run")
+  def test_prune_dangling_images(self, mock_run):
+    backend = DockerBackend(session_id="prune_test", host_sandbox="/tmp/sandbox")
+    backend.prune_dangling_images()
+    mock_run.assert_called_once()
+    args = mock_run.call_args[0][0]
+    self.assertEqual(args, ["docker", "image", "prune", "-f", "--filter", "dangling=true"])
+
+  @patch("subprocess.run")
+  def test_migrate_container_if_needed_moved_repo(self, mock_run):
+    temp_dir = tempfile.mkdtemp()
+    old_sandbox = "/tmp/non_existent_old_sandbox_12345"
+    mock_run.return_value = MagicMock(returncode=0, stdout="running\n", stderr="")
+    try:
+      backend = DockerBackend(session_id="meta_test", host_sandbox=temp_dir)
+      meta_file = backend.metadata_file
+      os.makedirs(os.path.dirname(meta_file), exist_ok=True)
+      with open(meta_file, "w", encoding="utf-8") as f:
+        json.dump({
+          "container_name": "chatty-old-123",
+          "host_sandbox": old_sandbox,
+          "image": "chatty-sandbox:test"
+        }, f)
+      migrated = backend._migrate_container_if_needed()
+      self.assertTrue(migrated)
+
+      # Verify cache cleaning
+      exec_calls = [
+        c for c in mock_run.call_args_list
+        if c[0] and len(c[0][0]) > 1 and c[0][0][1] == "exec"
+      ]
+      self.assertEqual(len(exec_calls), 1)
+      self.assertEqual(exec_calls[0][0][0][4], "chatty-old-123")
+
+      # Verify commit
+      commit_calls = [
+        c for c in mock_run.call_args_list
+        if c[0] and len(c[0][0]) > 1 and c[0][0][1] == "commit"
+      ]
+      self.assertEqual(len(commit_calls), 1)
+      self.assertEqual(commit_calls[0][0][0], ["docker", "commit", "chatty-old-123", backend.image])
+
+      # Verify prune
+      prune_calls = [
+        c for c in mock_run.call_args_list
+        if c[0] and len(c[0][0]) > 2 and c[0][0][1] == "image" and c[0][0][2] == "prune"
+      ]
+      self.assertEqual(len(prune_calls), 1)
+
+      # Verify rm
+      rm_calls = [
+        c for c in mock_run.call_args_list
+        if c[0] and len(c[0][0]) > 2 and c[0][0][1] == "rm" and c[0][0][3] == "chatty-old-123"
+      ]
+      self.assertEqual(len(rm_calls), 1)
+    finally:
+      shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestSessionBackendWiring(unittest.TestCase):

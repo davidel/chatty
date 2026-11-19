@@ -1639,7 +1639,9 @@ def cmd_docker(session: Any, arg: str) -> bool:
   if arg == "commit" or arg.startswith("commit "):
     parts = arg.split(maxsplit=1)
     target_tag = parts[1].strip() if len(parts) > 1 else backend.image
-    console.print(f"[yellow]Committing container state to image '{target_tag}'...[/yellow]")
+    console.print(f"[yellow]Cleaning caches and committing container state to image '{target_tag}'...[/yellow]")
+    if hasattr(backend, "scrub_container_caches"):
+      backend.scrub_container_caches()
     import subprocess
     res = subprocess.run(
       [backend.docker_bin, "commit", backend.container_name, target_tag],
@@ -1648,6 +1650,8 @@ def cmd_docker(session: Any, arg: str) -> bool:
       env=backend._get_docker_env()
     )
     if res.returncode == 0:
+      if hasattr(backend, "prune_dangling_images"):
+        backend.prune_dangling_images()
       console.print(f"[bold green]Successfully saved container filesystem to image '{target_tag}'.[/bold green]")
     else:
       console.print(f"[bold red]Failed to commit container: {res.stderr}[/bold red]")

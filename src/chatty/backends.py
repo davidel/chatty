@@ -1,6 +1,7 @@
 import abc
 import atexit
 import hashlib
+import json
 import logging
 import os
 import re
@@ -209,6 +210,7 @@ class DockerBackend(ExecutionBackend):
       workspace_hash = hashlib.sha256(self.host_sandbox.encode("utf-8")).hexdigest()[:12]
       folder_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", os.path.basename(self.host_sandbox.rstrip("/")) or "root")
       self.container_name = f"chatty-{folder_name}-{workspace_hash}"
+    self.metadata_file = os.path.join(self.host_sandbox, ".chatty", "docker_container.json")
     self.is_running = False
     self._cleaned_up = False
 
@@ -242,6 +244,10 @@ class DockerBackend(ExecutionBackend):
     self._notify(f"Initializing Docker companion container (image: {self.image})...")
     self._prune_stale_containers()
 
+    migrated = False
+    if self.persistent and not self.reset_on_start:
+      migrated = self._migrate_container_if_needed()
+
     rebuilt_image = False
     if self.dockerfile or self.build_image or self.base_image:
       self._notify(f"Building Docker companion image '{self.image}'...")
@@ -257,7 +263,7 @@ class DockerBackend(ExecutionBackend):
           self._notify(f"Image '{self.image}' not found locally. Pulling companion image...")
           self._pull_image(self.image)
 
-    if self.reset_on_start or rebuilt_image:
+    if self.reset_on_start or rebuilt_image or migrated:
       subprocess.run([self.docker_bin, "rm", "-f", self.container_name], capture_output=True, env=self._get_docker_env())
 
     if self.enable_auth_proxy and self.auth_proxy is None:
@@ -276,6 +282,134 @@ class DockerBackend(ExecutionBackend):
 
     self._start_container()
     atexit.register(self.cleanup)
+
+  def _migrate_container_if_needed(self) -> bool:
+    if not os.path.exists(self.metadata_file):
+      return False
+
+    try:
+      with open(self.metadata_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    except Exception as e:
+      logger.debug(f"Failed to read docker container metadata from {self.metadata_file}: {e}")
+      return False
+
+    if not isinstance(data, dict):
+      return False
+
+    old_host_sandbox = data.get("host_sandbox")
+    old_container_name = data.get("container_name")
+
+    if not old_host_sandbox or not old_container_name:
+      return False
+
+    if os.path.normpath(old_host_sandbox) == os.path.normpath(self.host_sandbox):
+      return False
+
+    status = self._get_container_status_by_name(old_container_name)
+    if not status:
+      logger.info(f"Previous companion container '{old_container_name}' not found. Skipping migration.")
+      return False
+
+    self._notify(
+      f"Detected repository move from '{old_host_sandbox}' to '{self.host_sandbox}'. "
+      f"Migrating companion container '{old_container_name}' to '{self.container_name}'..."
+    )
+
+    try:
+      if status != "running":
+        subprocess.run(
+          [self.docker_bin, "start", old_container_name],
+          capture_output=True,
+          env=self._get_docker_env()
+        )
+
+      self._notify(f"Cleaning temporary caches in '{old_container_name}' before commit...")
+      self.scrub_container_caches(old_container_name)
+
+      self._notify(f"Committing state from '{old_container_name}' to image '{self.image}'...")
+      res = subprocess.run(
+        [self.docker_bin, "commit", old_container_name, self.image],
+        capture_output=True,
+        text=True,
+        env=self._get_docker_env()
+      )
+      if res.returncode != 0:
+        logger.warning(f"Failed to commit container '{old_container_name}': {res.stderr}")
+        return False
+
+      logger.info(f"Successfully committed container '{old_container_name}' to '{self.image}'.")
+      self.prune_dangling_images()
+
+      if not os.path.exists(old_host_sandbox):
+        self._notify(f"Removing stale companion container '{old_container_name}' (old sandbox no longer exists)...")
+        subprocess.run(
+          [self.docker_bin, "rm", "-f", old_container_name],
+          capture_output=True,
+          env=self._get_docker_env()
+        )
+      return True
+    except Exception as e:
+      logger.warning(f"Error migrating container '{old_container_name}': {e}")
+      return False
+
+  def _save_container_metadata(self) -> None:
+    if not self.persistent:
+      return
+
+    try:
+      meta_dir = os.path.dirname(self.metadata_file)
+      os.makedirs(meta_dir, exist_ok=True)
+      data = {
+        "container_name": self.container_name,
+        "host_sandbox": self.host_sandbox,
+        "image": self.image,
+        "updated_at": time.time()
+      }
+      with open(self.metadata_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    except Exception as e:
+      logger.debug(f"Failed to save docker container metadata: {e}")
+
+  def scrub_container_caches(self, container_name: Optional[str] = None) -> None:
+    target = container_name or self.container_name
+    cleanup_cmd = (
+      "if command -v apt-get >/dev/null 2>&1; then "
+      "apt-get clean 2>/dev/null || true; rm -rf /var/lib/apt/lists/* 2>/dev/null || true; "
+      "fi; "
+      "if command -v apk >/dev/null 2>&1; then "
+      "rm -rf /var/cache/apk/* 2>/dev/null || true; "
+      "fi; "
+      "if command -v dnf >/dev/null 2>&1; then "
+      "dnf clean all 2>/dev/null || true; "
+      "elif command -v yum >/dev/null 2>&1; then "
+      "yum clean all 2>/dev/null || true; "
+      "fi; "
+      "if command -v pacman >/dev/null 2>&1; then "
+      "rm -rf /var/cache/pacman/pkg/* 2>/dev/null || true; "
+      "fi; "
+      "rm -rf /root/.cache/* /tmp/* /var/tmp/* 2>/dev/null || true; "
+      "find /home -maxdepth 3 -name '.cache' -type d -exec rm -rf {}/* + 2>/dev/null || true"
+    )
+    try:
+      subprocess.run(
+        [self.docker_bin, "exec", "-u", "0", target, "/bin/sh", "-c", cleanup_cmd],
+        capture_output=True,
+        timeout=10,
+        env=self._get_docker_env()
+      )
+    except Exception as e:
+      logger.debug(f"Failed to scrub caches in container '{target}': {e}")
+
+  def prune_dangling_images(self) -> None:
+    try:
+      subprocess.run(
+        [self.docker_bin, "image", "prune", "-f", "--filter", "dangling=true"],
+        capture_output=True,
+        env=self._get_docker_env()
+      )
+    except Exception as e:
+      logger.debug(f"Failed to prune dangling images: {e}")
 
   def _image_exists(self, tag: str) -> bool:
     res = subprocess.run(
@@ -404,9 +538,12 @@ class DockerBackend(ExecutionBackend):
     return real_p
 
   def _get_container_status(self) -> Optional[str]:
+    return self._get_container_status_by_name(self.container_name)
+
+  def _get_container_status_by_name(self, container_name: str) -> Optional[str]:
     try:
       res = subprocess.run(
-        [self.docker_bin, "inspect", "-f", "{{.State.Status}}", self.container_name],
+        [self.docker_bin, "inspect", "-f", "{{.State.Status}}", container_name],
         capture_output=True,
         text=True,
         env=self._get_docker_env()
@@ -610,6 +747,7 @@ class DockerBackend(ExecutionBackend):
         capture_output=True,
         env=self._get_docker_env()
       )
+    self._save_container_metadata()
 
   def _prune_stale_containers(self) -> None:
     try:
