@@ -325,6 +325,9 @@ def show_status(session: Any):
       table.add_row("Docker Host", backend.docker_host)
 
   table.add_row("Context Limit", f"{session.context_size} tokens")
+  ratio = getattr(session, "token_to_char_ratio", 0.25)
+  if isinstance(ratio, (int, float)):
+    table.add_row("Token/Char Ratio", f"{ratio:.2f}")
   table.add_row("Max Loop Iterations", f"{session.max_loops} loops")
   prof = getattr(session, "profile", "coder")
   table.add_row("Agent Profile", prof if isinstance(prof, str) else "coder")
@@ -442,7 +445,6 @@ def get_rich_status_bar(session: Any):
     f" [bold]Model:[/bold] [green]{session.provider}[/green]:[yellow]{session.model}[/yellow] |"
     f" [bold]Context:[/bold] {total_tokens}/{session.context_size} |"
     f" [bold]Usage:[/bold] {format_short_number(cumulative_tokens)} |"
-    f" [bold]Ratio:[/bold] {session.token_to_char_ratio:.2f} |"
     f" [bold]Loops:[/bold] [cyan]{session.current_loop}/{session.max_loops}[/cyan] "
   ))
   return table
@@ -509,7 +511,6 @@ def start_interactive_loop(session: Any):
       f" <b>Model:</b> <ansigreen>{session.provider}</ansigreen>:<ansiyellow>{session.model}</ansiyellow> |"
       f" <b>Context:</b> {total_tokens}/{session.context_size} |"
       f" <b>Usage:</b> {format_short_number(cumulative_tokens)} |"
-      f" <b>Ratio:</b> {session.token_to_char_ratio:.2f} |"
       f" <b>Loops:</b> <ansicyan>{session.current_loop}/{session.max_loops}</ansicyan> "
       f"{attach_part}"
     )

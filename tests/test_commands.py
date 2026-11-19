@@ -919,6 +919,7 @@ class TestDockerCommand(unittest.TestCase):
     session.backend.container_name = "chatty-sandbox-12345"
     session.backend.image = "chatty-sandbox:davide"
     session.backend.docker_host = "tcp://127.0.0.1:2375"
+    session.token_to_char_ratio = 0.28
 
     show_status(session)
     session._print.assert_called_once()
@@ -935,6 +936,8 @@ class TestDockerCommand(unittest.TestCase):
     self.assertIn("Docker Container", col0_texts)
     self.assertIn("Docker Image", col0_texts)
     self.assertIn("Docker Host", col0_texts)
+    self.assertIn("Token/Char Ratio", col0_texts)
+    self.assertEqual(col1_texts[col0_texts.index("Token/Char Ratio")], "0.28")
     idx_img = col0_texts.index("Docker Image")
     self.assertEqual(col1_texts[idx_img], "chatty-sandbox:davide")
     idx_cnt = col0_texts.index("Docker Container")
