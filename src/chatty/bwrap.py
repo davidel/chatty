@@ -32,6 +32,84 @@ def get_bwrap_sbox_dir(sandbox_dir: str) -> str:
   return os.path.join(os.path.realpath(sandbox_dir), ".chatty", "sbox")
 
 
+def get_cached_micromamba_path() -> str:
+  """Returns the host cache location for the bootstrapped micromamba executable."""
+  cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "chatty", "bin")
+  os.makedirs(cache_dir, exist_ok=True)
+  return os.path.join(cache_dir, "micromamba")
+
+
+def bootstrap_micromamba(cache_path: Optional[str] = None) -> Optional[str]:
+  """Downloads the standalone static micromamba binary to the host cache if not present."""
+  import io
+  import platform
+  import tarfile
+  import urllib.request
+
+  target_path = cache_path or get_cached_micromamba_path()
+  if os.path.exists(target_path) and os.access(target_path, os.X_OK):
+    return target_path
+
+  machine = platform.machine().lower()
+  arch_map = {
+    "x86_64": "linux-64",
+    "amd64": "linux-64",
+    "aarch64": "linux-aarch64",
+    "arm64": "linux-aarch64",
+    "ppc64le": "linux-ppc64le",
+  }
+  arch = arch_map.get(machine, "linux-64")
+  url = f"https://micro.mamba.pm/api/micromamba/{arch}/latest"
+
+  try:
+    logger.info(f"Downloading static micromamba binary from {url}...")
+    req = urllib.request.Request(url, headers={"User-Agent": "chatty"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+      data = resp.read()
+
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:bz2") as tar:
+      member = tar.getmember("bin/micromamba")
+      f = tar.extractfile(member)
+      if f is None:
+        return None
+      temp_path = target_path + ".tmp"
+      with open(temp_path, "wb") as out:
+        out.write(f.read())
+      os.chmod(temp_path, 0o755)
+      os.replace(temp_path, target_path)
+
+    logger.info(f"Successfully cached micromamba at {target_path}")
+    return target_path
+  except Exception as e:
+    logger.warning(f"Failed to bootstrap micromamba: {e}")
+    return None
+
+
+def ensure_micromamba(sandbox_dir: Optional[str] = None) -> Optional[str]:
+  """Ensures micromamba is available. If missing on host, auto-provisions into sandbox home."""
+  host_bin = shutil.which("micromamba")
+  if host_bin:
+    return host_bin
+
+  cached_bin = bootstrap_micromamba()
+  if not cached_bin or not os.path.exists(cached_bin):
+    return None
+
+  if sandbox_dir:
+    sbox_local_bin = os.path.join(get_bwrap_sbox_dir(sandbox_dir), "home", ".local", "bin")
+    os.makedirs(sbox_local_bin, exist_ok=True)
+    target_bin = os.path.join(sbox_local_bin, "micromamba")
+    if not os.path.exists(target_bin):
+      try:
+        shutil.copy2(cached_bin, target_bin)
+        os.chmod(target_bin, 0o755)
+      except Exception as e:
+        logger.debug(f"Could not copy micromamba into sandbox: {e}")
+    return target_bin
+
+  return cached_bin
+
+
 def init_bwrap_sbox_dirs(sandbox_dir: str) -> Tuple[str, str, str]:
   """Initializes and returns (home_dir, upper_dir, work_dir) within <sandbox>/.chatty/sbox/."""
   sbox_dir = get_bwrap_sbox_dir(sandbox_dir)
@@ -42,6 +120,8 @@ def init_bwrap_sbox_dirs(sandbox_dir: str) -> Tuple[str, str, str]:
   os.makedirs(home_dir, exist_ok=True)
   os.makedirs(upper_dir, exist_ok=True)
   os.makedirs(work_dir, exist_ok=True)
+
+  ensure_micromamba(sandbox_dir)
 
   return home_dir, upper_dir, work_dir
 
@@ -97,6 +177,8 @@ def get_bwrap_sbox_status(sandbox_dir: str) -> Dict[str, Any]:
   home_dir = os.path.join(sbox_dir, "home")
   upper_dir = os.path.join(sbox_dir, "upper")
 
+  bootstrapped_mamba = os.path.join(home_dir, ".local", "bin", "micromamba")
+
   def _dir_stats(path: str) -> Tuple[int, int]:
     total_size = 0
     file_count = 0
@@ -104,8 +186,10 @@ def get_bwrap_sbox_status(sandbox_dir: str) -> Dict[str, Any]:
       return 0, 0
     for root, _, files in os.walk(path):
       for f in files:
-        file_count += 1
         fp = os.path.join(root, f)
+        if fp == bootstrapped_mamba:
+          continue
+        file_count += 1
         try:
           total_size += os.path.getsize(fp)
         except OSError:

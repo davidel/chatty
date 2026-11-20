@@ -5,8 +5,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from chatty.bwrap import (
+  bootstrap_micromamba,
+  ensure_micromamba,
   get_bwrap_sbox_dir,
   get_bwrap_sbox_status,
+  get_cached_micromamba_path,
   init_bwrap_sbox_dirs,
   is_bwrap_overlay_supported,
   reset_bwrap_sbox,
@@ -88,3 +91,28 @@ class TestBwrapHelpers(unittest.TestCase):
     self.assertNotIn("--overlay", cmd_args)
     self.assertIn("--bind", cmd_args)
     self.assertIn("MAMBA_ROOT_PREFIX", cmd_args)
+
+  def test_ensure_micromamba_on_host(self):
+    with patch("shutil.which", return_value="/usr/bin/micromamba"):
+      result = ensure_micromamba(self.sandbox_dir)
+      self.assertEqual(result, "/usr/bin/micromamba")
+
+  def test_ensure_micromamba_download_and_link(self):
+    fake_cache = os.path.join(self.temp_dir, "fake_cache_micromamba")
+    with open(fake_cache, "w") as f:
+      f.write("#!/bin/sh\necho 1.0\n")
+    os.chmod(fake_cache, 0o755)
+
+    with patch("shutil.which", return_value=None):
+      with patch("chatty.bwrap.bootstrap_micromamba", return_value=fake_cache):
+        result = ensure_micromamba(self.sandbox_dir)
+        expected_target = os.path.join(
+          get_bwrap_sbox_dir(self.sandbox_dir),
+          "home",
+          ".local",
+          "bin",
+          "micromamba"
+        )
+        self.assertEqual(result, expected_target)
+        self.assertTrue(os.path.exists(expected_target))
+        self.assertTrue(os.access(expected_target, os.X_OK))

@@ -190,7 +190,8 @@ class BubblewrapBackend(ExecutionBackend):
     self.isolated_home = isolated_home
 
   def initialize(self) -> None:
-    pass
+    from chatty.bwrap import init_bwrap_sbox_dirs
+    init_bwrap_sbox_dirs(self.sandbox)
 
   def reset_sandbox(self) -> None:
     """Nukes and recreates the bubblewrap single-containment directory (.chatty/sbox/)."""

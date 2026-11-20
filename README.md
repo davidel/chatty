@@ -543,9 +543,10 @@ All writable mounts created for the sandbox are strictly confined within a singl
   The user's real host `$HOME` (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.bash_history`, personal files) is **completely hidden** from the sandbox. Bubblewrap bind-mounts `<sandbox>/.chatty/sbox/home/` over `$HOME`.
 * **Single Nuke / Reset (`/bwrap reset`)**:
   Deleting `<sandbox>/.chatty/sbox/` instantly restores the environment to a pristine state. You can run `/bwrap reset` mid-session or start with `--bwrap-reset`. Run `/bwrap status` to view persistent disk usage.
-* **Pre-Configured Toolchain Environment**:
+* **Pre-Configured Toolchain Environment & Auto-Provisioning**:
   - `MAMBA_ROOT_PREFIX=$HOME/.micromamba`
   - `PATH=$HOME/.micromamba/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin`
+  - If `micromamba` is not installed on the host, Chatty automatically bootstraps the standalone static binary into `~/.cache/chatty/bin/` and copies it into `<sandbox>/.chatty/sbox/home/.local/bin/micromamba` so package management works out of the box with zero host installation required.
 * **Host Companion Daemon (`bwrap_companion.py`)**:
   When Chatty itself runs inside a locked-down container or outer sandbox where nested user namespaces (`CLONE_NEWUSER`) are blocked by outer security profiles, Chatty provides a host companion daemon:
   ```bash
