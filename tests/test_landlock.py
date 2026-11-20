@@ -91,7 +91,8 @@ class TestLandlock(unittest.TestCase):
     session = ChatbotSession(
       provider="ollama",
       model="mock-model",
-      sandbox=self.sandbox_dir
+      sandbox=self.sandbox_dir,
+      backend="landlock"
     )
 
     self.assertIsNotNone(session.landlock_bin)

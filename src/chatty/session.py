@@ -607,8 +607,20 @@ class ChatbotSession(LLMMixin):
         backend_mode = "docker"
       elif docker_ok:
         backend_mode = "docker"
-      elif sys.platform == "linux" and self.landlock_bin:
-        backend_mode = "landlock"
+      elif sys.platform == "linux":
+        from chatty.bwrap import is_bwrap_available
+        if is_bwrap_available():
+          backend_mode = "bwrap"
+        elif self.landlock_bin:
+          backend_mode = "landlock"
+        else:
+          if self.config.sandbox_specified:
+            raise RuntimeError(
+              "No sandboxing capabilities found (neither Docker, Bubblewrap, nor Linux Landlock is available), "
+              "but a sandbox directory was specified. To allow commands to run directly on the host without sandboxing, "
+              "specify --backend none."
+            )
+          backend_mode = "none"
       else:
         if self.config.sandbox_specified:
           raise RuntimeError(
@@ -658,6 +670,16 @@ class ChatbotSession(LLMMixin):
       if not self.config.headless:
         console.print(f"[bold green]Docker Companion Container initialized:[/bold green] {backend.container_name} ({backend.image})")
       return backend
+    elif backend_mode in ("bwrap", "bubblewrap"):
+      from chatty.bwrap import is_bwrap_available
+      if not is_bwrap_available():
+        raise RuntimeError("Bubblewrap backend was requested, but bwrap is not available or cannot create namespaces on this system.")
+      from chatty.backends import BubblewrapBackend
+      return BubblewrapBackend(
+        sandbox=self.sandbox,
+        allowed_ro_paths=lambda: list(self.allowed_ro_paths) + list(self.temp_allowed_ro_paths),
+        allowed_rw_paths=lambda: list(self.allowed_rw_paths) + list(self.temp_allowed_rw_paths)
+      )
     elif backend_mode == "landlock":
       if not self.landlock_bin:
         raise RuntimeError("Landlock backend was requested, but Landlock is not supported or failed to compile on this system.")

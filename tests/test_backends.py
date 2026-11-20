@@ -12,12 +12,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 import pytest
 
 from chatty.backends import (
+  BubblewrapBackend,
   DockerBackend,
   LocalBackend,
   get_default_dockerfile_path,
   get_host_git_config,
   is_docker_available
 )
+from chatty.bwrap import is_bwrap_available, wrap_command_with_bwrap
 from chatty.session import ChatbotSession, SessionConfig
 
 
@@ -45,6 +47,86 @@ class TestLocalBackend(unittest.TestCase):
       self.assertEqual(cwd, "/tmp/sandbox")
       mock_wrap.assert_called_once()
       self.assertEqual(backend.get_name(), "landlock")
+
+
+class TestBubblewrapBackend(unittest.TestCase):
+
+  @patch("shutil.which")
+  def test_bwrap_availability_missing_binary(self, mock_which):
+    mock_which.return_value = None
+    self.assertFalse(is_bwrap_available("/nonexistent/bwrap"))
+
+  @patch("subprocess.run")
+  @patch("shutil.which")
+  def test_bwrap_availability_success(self, mock_which, mock_run):
+    mock_which.return_value = "/usr/bin/bwrap"
+    mock_run.return_value = MagicMock(returncode=0)
+    with patch("os.path.exists", return_value=True):
+      self.assertTrue(is_bwrap_available())
+
+  @patch("subprocess.run")
+  @patch("shutil.which")
+  def test_bwrap_availability_failure(self, mock_which, mock_run):
+    mock_which.return_value = "/usr/bin/bwrap"
+    mock_run.return_value = MagicMock(returncode=1)
+    with patch("os.path.exists", return_value=True):
+      self.assertFalse(is_bwrap_available())
+
+  def test_wrap_command_with_bwrap_flags(self):
+    cmd_args = wrap_command_with_bwrap(
+      bwrap_bin="/usr/bin/bwrap",
+      sandbox_dir="/tmp/test_sandbox",
+      command="echo 42",
+      ro_paths=["/tmp/ro_extra"],
+      rw_paths=["/tmp/rw_extra"],
+      cwd="/tmp/test_sandbox"
+    )
+    self.assertEqual(cmd_args[0], "/usr/bin/bwrap")
+    self.assertIn("--die-with-parent", cmd_args)
+    self.assertIn("--unshare-user", cmd_args)
+    self.assertIn("--unshare-pid", cmd_args)
+    self.assertIn("--dev-bind", cmd_args)
+    self.assertIn("--proc", cmd_args)
+    self.assertIn("--ro-bind", cmd_args)
+    self.assertIn("--tmpfs", cmd_args)
+    self.assertIn("--bind", cmd_args)
+    self.assertIn(os.path.realpath("/tmp/test_sandbox"), cmd_args)
+    self.assertIn("--chdir", cmd_args)
+    self.assertIn("--setenv", cmd_args)
+    self.assertIn("SBOXED", cmd_args)
+    self.assertEqual(cmd_args[-4:], ["--", "/bin/sh", "-c", "echo 42"])
+
+  def test_bubblewrap_backend(self):
+    backend = BubblewrapBackend(
+      sandbox="/tmp/sandbox",
+      allowed_ro_paths=lambda: ["/tmp/ro"],
+      allowed_rw_paths=lambda: ["/tmp/rw"],
+      bwrap_bin="/usr/bin/bwrap"
+    )
+    backend.initialize()
+    self.assertEqual(backend.get_name(), "bwrap")
+
+    with patch("chatty.bwrap.wrap_command_with_bwrap") as mock_wrap:
+      mock_wrap.return_value = ["/usr/bin/bwrap", "--", "/bin/sh", "-c", "ls"]
+      args, use_shell, cwd = backend.build_command_args("ls", cwd="/tmp/sandbox")
+      self.assertFalse(use_shell)
+      self.assertEqual(cwd, "/tmp/sandbox")
+      mock_wrap.assert_called_once_with(
+        "/usr/bin/bwrap",
+        "/tmp/sandbox",
+        "ls",
+        ro_paths=["/tmp/ro"],
+        rw_paths=["/tmp/rw"],
+        cwd="/tmp/sandbox"
+      )
+
+    # Test terminate_task
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = None
+    mock_proc.pid = 9999
+    with patch("os.killpg") as mock_killpg:
+      backend.terminate_task("task_1", mock_proc)
+      mock_killpg.assert_called_once()
 
 
 class TestDockerBackendUnit(unittest.TestCase):
@@ -682,7 +764,24 @@ class TestSessionBackendWiring(unittest.TestCase):
       session.cleanup_background_commands()
 
   @patch("chatty.backends.is_docker_available", return_value=False)
-  def test_auto_backend_selects_landlock_when_docker_unavailable(self, mock_avail):
+  @patch("chatty.bwrap.is_bwrap_available", return_value=True)
+  def test_auto_backend_selects_bwrap_when_docker_unavailable(self, mock_bwrap, mock_avail):
+    cfg = SessionConfig(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.temp_dir,
+      backend="auto",
+      headless=True
+    )
+    with patch("chatty.session.ChatbotSession.init_client"):
+      with patch("sys.platform", "linux"):
+        session = ChatbotSession(config=cfg)
+        self.assertEqual(session.backend.get_name(), "bwrap")
+        session.cleanup_background_commands()
+
+  @patch("chatty.backends.is_docker_available", return_value=False)
+  @patch("chatty.bwrap.is_bwrap_available", return_value=False)
+  def test_auto_backend_selects_landlock_when_bwrap_unavailable(self, mock_bwrap, mock_avail):
     cfg = SessionConfig(
       provider="ollama",
       model="test-model",
@@ -801,6 +900,34 @@ class TestSessionBackendWiring(unittest.TestCase):
           called_cmd = mock_backend.build_command_args.call_args[0][0]
           self.assertIn("clang-format", called_cmd)
           self.assertIn("main.cpp", called_cmd)
+
+  @patch("chatty.bwrap.is_bwrap_available", return_value=True)
+  def test_session_with_bwrap_backend(self, mock_bwrap):
+    cfg = SessionConfig(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.temp_dir,
+      backend="bwrap",
+      headless=True
+    )
+    with patch("chatty.session.ChatbotSession.init_client"):
+      session = ChatbotSession(config=cfg)
+      self.assertEqual(session.backend.get_name(), "bwrap")
+      session.cleanup_background_commands()
+
+  @patch("chatty.bwrap.is_bwrap_available", return_value=False)
+  def test_session_with_bwrap_backend_unavailable_raises(self, mock_bwrap):
+    cfg = SessionConfig(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.temp_dir,
+      backend="bwrap",
+      headless=True
+    )
+    with patch("chatty.session.ChatbotSession.init_client"):
+      with self.assertRaises(RuntimeError) as ctx:
+        ChatbotSession(config=cfg)
+      self.assertIn("Bubblewrap backend was requested, but bwrap is not available", str(ctx.exception))
 
 
 class TestLiveDockerCompanionIntegration(unittest.TestCase):

@@ -134,9 +134,9 @@ def main():
   register_config_arguments(parser)
   parser.add_argument(
     "--backend", "-B",
-    choices=["auto", "docker", "landlock", "none"],
+    choices=["auto", "docker", "bwrap", "landlock", "none"],
     default="auto",
-    help="Execution backend for commands: 'auto' (default: landlock if on Linux, else local, or docker if configured), 'docker' (companion container), 'landlock' (Linux Landlock LSM), or 'none' (direct execution)."
+    help="Execution backend for commands: 'auto' (default: docker if configured, else bwrap/landlock if on Linux, else local), 'docker' (companion container), 'bwrap' (Bubblewrap sandbox), 'landlock' (Linux Landlock LSM), or 'none' (direct execution)."
   )
   parser.add_argument(
     "--docker-image",

@@ -159,6 +159,73 @@ class LocalBackend(ExecutionBackend):
     return "landlock" if self.landlock_bin else "local"
 
 
+class BubblewrapBackend(ExecutionBackend):
+
+  def __init__(
+    self,
+    sandbox: str,
+    allowed_ro_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None,
+    allowed_rw_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None,
+    bwrap_bin: Optional[str] = None
+  ):
+    self.sandbox = sandbox
+    self._allowed_ro_paths = allowed_ro_paths
+    self._allowed_rw_paths = allowed_rw_paths
+    self.bwrap_bin = bwrap_bin or shutil.which("bwrap") or "bwrap"
+
+  def initialize(self) -> None:
+    pass
+
+  def _get_ro_paths(self) -> List[str]:
+    if callable(self._allowed_ro_paths):
+      return list(self._allowed_ro_paths())
+    elif self._allowed_ro_paths:
+      return list(self._allowed_ro_paths)
+    return []
+
+  def _get_rw_paths(self) -> List[str]:
+    if callable(self._allowed_rw_paths):
+      return list(self._allowed_rw_paths())
+    elif self._allowed_rw_paths:
+      return list(self._allowed_rw_paths)
+    return []
+
+  def build_command_args(
+    self,
+    command: str,
+    cwd: Optional[str] = None,
+    task_id: Optional[str] = None
+  ) -> Tuple[Union[List[str], str], bool, Optional[str]]:
+    from chatty.bwrap import wrap_command_with_bwrap
+    ro_paths = self._get_ro_paths()
+    rw_paths = self._get_rw_paths()
+    cmd_args = wrap_command_with_bwrap(
+      self.bwrap_bin,
+      self.sandbox,
+      command,
+      ro_paths=ro_paths,
+      rw_paths=rw_paths,
+      cwd=cwd or self.sandbox
+    )
+    return cmd_args, False, self.sandbox
+
+  def terminate_task(self, task_id: str, proc: subprocess.Popen) -> None:
+    if proc and proc.poll() is None:
+      try:
+        os.killpg(proc.pid, signal.SIGKILL)
+      except Exception:
+        try:
+          proc.kill()
+        except Exception:
+          pass
+
+  def cleanup(self) -> None:
+    pass
+
+  def get_name(self) -> str:
+    return "bwrap"
+
+
 class DockerBackend(ExecutionBackend):
 
   def __init__(
