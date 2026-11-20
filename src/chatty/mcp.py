@@ -70,6 +70,7 @@ class MCPClient:
     self._reader_thread.start()
 
     # Perform MCP initialize handshake
+    from chatty import __version__
     init_params = {
       "protocolVersion": "2024-11-05",
       "capabilities": {
@@ -77,7 +78,7 @@ class MCPClient:
       },
       "clientInfo": {
         "name": "chatty",
-        "version": "0.5.5"
+        "version": __version__
       }
     }
 

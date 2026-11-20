@@ -24,6 +24,8 @@ class TestBwrapHelpers(unittest.TestCase):
     self.temp_dir = self.enterContext(tempfile.TemporaryDirectory())
     self.sandbox_dir = os.path.join(self.temp_dir, "sandbox")
     os.makedirs(self.sandbox_dir, exist_ok=True)
+    # Ensure tests are hermetic and do not make live network calls
+    self.enterContext(patch("chatty.bwrap.bootstrap_micromamba", return_value=None))
 
   def test_get_bwrap_sbox_dir(self):
     sbox_dir = get_bwrap_sbox_dir(self.sandbox_dir)
@@ -116,3 +118,32 @@ class TestBwrapHelpers(unittest.TestCase):
         self.assertEqual(result, expected_target)
         self.assertTrue(os.path.exists(expected_target))
         self.assertTrue(os.access(expected_target, os.X_OK))
+
+  def test_bootstrap_micromamba_mocked(self):
+    import io
+    import tarfile
+    from unittest.mock import MagicMock
+
+    # Create in-memory tar.bz2 containing bin/micromamba
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:bz2") as tar:
+      content = b"#!/bin/sh\necho 2.0\n"
+      ti = tarfile.TarInfo(name="bin/micromamba")
+      ti.size = len(content)
+      tar.addfile(ti, io.BytesIO(content))
+    archive_bytes = buf.getvalue()
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = archive_bytes
+    mock_resp.__enter__.return_value = mock_resp
+
+    dest = os.path.join(self.temp_dir, "test_cached_mamba")
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+      # We bypass the class-level patch on bootstrap_micromamba by calling the original
+      from chatty import bwrap
+      real_bootstrap = bwrap.bootstrap_micromamba.__wrapped__ if hasattr(bwrap.bootstrap_micromamba, "__wrapped__") else bootstrap_micromamba
+      # Call with cache_path
+      res = real_bootstrap(cache_path=dest)
+      self.assertEqual(res, dest)
+      self.assertTrue(os.path.exists(dest))
+      self.assertTrue(os.access(dest, os.X_OK))
