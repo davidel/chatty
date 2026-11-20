@@ -103,9 +103,10 @@ def handle_hex_dump(arguments: Dict[str, Any], session: Any) -> str:
 def handle_write_file(arguments: Dict[str, Any], session: Any) -> str:
   path = arguments.get("path")
   content = arguments.get("content")
+  append = bool(arguments.get("append", False))
   if not path or content is None:
     return "Error: Missing parameters 'path' and 'content'."
-  return tool_write_file(session.sandbox, path, content, session=session)
+  return tool_write_file(session.sandbox, path, content, append=append, session=session)
 
 
 def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:

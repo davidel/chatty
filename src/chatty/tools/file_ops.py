@@ -187,7 +187,7 @@ def tool_get_file_info(sandbox_dir: str, path: str) -> str:
     return f"Error getting file info: {str(e)}"
 
 
-def tool_write_file(sandbox_dir: str, path: str, content: str, session: Optional[Any] = None) -> str:
+def tool_write_file(sandbox_dir: str, path: str, content: str, append: bool = False, session: Optional[Any] = None) -> str:
   """Write text content to a file inside the sandbox."""
   try:
     if session is None:
@@ -204,11 +204,13 @@ def tool_write_file(sandbox_dir: str, path: str, content: str, session: Optional
       except Exception:
         pass
 
+    new_content = (old_content + content) if append else content
+
     diff_shown = False
     if session and hasattr(session, "confirm_file_change"):
-      if not getattr(session, "auto_approve", False) and not getattr(session, "headless", False) and old_content != content:
+      if not getattr(session, "auto_approve", False) and not getattr(session, "headless", False) and old_content != new_content:
         diff_shown = True
-      approved, feedback = session.confirm_file_change(rel_path, old_content, content)
+      approved, feedback = session.confirm_file_change(rel_path, old_content, new_content)
       if not approved:
         if feedback:
           return f"Change rejected by user with instructions: {feedback}"
@@ -216,13 +218,14 @@ def tool_write_file(sandbox_dir: str, path: str, content: str, session: Optional
 
     backup_file(sandbox_dir, rel_path)
     os.makedirs(os.path.dirname(safe_p), exist_ok=True)
-    with open(safe_p, 'w', encoding='utf-8') as f:
+    with open(safe_p, 'a' if append else 'w', encoding='utf-8') as f:
       f.write(content)
 
     if old_content and not diff_shown:
-      print_diff(rel_path, old_content, content)
+      print_diff(rel_path, old_content, new_content)
 
-    return f"Successfully wrote to file '{rel_path}'."
+    action = "appended to" if append else "wrote to"
+    return f"Successfully {action} file '{rel_path}'."
   except Exception as e:
     return f"Error writing file: {str(e)}"
 

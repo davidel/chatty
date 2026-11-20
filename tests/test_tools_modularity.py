@@ -35,6 +35,29 @@ class TestToolsModularity(unittest.TestCase):
     read_res = tool_read_file(self.sandbox_dir, "test.txt")
     self.assertEqual(read_res, "Hello Modular Tools")
 
+  def test_write_file_append(self):
+    # 1. Append to a new file creates it
+    res1 = tool_write_file(self.sandbox_dir, "appended.txt", "first line\n", append=True)
+    self.assertEqual(res1, "Successfully appended to file 'appended.txt'.")
+    self.assertEqual(tool_read_file(self.sandbox_dir, "appended.txt"), "first line\n")
+
+    # 2. Append to an existing file
+    res2 = tool_write_file(self.sandbox_dir, "appended.txt", "second line\n", append=True)
+    self.assertEqual(res2, "Successfully appended to file 'appended.txt'.")
+    self.assertEqual(tool_read_file(self.sandbox_dir, "appended.txt"), "first line\nsecond line\n")
+
+    # 3. Default append=False overwrites
+    res3 = tool_write_file(self.sandbox_dir, "appended.txt", "overwritten\n")
+    self.assertEqual(res3, "Successfully wrote to file 'appended.txt'.")
+    self.assertEqual(tool_read_file(self.sandbox_dir, "appended.txt"), "overwritten\n")
+
+    # 4. Via execute_tool handler
+    import types
+    session = types.SimpleNamespace(sandbox=self.sandbox_dir)
+    res4 = execute_tool("write_file", {"path": "appended.txt", "content": "third line\n", "append": True}, session)
+    self.assertEqual(res4, "Successfully appended to file 'appended.txt'.")
+    self.assertEqual(tool_read_file(self.sandbox_dir, "appended.txt"), "overwritten\nthird line\n")
+
   def test_read_file_clamping_and_bounds(self):
     tool_write_file(self.sandbox_dir, "multi.txt", "line1\nline2\nline3\n")
 

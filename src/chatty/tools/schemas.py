@@ -293,7 +293,11 @@ TOOLS_SCHEMA = [
           },
           "content": {
             "type": "string",
-            "description": "The complete content to write into the file."
+            "description": "The complete content to write into the file (or content to append if 'append' is true)."
+          },
+          "append": {
+            "type": "boolean",
+            "description": "Optional. If true, appends content to the end of the existing file instead of overwriting. Defaults to false."
           }
         },
         "required": ["path", "content"]
