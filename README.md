@@ -117,6 +117,8 @@ python3 -m chatty [options]
 | `--docker-host` | *None* | string | *None* | Custom Docker host endpoint (e.g. `tcp://127.0.0.1:2375` or `unix:///run/user/1000/docker.sock`). Overrides `DOCKER_HOST`. |
 | `--docker-auth-proxy / --no-docker-auth-proxy` | *None* | flag | `True` | Enable or disable host credential proxy for the companion container (safely injects credentials like `HF_TOKEN`, AWS SigV4, GCS, Cloudflare R2, etc. without exposing secrets to the LLM). |
 | `--docker-auth-proxy-rw-urls / --rw-urls` | *None* | string | *None* | Semicolon-separated list of cloud storage URLs/buckets permitted for write/delete operations (e.g. `'s3://scratch;r2://artifacts/*;gs://staging'`). Defaults to `CHATTY_RW_URLS` environment variable. When omitted, all storage routes are strictly read-only. |
+| `--bwrap-overlay / --no-bwrap-overlay` | *None* | flag | `True` | Enable or disable OverlayFS on `/usr` for the Bubblewrap sandbox. When disabled, `/usr` is mounted strictly read-only. |
+| `--bwrap-reset` | *None* | flag | `False` | Reset (nuke and recreate) the Bubblewrap sandbox writable state directory (`<sandbox>/.chatty/sbox/`) on startup. |
 | `--mcp-config` | *None* | string | *None* | Path to an MCP (Model Context Protocol) JSON configuration file. |
 | `--mcp / --no-mcp` | *None* | flag | `True` | Enable or disable Model Context Protocol (MCP) server integration. |
 
@@ -524,13 +526,26 @@ When the Docker backend is active, Chatty manages the entire lifecycle of an iso
   - Can be toggled with `--docker-auth-proxy` or `--no-docker-auth-proxy` (enabled by default).
 
 ### 4. Bubblewrap (bwrap) Process & Namespace Sandboxing
-When Bubblewrap (`bwrap`) is available on Linux, Chatty can isolate commands using unprivileged user and mount namespaces without requiring root permissions or Docker.
+When Bubblewrap (`bwrap`) is available on Linux, Chatty provides instant, zero-daemon process and filesystem isolation using unprivileged Linux namespaces (`user`, `mount`, `pid`, `ipc`, `uts`, `cgroup`).
 
-* **Namespace Isolation**: Unshares process (`--unshare-pid`), user (`--unshare-user`), IPC (`--unshare-ipc`), hostname (`--unshare-uts`), and cgroup (`--unshare-cgroup`) namespaces.
-* **Read-Only Root Filesystem**: Mounts the host root read-only (`--ro-bind / /`), protecting system binaries, libraries, and configurations from modification while keeping them accessible.
-* **Isolated Temporary Directory**: Replaces `/tmp` with a private in-memory tmpfs (`--tmpfs /tmp`) to prevent temporary file leakage.
-* **Workspace Read-Write Mount**: Binds the project sandbox folder read-write (`--bind <sandbox> <sandbox>`) and sets it as the working directory (`--chdir`).
-* **Process Lifetime**: Passes `--die-with-parent` to ensure child processes cleanly terminate if the agent exits or is interrupted.
+#### Containment Architecture (`.chatty/sbox/`)
+All writable mounts created for the sandbox are strictly confined within a single host directory under `<sandbox>/.chatty/sbox/`:
+```
+<sandbox>/.chatty/sbox/
+├── home/       # Mapped as /home/<user> (~/.local, ~/.cache, ~/.cargo, ~/.npm, ~/.micromamba)
+├── upper/      # OverlayFS upper directory (receives CoW writes to /usr)
+└── work/       # OverlayFS kernel scratchpad directory
+```
+
+* **Zero Host Contamination**: System directories (`/bin`, `/lib`, `/etc`, etc.) are mounted read-only (`--ro-bind / /`).
+* **OverlayFS on `/usr`**: Reads hit the host's compilers, Python runtime, and libraries. Writes land cleanly in `<sandbox>/.chatty/sbox/upper/`. If the host filesystem does not support unprivileged OverlayFS, Chatty automatically detects this at startup and falls back to read-only `/usr`.
+* **Isolated Synthetic `$HOME` (Privacy & Leak Prevention)**:
+  The user's real host `$HOME` (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.bash_history`, personal files) is **completely hidden** from the sandbox. Bubblewrap bind-mounts `<sandbox>/.chatty/sbox/home/` over `$HOME`.
+* **Single Nuke / Reset (`/bwrap reset`)**:
+  Deleting `<sandbox>/.chatty/sbox/` instantly restores the environment to a pristine state. You can run `/bwrap reset` mid-session or start with `--bwrap-reset`. Run `/bwrap status` to view persistent disk usage.
+* **Pre-Configured Toolchain Environment**:
+  - `MAMBA_ROOT_PREFIX=$HOME/.micromamba`
+  - `PATH=$HOME/.micromamba/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin`
 * **Host Companion Daemon (`bwrap_companion.py`)**:
   When Chatty itself runs inside a locked-down container or outer sandbox where nested user namespaces (`CLONE_NEWUSER`) are blocked by outer security profiles, Chatty provides a host companion daemon:
   ```bash
@@ -538,6 +553,25 @@ When Bubblewrap (`bwrap`) is available on Linux, Chatty can isolate commands usi
   python3 -m chatty.bwrap_companion --socket-path /tmp/chatty_bwrap.sock
   ```
   The companion daemon listens on a UNIX domain socket, supports 4-byte length-prefixed framing (handling arbitrary payload and command sizes > 64KB), and runs Bubblewrap sandboxes natively on the host on behalf of the containerized session.
+
+#### Bubblewrap Sandbox Quirks & Limitations
+
+> [!NOTE]
+> Bubblewrap runs entirely as an **unprivileged regular user**. Understanding the following quirks will help you configure packages and workflows effectively:
+
+1. **Why `sudo apt-get` fails inside Bubblewrap**:
+   - **Host Root DAC Check**: The host's `/usr/bin`, `/usr/lib`, and `/usr/include` directories are owned by the real host root (`UID 0`). Because an unprivileged user namespace cannot map the real host root, existing directories appear inside the sandbox as owned by `nobody` (`UID 65534`) with permissions `755` (`drwxr-xr-x`). The container's `UID 0` (your user outside) is treated as "other", and the Linux kernel's OverlayFS driver blocks writing new files directly into lower directories with `Permission denied`.
+   - **Single-UID Mapping**: Without system-wide `/etc/subuid` setup, only a single UID is mapped inside the user namespace. Debian packages contain files owned by system accounts (e.g. `man:root` [UID 6] or `_apt` [UID 105]). When `dpkg` calls `fchownat()`, the kernel returns `EINVAL` (Invalid argument), which aborts installation.
+   - **Post-Install & Service Scripts**: Debian packages invoke `update-alternatives` and system service scripts that expect full system administrative state.
+
+2. **How to install packages inside Bubblewrap**:
+   - **Language Package Managers**: `pip` (or `pip install --user`), `npm`, `cargo`, and `go` install directly into the isolated `$HOME` (`~/.local`, `~/.npm`, `~/.cargo`) or project workspace. They work out of the box with zero errors.
+   - **Native Compilers, Toolchains & System Libraries**: Use **`micromamba`** (or `conda`):
+     ```bash
+     micromamba install -y -c conda-forge clang cmake ninja
+     ```
+     Micromamba packages are pre-compiled, fully relocatable, and install directly into `$HOME/.micromamba/` without requiring `root` or `apt-get`. Chatty's system prompt automatically instructs the LLM to use `micromamba` when running under Bubblewrap.
+   - **When to use Docker instead**: If your workflow requires `apt-get install`, building kernel modules, or running `systemd` / daemon services, use `--backend docker`. In Docker, the container has full root privileges and a native Debian package database.
 
 ### 5. Kernel-Level Linux Landlock Sandboxing
 On Linux (kernel version 5.13+), Chatty provides transparent, compile-on-demand process isolation using the Linux **Landlock LSM (Linux Security Module)**. 

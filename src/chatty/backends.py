@@ -96,6 +96,10 @@ class ExecutionBackend(abc.ABC):
   def get_name(self) -> str:
     pass
 
+  def get_system_prompt_addon(self) -> Optional[str]:
+    """Returns backend-specific environment guidelines to append to the system prompt."""
+    return None
+
   @property
   def stdin_mode(self) -> int:
     return subprocess.DEVNULL
@@ -158,6 +162,14 @@ class LocalBackend(ExecutionBackend):
   def get_name(self) -> str:
     return "landlock" if self.landlock_bin else "local"
 
+  def get_system_prompt_addon(self) -> Optional[str]:
+    if self.landlock_bin:
+      return (
+        "## Execution Environment (Landlock Sandbox)\n"
+        "- Landlock filesystem isolation is active: write access is strictly confined to the workspace."
+      )
+    return None
+
 
 class BubblewrapBackend(ExecutionBackend):
 
@@ -166,15 +178,29 @@ class BubblewrapBackend(ExecutionBackend):
     sandbox: str,
     allowed_ro_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None,
     allowed_rw_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None,
-    bwrap_bin: Optional[str] = None
+    bwrap_bin: Optional[str] = None,
+    enable_overlay: bool = True,
+    isolated_home: bool = True,
   ):
     self.sandbox = sandbox
     self._allowed_ro_paths = allowed_ro_paths
     self._allowed_rw_paths = allowed_rw_paths
     self.bwrap_bin = bwrap_bin or shutil.which("bwrap") or "bwrap"
+    self.enable_overlay = enable_overlay
+    self.isolated_home = isolated_home
 
   def initialize(self) -> None:
     pass
+
+  def reset_sandbox(self) -> None:
+    """Nukes and recreates the bubblewrap single-containment directory (.chatty/sbox/)."""
+    from chatty.bwrap import reset_bwrap_sbox
+    reset_bwrap_sbox(self.sandbox, bwrap_bin=self.bwrap_bin)
+
+  def get_status(self) -> Dict[str, Any]:
+    """Returns disk usage and file counts for the bubblewrap containment directories."""
+    from chatty.bwrap import get_bwrap_sbox_status
+    return get_bwrap_sbox_status(self.sandbox)
 
   def _get_ro_paths(self) -> List[str]:
     if callable(self._allowed_ro_paths):
@@ -205,7 +231,9 @@ class BubblewrapBackend(ExecutionBackend):
       command,
       ro_paths=ro_paths,
       rw_paths=rw_paths,
-      cwd=cwd or self.sandbox
+      cwd=cwd or self.sandbox,
+      enable_overlay=self.enable_overlay,
+      isolated_home=self.isolated_home,
     )
     return cmd_args, False, self.sandbox
 
@@ -224,6 +252,15 @@ class BubblewrapBackend(ExecutionBackend):
 
   def get_name(self) -> str:
     return "bwrap"
+
+  def get_system_prompt_addon(self) -> Optional[str]:
+    return (
+      "## Execution Environment (Bubblewrap Sandbox)\n"
+      "- Unprivileged environment: Root and sudo are NOT available. Do NOT use `sudo` or `apt-get`.\n"
+      "- Language package managers: `pip` (or `pip install --user`), `npm`, `cargo`, and `go` install normally into the isolated user home or workspace.\n"
+      "- System tools & compilers: To install native tools, compilers, or libraries (e.g. clang, cmake, ninja), use `micromamba`:\n"
+      "  `micromamba install -y -c conda-forge <package>`"
+    )
 
 
 class DockerBackend(ExecutionBackend):
@@ -947,3 +984,10 @@ class DockerBackend(ExecutionBackend):
 
   def get_name(self) -> str:
     return "docker"
+
+  def get_system_prompt_addon(self) -> Optional[str]:
+    return (
+      "## Execution Environment (Docker Container)\n"
+      "- Privileged container: You have root privileges inside this container.\n"
+      "- Package installation: You can install system tools and libraries using `apt-get update && apt-get install -y <package>`."
+    )

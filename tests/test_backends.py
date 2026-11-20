@@ -73,14 +73,15 @@ class TestBubblewrapBackend(unittest.TestCase):
       self.assertFalse(is_bwrap_available())
 
   def test_wrap_command_with_bwrap_flags(self):
-    cmd_args = wrap_command_with_bwrap(
-      bwrap_bin="/usr/bin/bwrap",
-      sandbox_dir="/tmp/test_sandbox",
-      command="echo 42",
-      ro_paths=["/tmp/ro_extra"],
-      rw_paths=["/tmp/rw_extra"],
-      cwd="/tmp/test_sandbox"
-    )
+    with patch("chatty.bwrap.is_bwrap_overlay_supported", return_value=True):
+      cmd_args = wrap_command_with_bwrap(
+        bwrap_bin="/usr/bin/bwrap",
+        sandbox_dir="/tmp/test_sandbox",
+        command="echo 42",
+        ro_paths=["/tmp/ro_extra"],
+        rw_paths=["/tmp/rw_extra"],
+        cwd="/tmp/test_sandbox"
+      )
     self.assertEqual(cmd_args[0], "/usr/bin/bwrap")
     self.assertIn("--die-with-parent", cmd_args)
     self.assertIn("--unshare-user", cmd_args)
@@ -89,10 +90,13 @@ class TestBubblewrapBackend(unittest.TestCase):
     self.assertIn("--proc", cmd_args)
     self.assertIn("--ro-bind", cmd_args)
     self.assertIn("--tmpfs", cmd_args)
+    self.assertIn("--overlay-src", cmd_args)
+    self.assertIn("--overlay", cmd_args)
     self.assertIn("--bind", cmd_args)
     self.assertIn(os.path.realpath("/tmp/test_sandbox"), cmd_args)
     self.assertIn("--chdir", cmd_args)
     self.assertIn("--setenv", cmd_args)
+    self.assertIn("MAMBA_ROOT_PREFIX", cmd_args)
     self.assertIn("SBOXED", cmd_args)
     self.assertEqual(cmd_args[-4:], ["--", "/bin/sh", "-c", "echo 42"])
 
@@ -117,7 +121,9 @@ class TestBubblewrapBackend(unittest.TestCase):
         "ls",
         ro_paths=["/tmp/ro"],
         rw_paths=["/tmp/rw"],
-        cwd="/tmp/sandbox"
+        cwd="/tmp/sandbox",
+        enable_overlay=True,
+        isolated_home=True
       )
 
     # Test terminate_task
@@ -127,6 +133,25 @@ class TestBubblewrapBackend(unittest.TestCase):
     with patch("os.killpg") as mock_killpg:
       backend.terminate_task("task_1", mock_proc)
       mock_killpg.assert_called_once()
+
+  def test_bubblewrap_prompt_addon_and_status(self):
+    backend = BubblewrapBackend(
+      sandbox="/tmp/sandbox",
+      bwrap_bin="/usr/bin/bwrap"
+    )
+    addon = backend.get_system_prompt_addon()
+    self.assertIsNotNone(addon)
+    self.assertIn("Bubblewrap Sandbox", addon)
+    self.assertIn("micromamba install -y -c conda-forge", addon)
+
+    with patch("chatty.bwrap.get_bwrap_sbox_status") as mock_status:
+      mock_status.return_value = {"home_bytes": 100, "upper_bytes": 200, "total_bytes": 300}
+      status = backend.get_status()
+      self.assertEqual(status["total_bytes"], 300)
+
+    with patch("chatty.bwrap.reset_bwrap_sbox") as mock_reset:
+      backend.reset_sandbox()
+      mock_reset.assert_called_once_with("/tmp/sandbox", bwrap_bin="/usr/bin/bwrap")
 
 
 class TestDockerBackendUnit(unittest.TestCase):

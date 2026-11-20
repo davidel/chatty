@@ -1897,6 +1897,63 @@ def cmd_task(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_bwrap(session: Any, arg: str) -> bool:
+  if not hasattr(session, "backend") or session.backend.get_name() != "bwrap":
+    backend_name = session.backend.get_name() if hasattr(session, "backend") else "none"
+    console.print(f"[bold red]Error: Bubblewrap backend is not active in this session (current backend: '{backend_name}').[/bold red]")
+    return True
+
+  backend = session.backend
+  arg = arg.strip()
+
+  if arg in ("reset", "--reset"):
+    console.print("[yellow]Resetting Bubblewrap sandbox writable state (<sandbox>/.chatty/sbox/)...[/yellow]")
+    try:
+      backend.reset_sandbox()
+      console.print("[bold green]Bubblewrap sandbox writable mounts reset successfully.[/bold green]")
+    except Exception as e:
+      console.print(f"[bold red]Error resetting Bubblewrap sandbox: {e}[/bold red]")
+    return True
+
+  if arg in ("status", "--status") or not arg:
+    try:
+      status = backend.get_status()
+      sbox_dir = status.get("sbox_dir", "")
+      home_bytes = status.get("home_bytes", 0)
+      home_files = status.get("home_files", 0)
+      upper_bytes = status.get("upper_bytes", 0)
+      upper_files = status.get("upper_files", 0)
+      total_bytes = status.get("total_bytes", 0)
+      total_files = status.get("total_files", 0)
+      overlay_active = getattr(backend, "enable_overlay", True)
+
+      def _fmt_size(b: int) -> str:
+        val = float(b)
+        for unit in ["B", "KB", "MB", "GB"]:
+          if val < 1024.0:
+            return f"{val:.1f} {unit}"
+          val /= 1024.0
+        return f"{val:.1f} TB"
+
+      msg = (
+        f"[bold cyan]Bubblewrap Sandbox Status:[/bold cyan]\n"
+        f"  • Containment Dir: [green]{sbox_dir}[/green]\n"
+        f"  • OverlayFS on /usr: [yellow]{'Active' if overlay_active else 'Disabled'}[/yellow]\n"
+        f"  • Isolated $HOME: {_fmt_size(home_bytes)} ({home_files} files)\n"
+        f"  • /usr Upper Layer: {_fmt_size(upper_bytes)} ({upper_files} files)\n"
+        f"  • Total Persistent Size: [bold]{_fmt_size(total_bytes)}[/bold] ({total_files} files)\n\n"
+        f"Commands:\n"
+        f"  • [yellow]/bwrap reset[/yellow] - Nuke and recreate all writable mounts"
+      )
+      console.print(msg)
+    except Exception as e:
+      console.print(f"[bold red]Error retrieving Bubblewrap sandbox status: {e}[/bold red]")
+    return True
+
+  console.print(f"[bold red]Unknown /bwrap option '{arg}'. Valid options: '/bwrap status', '/bwrap reset'.[/bold red]")
+  return True
+
+
 COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/exit": cmd_exit,
   "/quit": cmd_exit,
@@ -1959,6 +2016,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/docker": cmd_docker,
   "/container": cmd_docker,
   "/dexec": cmd_docker,
+  "/bwrap": cmd_bwrap,
+  "/bubblewrap": cmd_bwrap,
   "/task": cmd_task,
   "/tasks": cmd_task,
 }

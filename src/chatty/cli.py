@@ -185,6 +185,18 @@ def main():
     default=os.environ.get("CHATTY_RW_URLS"),
     help="Semicolon-separated list of cloud storage URLs/buckets permitted for write/delete operations (e.g. 's3://scratch;r2://artifacts/*'). Defaults to CHATTY_RW_URLS env var."
   )
+  parser.add_argument(
+    "--bwrap-overlay",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Enable OverlayFS on /usr for the Bubblewrap sandbox (default: True)."
+  )
+  parser.add_argument(
+    "--bwrap-reset",
+    action="store_true",
+    default=False,
+    help="Reset (delete and recreate) the Bubblewrap sandbox writable state (<sandbox>/.chatty/sbox/)."
+  )
   
   args = parser.parse_args()
   
@@ -363,6 +375,8 @@ def main():
     docker_persistent=not args.docker_ephemeral,
     docker_auth_proxy=args.docker_auth_proxy,
     docker_auth_proxy_rw_urls=args.docker_auth_proxy_rw_urls,
+    bwrap_overlay=args.bwrap_overlay,
+    bwrap_reset=args.bwrap_reset,
     mcp_config=args.mcp_config,
     enable_mcp=args.mcp
   ) as chat_session:

@@ -173,6 +173,8 @@ class SessionConfig:
   docker_persistent: bool = True
   docker_auth_proxy: bool = True
   docker_auth_proxy_rw_urls: Optional[str] = None
+  bwrap_overlay: bool = True
+  bwrap_reset: bool = False
   sandbox_specified: bool = False
   mcp_config: Optional[str] = None
   enable_mcp: bool = True
@@ -364,6 +366,8 @@ class ChatbotSession(LLMMixin):
     docker_persistent: bool = True,
     docker_auth_proxy: bool = True,
     docker_auth_proxy_rw_urls: Optional[str] = None,
+    bwrap_overlay: bool = True,
+    bwrap_reset: bool = False,
     sandbox_specified: bool = False,
     mcp_config: Optional[str] = None,
     enable_mcp: bool = True,
@@ -429,6 +433,8 @@ class ChatbotSession(LLMMixin):
         docker_persistent=docker_persistent,
         docker_auth_proxy=docker_auth_proxy,
         docker_auth_proxy_rw_urls=docker_auth_proxy_rw_urls,
+        bwrap_overlay=bwrap_overlay,
+        bwrap_reset=bwrap_reset,
         sandbox_specified=sandbox_specified,
         mcp_config=mcp_config,
         enable_mcp=enable_mcp
@@ -593,6 +599,10 @@ class ChatbotSession(LLMMixin):
           console.print(f"[bold green]Added Whitelisted Read-Write path:[/bold green] {abs_path}")
           
     self.backend = self._init_backend()
+    if getattr(self.config, "bwrap_reset", False) and hasattr(self.backend, "reset_sandbox"):
+      self.backend.reset_sandbox()
+      if not self.config.headless:
+        console.print("[bold green]Bubblewrap sandbox writable mounts reset.[/bold green]")
     self._finalizer = weakref.finalize(self, cleanup_resources, self.background_commands, self.sandbox, self.backend)
     self.load_skills()
     logger.info(f"ChatbotSession initialized. Provider: {self.provider}, Model: {self.model}, Sandbox: {self.sandbox}, Backend: {self.backend.get_name()}")
@@ -675,10 +685,12 @@ class ChatbotSession(LLMMixin):
       if not is_bwrap_available():
         raise RuntimeError("Bubblewrap backend was requested, but bwrap is not available or cannot create namespaces on this system.")
       from chatty.backends import BubblewrapBackend
+      enable_overlay = getattr(self.config, "bwrap_overlay", True)
       return BubblewrapBackend(
         sandbox=self.sandbox,
         allowed_ro_paths=lambda: list(self.allowed_ro_paths) + list(self.temp_allowed_ro_paths),
-        allowed_rw_paths=lambda: list(self.allowed_rw_paths) + list(self.temp_allowed_rw_paths)
+        allowed_rw_paths=lambda: list(self.allowed_rw_paths) + list(self.temp_allowed_rw_paths),
+        enable_overlay=enable_overlay,
       )
     elif backend_mode == "landlock":
       if not self.landlock_bin:
@@ -893,6 +905,10 @@ class ChatbotSession(LLMMixin):
       repo_map_str = self.get_repo_map()
       if repo_map_str:
         prompt_text += f"\n\n## Repository Map\nBelow is a structural map of key definitions across the workspace (ranked by centrality):\n```\n{repo_map_str}\n```"
+      if hasattr(self, "backend") and self.backend:
+        backend_addon = self.backend.get_system_prompt_addon()
+        if backend_addon:
+          prompt_text += f"\n\n{backend_addon}"
       return prompt_text
 
     # Progressive disclosure mode
@@ -947,6 +963,10 @@ class ChatbotSession(LLMMixin):
     repo_map_str = self.get_repo_map()
     if repo_map_str:
       parts.append(f"## Repository Map\nBelow is a structural map of key definitions across the workspace (ranked by centrality):\n```\n{repo_map_str}\n```")
+    if hasattr(self, "backend") and self.backend:
+      backend_addon = self.backend.get_system_prompt_addon()
+      if backend_addon:
+        parts.append(backend_addon)
 
     return "\n\n".join(parts)
 

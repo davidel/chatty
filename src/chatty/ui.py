@@ -281,6 +281,7 @@ def show_help(session: Any):
     ("/view <path> / /open", "Open an image, SVG, PDF, or CAD asset in the desktop viewer"),
     ("/attach <path> [--pages N] / /upload", "Stage a PDF, image, or SVG attachment for multimodal vision"),
     ("/docker [command] / /container", "Execute a command (or inspect status) inside the Docker companion container"),
+    ("/bwrap [status|reset] / /bubblewrap", "Inspect Bubblewrap sandbox status or reset writable mounts"),
     ("/task [list|show|kill] / /tasks", "Manage background tasks (list, show output, terminate)"),
     ("/exit / /quit", "Exit the application"),
   ]
@@ -323,6 +324,13 @@ def show_status(session: Any):
     table.add_row("Docker Image", getattr(backend, "image", "Unknown"))
     if getattr(backend, "docker_host", None):
       table.add_row("Docker Host", backend.docker_host)
+  elif backend_name == "bwrap":
+    try:
+      sbox_info = backend.get_status()
+      table.add_row("Bubblewrap Sbox", sbox_info.get("sbox_dir", "Unknown"))
+      table.add_row("OverlayFS /usr", "Enabled" if getattr(backend, "enable_overlay", True) else "Disabled")
+    except Exception:
+      pass
 
   table.add_row("Context Limit", f"{session.context_size} tokens")
   ratio = getattr(session, "token_to_char_ratio", 0.25)

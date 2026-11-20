@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../s
 from chatty.session import ChatbotSession
 from chatty.commands import (
   COMMANDS,
+  cmd_bwrap,
   cmd_compress,
   cmd_model,
   cmd_models,
@@ -47,6 +48,34 @@ class TestCommandsRegistry(unittest.TestCase):
     self.assertIn("/models", COMMANDS)
     self.assertIn("/undo", COMMANDS)
     self.assertIn("/pop", COMMANDS)
+    self.assertIn("/bwrap", COMMANDS)
+    self.assertIn("/bubblewrap", COMMANDS)
+
+  def test_cmd_bwrap(self):
+    from unittest.mock import MagicMock
+    # When backend is not bwrap
+    self.session.backend = MagicMock()
+    self.session.backend.get_name.return_value = "local"
+    self.assertTrue(cmd_bwrap(self.session, "status"))
+
+    # When backend is bwrap
+    self.session.backend.get_name.return_value = "bwrap"
+    self.session.backend.get_status.return_value = {
+      "sbox_dir": "/tmp/sandbox/.chatty/sbox",
+      "home_bytes": 1024,
+      "home_files": 2,
+      "upper_bytes": 2048,
+      "upper_files": 4,
+      "total_bytes": 3072,
+      "total_files": 6,
+    }
+    self.assertTrue(cmd_bwrap(self.session, ""))
+    self.session.backend.get_status.assert_called_once()
+
+    self.assertTrue(cmd_bwrap(self.session, "reset"))
+    self.session.backend.reset_sandbox.assert_called_once()
+
+    self.assertTrue(cmd_bwrap(self.session, "unknown_arg"))
 
   def test_cmd_skill(self):
     self.session.ondemand_skills = {

@@ -62,3 +62,16 @@ class TestSystemPromptDir(unittest.TestCase):
     )
 
     self.assertIn("Sandbox prompt content.", session.system_prompt)
+
+  def test_system_prompt_backend_addon(self):
+    from unittest.mock import MagicMock
+    session = ChatbotSession(
+      provider="ollama",
+      model="test-model",
+      sandbox=self.sandbox_dir
+    )
+    session.backend = MagicMock()
+    session.backend.get_system_prompt_addon.return_value = "## Backend Addon Instructions"
+
+    active_prompt = session.get_active_system_prompt()
+    self.assertIn("## Backend Addon Instructions", active_prompt)
