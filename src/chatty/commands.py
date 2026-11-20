@@ -976,64 +976,34 @@ def cmd_whitelist(session: Any, arg: str) -> bool:
 
 def cmd_config(session: Any, arg: str) -> bool:
   from rich.table import Table
-  allowed_keys = {
-    "api_delay": float,
-    "api_timeout": float,
-    "oracle_timeout": float,
-    "discovery_timeout": float,
-    "profile": str,
-    "max_loops": int,
-    "context_size": int,
-    "max_thinking_chars": int,
-    "max_thinking_leeway_chars": int,
-    "history_keep_messages": int,
-    "prompt_caching": bool,
-    "max_read_chars": int,
-    "max_grep_results": int,
-    "max_command_chars": int,
-    "max_url_chars": int,
-    "max_dir_items": int,
-    "repo_map": bool,
-    "repo_map_tokens": int,
-    "discovery_model": str,
-    "discovery_loops": int,
-    "auto_approve": bool,
-  }
-  
+  from chatty.config_specs import CONFIG_SPECS
+
   arg = arg.strip()
   if not arg:
     table = Table(title="Configuration Settings", show_header=True, header_style="bold magenta")
     table.add_column("Parameter", style="cyan")
     table.add_column("Value", style="green")
     table.add_column("Type", style="dim white")
-    for key, val_type in sorted(allowed_keys.items()):
+    table.add_column("Description", style="white")
+    for key, spec in sorted(CONFIG_SPECS.items()):
       val = getattr(session, key, None)
-      table.add_row(key, str(val), val_type.__name__)
+      table.add_row(key, str(val), spec.type.__name__, spec.description)
     console.print(table)
     return True
-    
+
   if "=" in arg:
     parts = arg.split("=", 1)
     key = parts[0].strip().lower()
     val_str = parts[1].strip()
-    
-    if key not in allowed_keys:
+
+    if key not in CONFIG_SPECS:
       console.print(f"[bold red]Error: '{key}' is not a configurable parameter.[/bold red]")
-      console.print(f"Allowed parameters: {', '.join(sorted(allowed_keys.keys()))}")
+      console.print(f"Allowed parameters: {', '.join(sorted(CONFIG_SPECS.keys()))}")
       return True
-      
-    val_type = allowed_keys[key]
+
+    spec = CONFIG_SPECS[key]
     try:
-      if val_type is bool:
-        if val_str.lower() in ("true", "yes", "1", "on"):
-          parsed_val = True
-        elif val_str.lower() in ("false", "no", "0", "off"):
-          parsed_val = False
-        else:
-          raise ValueError("Must be a boolean value (true/false, yes/no, 1/0, on/off)")
-      else:
-        parsed_val = val_type(val_str)
-        
+      parsed_val = spec.parse_value(val_str)
       setattr(session, key, parsed_val)
       if key == "profile":
         from chatty.profiles import get_profile
@@ -1046,13 +1016,15 @@ def cmd_config(session: Any, arg: str) -> bool:
       console.print(f"[bold red]Error parsing value for '{key}': {str(e)}[/bold red]")
   else:
     key = arg.strip().lower()
-    if key not in allowed_keys:
+    if key not in CONFIG_SPECS:
       console.print(f"[bold red]Error: '{key}' is not a configurable parameter.[/bold red]")
-      console.print(f"Allowed parameters: {', '.join(sorted(allowed_keys.keys()))}")
+      console.print(f"Allowed parameters: {', '.join(sorted(CONFIG_SPECS.keys()))}")
       return True
+    spec = CONFIG_SPECS[key]
     val = getattr(session, key, None)
-    console.print(f"{key} = [bold green]{val}[/bold green] (type: {allowed_keys[key].__name__})")
-    
+    console.print(f"{key} = [bold green]{val}[/bold green] (type: {spec.type.__name__})")
+    console.print(f"[dim]{spec.description}[/dim]")
+
   return True
 
 

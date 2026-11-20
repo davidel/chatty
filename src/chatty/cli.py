@@ -9,6 +9,7 @@ from chatty.logging_setup import setup_logging
 from chatty.utils import get_ollama_models, load_system_prompt_from_file
 from chatty.session import ChatbotSession
 from chatty.llm import get_default_openrouter_model
+from chatty.config_specs import register_config_arguments
 
 logger = logging.getLogger("chatty")
 console = Console()
@@ -32,28 +33,12 @@ def main():
     help="Model identifier to use as the oracle. Default determines based on provider."
   )
   parser.add_argument(
-    "--discovery-model",
-    help="Model identifier to use for the discovery/scout agent (defaults to active model)."
-  )
-  parser.add_argument(
-    "--discovery-loops",
-    type=int,
-    default=50,
-    help="Maximum tool loops allowed for the discovery agent (default: 50)."
-  )
-  parser.add_argument(
     "--roundtable-models", "-rm",
     help="Model identifier(s) for the round table expert panel (comma-separated)."
   )
   parser.add_argument(
     "--roundtable-moderator",
     help="Model identifier to use as the round table moderator (defaults to active model)."
-  )
-  parser.add_argument(
-    "--context-size", "-c",
-    type=int,
-    default=8192,
-    help="Target context window length constraint in tokens (default: 8192)."
   )
   parser.add_argument(
     "--sandbox", "-s",
@@ -84,18 +69,6 @@ def main():
     help="Load all available skills statically into the system prompt to maximize prompt caching (defaults to True for OpenRouter, False for Ollama)."
   )
   parser.add_argument(
-    "--prompt-caching",
-    action="store_true",
-    default=False,
-    help="Explicitly enable prompt caching for compatible models (adds cache_control tagging, default: False)."
-  )
-  parser.add_argument(
-    "--max-loops", "-l",
-    type=int,
-    default=20,
-    help="Maximum sequential tool execution loops allowed in a single turn (default: 20)."
-  )
-  parser.add_argument(
     "--config-prompt", "-f",
     help="Path to a YAML or text configuration file containing the custom system prompt."
   )
@@ -114,46 +87,10 @@ def main():
     help="API Base URL override (defaults to Ollama local endpoint or OpenRouter base URL)."
   )
   parser.add_argument(
-    "--max-read-chars",
-    type=int,
-    default=40000,
-    help="Max characters to read from a file during full read tool execution (default: 40000)."
-  )
-  parser.add_argument(
-    "--max-grep-results",
-    type=int,
-    default=100,
-    help="Max results returned by regex search tool (default: 100)."
-  )
-  parser.add_argument(
-    "--max-command-chars",
-    type=int,
-    default=16000,
-    help="Max characters returned from standard output/error of a shell command (default: 16000)."
-  )
-  parser.add_argument(
     "--max-history-tool-chars",
     type=int,
     default=1000,
     help="Max characters to keep in historical tool outputs before compression (default: 1000)."
-  )
-  parser.add_argument(
-    "--history-keep-messages",
-    type=int,
-    default=4,
-    help="Number of recent messages to keep fully uncompressed (default: 4)."
-  )
-  parser.add_argument(
-    "--max-url-chars",
-    type=int,
-    default=24000,
-    help="Max characters returned from fetched URLs (default: 24000)."
-  )
-  parser.add_argument(
-    "--max-dir-items",
-    type=int,
-    default=200,
-    help="Max items listed by the directory list tool (default: 200)."
   )
   parser.add_argument(
     "--log-file",
@@ -173,12 +110,6 @@ def main():
     help="Run the chatbot in headless mode (no console printing or terminal interactive loop)."
   )
   parser.add_argument(
-    "--auto-approve",
-    action="store_true",
-    default=False,
-    help="Automatically approve file changes without interactive prompt."
-  )
-  parser.add_argument(
     "--mcp-config",
     help="Path to an MCP (Model Context Protocol) JSON configuration file."
   )
@@ -187,42 +118,6 @@ def main():
     action=argparse.BooleanOptionalAction,
     default=True,
     help="Enable or disable Model Context Protocol (MCP) server integration (default: True)."
-  )
-  parser.add_argument(
-    "--max-thinking-chars",
-    type=int,
-    default=12000,
-    help="Maximum internal thinking characters before prompting the user (default: 12000)."
-  )
-  parser.add_argument(
-    "--max-thinking-leeway-chars",
-    type=int,
-    default=2000,
-    help="Leeway in characters beyond the maximum before hard-aborting or prompting (default: 2000)."
-  )
-  parser.add_argument(
-    "--api-delay",
-    type=float,
-    default=2.5,
-    help="Minimum delay in seconds between consecutive API requests (default: 2.5)."
-  )
-  parser.add_argument(
-    "--api-timeout",
-    type=float,
-    default=60.0,
-    help="Timeout in seconds for API requests and streams (default: 60.0)."
-  )
-  parser.add_argument(
-    "--oracle-timeout",
-    type=float,
-    default=180.0,
-    help="Timeout in seconds for oracle API requests and streams (default: 180.0)."
-  )
-  parser.add_argument(
-    "--discovery-timeout",
-    type=float,
-    default=None,
-    help="Timeout in seconds for discovery agent API requests and streams (default: inherits --api-timeout)."
   )
   parser.add_argument(
     "--roundtable-timeout",
@@ -236,25 +131,7 @@ def main():
     default=10,
     help="Default maximum tool loops per round table expert turn (default: 10)."
   )
-  parser.add_argument(
-    "--profile",
-    type=str,
-    default="coder",
-    choices=["coder", "general"],
-    help="Agent role profile ('coder' for software engineering, 'general' for general assistant; default: 'coder')."
-  )
-  parser.add_argument(
-    "--repo-map",
-    action=argparse.BooleanOptionalAction,
-    default=None,
-    help="Include a Tree-Sitter repository map in the system prompt (default: True for coder, False for general)."
-  )
-  parser.add_argument(
-    "--repo-map-tokens",
-    type=int,
-    default=1024,
-    help="Target token budget for repository map (default: 1024)."
-  )
+  register_config_arguments(parser)
   parser.add_argument(
     "--backend", "-B",
     choices=["auto", "docker", "landlock", "none"],
