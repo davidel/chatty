@@ -15,7 +15,7 @@ Chatty provides a local terminal loop that allows an LLM agent to interact with 
 - **Multi-Provider Flexibility**: Switch seamlessly between local Ollama instances, cloud-based OpenRouter endpoints, or any custom API provider (such as Anthropic, Chatty, DeepSeek, Groq, etc.) via LiteLLM integration.
 - **Oracle Query Delegation**: Consult a more advanced oracle model dynamically during a session via the [ask_oracle](file:///tmp/chatty/src/chatty/tools/__init__.py#L668) tool or the `/oracle` slash command.
 - **Multi-Model Round Table Deliberation**: Form a panel of expert models (e.g. local Ollama or budget OpenRouter models) to sequentially debate and refine architectural decisions and complex logic on named propositions ($P_1, P_2, \dots$) until consensus or explicit trade-offs are reached.
-- **Sandboxed Execution Backends**: Restricts file modifications and commands strictly to a sandbox root (default `./sandbox`). Supports a companion Docker container for hermetic isolation and reproducible toolchains, Linux Landlock kernel-level filesystem sandboxing, and direct execution.
+- **Sandboxed Execution Backends**: Restricts file modifications and commands strictly to a sandbox root (default `./sandbox`). Supports a companion Docker container for hermetic isolation, Bubblewrap unprivileged namespace sandboxing, Linux Landlock kernel-level filesystem sandboxing, and direct execution.
 - **User-Space AST Validation**: Parses Python scripts executed via shell commands and blocks direct filesystem operations unless explicitly permitted or whitelisted by the user.
 - **Interactive UI**: Status bars showing the provider, active model, token counter, active loop count, and sandbox directory path. Autocomplete and multiline inputs are fully integrated.
 - **Slash Commands**: Modify settings dynamically mid-session, view tool metrics, or compress history to save tokens.
@@ -73,7 +73,7 @@ python3 -m chatty [options]
 | `--model` | `-m` | string | *Auto-resolved* | Model identifier(s) to load. Can be specified multiple times or as comma-separated values. The first becomes the active model. If omitted, reuses the saved model from `.chatty/models.json` if available. Otherwise, Ollama auto-detects first local model (falls back to `qwen2.5-coder:7b`) and OpenRouter dynamically defaults to the most popular free model (falls back to `google/gemini-2.5-flash:free`). Custom: required (no fallback). |
 | `--oracle-model` | *None* | string | *None* | Model identifier to use as the oracle. If omitted, reuses the saved oracle model from `.chatty/models.json` if available. |
 | `--context-size` | `-c` | integer | `8192` | Target context window length constraint in tokens. |
-| `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. If neither Docker nor Landlock is available and `--sandbox` is specified, Chatty aborts to prevent un-sandboxed execution unless `--backend none` is passed. |
+| `--sandbox` | `-s` | string | `./sandbox` | Path to the sandboxed folder. All writes and runs are jailed inside this directory. If neither Docker, Bubblewrap, nor Landlock is available and `--sandbox` is specified, Chatty aborts to prevent un-sandboxed execution unless `--backend none` is passed. |
 | `--skills-path` | `-k` | string | *None* | Custom directory paths to scan for static/dynamic Skills (can be specified multiple times). |
 | `--ondemand-skills-path` | `-o` | string | *None* | Custom directory paths to scan for on-demand Skills (can be specified multiple times). |
 | `--whitelist` | `-w` | string | *None* | Add an out-of-sandbox path to the initial whitelist. Can end with `:ro` or `:rw` to set mode (defaults to `ro`). Can be specified multiple times. |
@@ -107,7 +107,7 @@ python3 -m chatty [options]
 | `--roundtable-models` | `-rm` | string | *None* | Comma-separated model identifiers for the round table expert panel. If omitted, loads saved models from `.chatty/models.json` or falls back to active model. |
 | `--roundtable-moderator` | *None* | string | *None* | Model identifier for the round table moderator. If omitted, loads saved moderator from `.chatty/models.json` or falls back to active model. |
 | `--roundtable-timeout` | *None* | float | `120.0` | Timeout in seconds for round table expert API requests and streams. |
-| `--backend` | `-B` | string | `auto` | Execution backend for shell commands: `auto` (default: Docker if available, else Landlock on Linux, else fails if `--sandbox` specified), `docker` (companion container), `landlock` (Linux Landlock LSM), or `none` (direct host execution). |
+| `--backend` | `-B` | string | `auto` | Execution backend for shell commands: `auto` (default: Docker if available, else Bubblewrap/Landlock on Linux, else fails if `--sandbox` specified), `docker` (companion container), `bwrap` (Bubblewrap sandbox), `landlock` (Linux Landlock LSM), or `none` (direct host execution). |
 | `--docker-image` | *None* | string | `chatty-sandbox:<user>` | Docker image tag to use for the companion container. |
 | `--docker-base-image` | *None* | string | `debian:stable-slim` | Base image to use when building the companion container. |
 | `--dockerfile` | *None* | string | *None* | Path to a custom Dockerfile to build and use for the companion container. |
@@ -456,12 +456,14 @@ Additionally, Python script executions (either run inline with `python -c` or lo
 ### 2. Pluggable Execution Backends (`--backend`)
 Chatty supports multiple execution backends to run commands generated by the LLM:
 * **`docker`**: Spawns and manages a companion Docker container for hermetic isolation.
+* **`bwrap`**: Uses Linux Bubblewrap unprivileged namespaces (`user`, `pid`, `ipc`, `uts`, `cgroup`) and read-only filesystem mounts.
 * **`landlock`**: Uses the Linux Landlock LSM to restrict filesystem access at the kernel level.
 * **`none`**: Direct user-space execution on the host without sandboxing.
 * **`auto`** *(Default)*: Automatically selects the most secure available backend using the following resolution hierarchy:
   1. **Docker companion container**: Selected if Docker tools are installed and the daemon is reachable.
-  2. **Linux Landlock**: Selected if Docker is unavailable, the host is Linux (kernel 5.13+), and Landlock binary compiles.
-  3. **Strict Sandboxing Check**: If neither Docker nor Landlock is available and a `--sandbox` directory was explicitly specified, Chatty immediately aborts with an error to prevent accidental un-sandboxed execution. To run commands directly on the host, explicitly pass `--backend none`.
+  2. **Bubblewrap (`bwrap`)**: Selected if Bubblewrap is installed and capable of unsharing namespaces.
+  3. **Linux Landlock**: Selected if Docker/Bubblewrap are unavailable, the host is Linux (kernel 5.13+), and Landlock binary compiles.
+  4. **Strict Sandboxing Check**: If neither Docker, Bubblewrap, nor Landlock is available and a `--sandbox` directory was explicitly specified, Chatty immediately aborts with an error to prevent accidental un-sandboxed execution. To run commands directly on the host, explicitly pass `--backend none`.
 
 ### 3. Companion Docker Container Backend
 When the Docker backend is active, Chatty manages the entire lifecycle of an isolated companion container:
@@ -521,7 +523,23 @@ When the Docker backend is active, Chatty manages the entire lifecycle of an iso
   - **Output Scrubbing**: As defense-in-depth, all command outputs (`stdout` and `stderr` in foreground commands, background checks, and output peeks) automatically scrub configured secrets with `[REDACTED_SECRET]`.
   - Can be toggled with `--docker-auth-proxy` or `--no-docker-auth-proxy` (enabled by default).
 
-### 4. Kernel-Level Linux Landlock Sandboxing
+### 4. Bubblewrap (bwrap) Process & Namespace Sandboxing
+When Bubblewrap (`bwrap`) is available on Linux, Chatty can isolate commands using unprivileged user and mount namespaces without requiring root permissions or Docker.
+
+* **Namespace Isolation**: Unshares process (`--unshare-pid`), user (`--unshare-user`), IPC (`--unshare-ipc`), hostname (`--unshare-uts`), and cgroup (`--unshare-cgroup`) namespaces.
+* **Read-Only Root Filesystem**: Mounts the host root read-only (`--ro-bind / /`), protecting system binaries, libraries, and configurations from modification while keeping them accessible.
+* **Isolated Temporary Directory**: Replaces `/tmp` with a private in-memory tmpfs (`--tmpfs /tmp`) to prevent temporary file leakage.
+* **Workspace Read-Write Mount**: Binds the project sandbox folder read-write (`--bind <sandbox> <sandbox>`) and sets it as the working directory (`--chdir`).
+* **Process Lifetime**: Passes `--die-with-parent` to ensure child processes cleanly terminate if the agent exits or is interrupted.
+* **Host Companion Daemon (`bwrap_companion.py`)**:
+  When Chatty itself runs inside a locked-down container or outer sandbox where nested user namespaces (`CLONE_NEWUSER`) are blocked by outer security profiles, Chatty provides a host companion daemon:
+  ```bash
+  # Run on host:
+  python3 -m chatty.bwrap_companion --socket-path /tmp/chatty_bwrap.sock
+  ```
+  The companion daemon listens on a UNIX domain socket, supports 4-byte length-prefixed framing (handling arbitrary payload and command sizes > 64KB), and runs Bubblewrap sandboxes natively on the host on behalf of the containerized session.
+
+### 5. Kernel-Level Linux Landlock Sandboxing
 On Linux (kernel version 5.13+), Chatty provides transparent, compile-on-demand process isolation using the Linux **Landlock LSM (Linux Security Module)**. 
 
 #### Compilation Flow
@@ -542,14 +560,14 @@ The [landlock_exec](file:///tmp/chatty/src/chatty/landlock_exec.c) binary intera
 * **No New Privileges**: Configures `prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)` so that processes cannot escalate privileges.
 * **Kernel Enforcement**: Enforces the ruleset using the `landlock_restrict_self` system call, sealing the sandbox rules for the current process and all future sub-processes.
 
-### 5. Out-of-Sandbox Path Whitelisting
+### 6. Out-of-Sandbox Path Whitelisting
 To allow the chatbot to access files or directories outside the sandboxed folder:
 * **Default Permissions**: By default, the system temporary directory (`/tmp` / `tempfile.gettempdir()`) is included in the Read-Write whitelist to allow temporary file operations matching the sandbox environment.
 * **CLI Startup Whitelist**: Use the `--whitelist` (or `-w`) option to whitelist paths at startup.
   ```bash
   chatty -w /usr/include:ro -w /home/user/project
   ```
-  Paths default to Read-Only (`ro`) unless suffixed with `:rw` (Read-Write). Whitelisted paths are mounted into Docker companion containers or passed to Landlock accordingly.
+  Paths default to Read-Only (`ro`) unless suffixed with `:rw` (Read-Write). Whitelisted paths are mounted into Docker companion containers, passed to Bubblewrap bind mounts, or passed to Landlock accordingly.
 * **Interactive Whitelisting**: If the agent attempts to read or write a file outside the sandbox that is not whitelisted, Chatty will prompt you interactively:
   * `[y]es`: Allow access for this operation once.
   * `[n]o`: Deny access.
