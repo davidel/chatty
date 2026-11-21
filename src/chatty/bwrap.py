@@ -325,6 +325,5 @@ def wrap_command_with_bwrap(
       maybe_bind(args, p, "--bind")
 
   args.extend(["--chdir", working_dir])
-  args.extend(["--setenv", "SBOXED", "1"])
   args.extend(["--", "/bin/sh", "-c", command])
   return args

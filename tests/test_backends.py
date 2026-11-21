@@ -97,7 +97,7 @@ class TestBubblewrapBackend(unittest.TestCase):
     self.assertIn("--chdir", cmd_args)
     self.assertIn("--setenv", cmd_args)
     self.assertIn("MAMBA_ROOT_PREFIX", cmd_args)
-    self.assertIn("SBOXED", cmd_args)
+    self.assertNotIn("SBOXED", cmd_args)
     self.assertEqual(cmd_args[-4:], ["--", "/bin/sh", "-c", "echo 42"])
 
   def test_bubblewrap_backend(self):
