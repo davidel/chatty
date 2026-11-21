@@ -12,6 +12,7 @@ from chatty.bwrap import (
   get_cached_micromamba_path,
   init_bwrap_sbox_dirs,
   is_bwrap_overlay_supported,
+  maybe_bind,
   reset_bwrap_sbox,
   safe_rmtree,
   wrap_command_with_bwrap,
@@ -147,3 +148,21 @@ class TestBwrapHelpers(unittest.TestCase):
       self.assertEqual(res, dest)
       self.assertTrue(os.path.exists(dest))
       self.assertTrue(os.access(dest, os.X_OK))
+
+  def test_maybe_bind_path_exists_default_dest(self):
+    args = []
+    res = maybe_bind(args, self.sandbox_dir, "--ro-bind-try")
+    self.assertTrue(res)
+    self.assertEqual(args, ["--ro-bind-try", self.sandbox_dir, self.sandbox_dir])
+
+  def test_maybe_bind_path_exists_custom_dest(self):
+    args = []
+    res = maybe_bind(args, self.sandbox_dir, "--bind", dest="/custom/dest")
+    self.assertTrue(res)
+    self.assertEqual(args, ["--bind", self.sandbox_dir, "/custom/dest"])
+
+  def test_maybe_bind_path_does_not_exist(self):
+    args = []
+    res = maybe_bind(args, "/nonexistent/test/path/12345", "--bind")
+    self.assertFalse(res)
+    self.assertEqual(args, [])

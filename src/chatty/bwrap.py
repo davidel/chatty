@@ -251,6 +251,20 @@ def is_bwrap_overlay_supported(sandbox_dir: str, bwrap_bin: Optional[str] = None
   return supported
 
 
+def maybe_bind(
+  args: List[str],
+  path: str,
+  bind_type: str,
+  dest: Optional[str] = None,
+) -> bool:
+  """Checks if path exists, and if so, adds a bind to args using bind_type, path as source, and dest or path as target."""
+  if os.path.exists(path):
+    target = dest or path
+    args.extend([bind_type, path, target])
+    return True
+  return False
+
+
 def wrap_command_with_bwrap(
   bwrap_bin: Optional[str],
   sandbox_dir: str,
@@ -280,8 +294,7 @@ def wrap_command_with_bwrap(
     "--proc", "/proc",
   ]
 
-  if os.path.exists("/sys"):
-    args.extend(["--ro-bind-try", "/sys", "/sys"])
+  maybe_bind(args, "/sys", "--ro-bind-try")
 
   args.extend(["--ro-bind", "/", "/"])
   args.extend(["--tmpfs", "/tmp"])
@@ -298,20 +311,18 @@ def wrap_command_with_bwrap(
     bin_paths = f"{mamba_prefix}/bin:{host_home}/.local/bin:/usr/local/bin:/usr/bin:/bin"
     args.extend(["--setenv", "PATH", bin_paths])
 
-  if os.path.exists("/run/resolvconf/resolv.conf"):
-    args.extend(["--ro-bind-try", "/run/resolvconf/resolv.conf", "/run/resolvconf/resolv.conf"])
-  if os.path.exists("/run/systemd/resolve"):
-    args.extend(["--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve"])
+  maybe_bind(args, "/run/resolvconf/resolv.conf", "--ro-bind-try")
+  maybe_bind(args, "/run/systemd/resolve", "--ro-bind-try")
 
   args.extend(["--bind", abs_sandbox, abs_sandbox])
 
   if ro_paths:
-    for p in dict.fromkeys(os.path.realpath(path) for path in ro_paths if os.path.exists(path)):
-      args.extend(["--ro-bind-try", p, p])
+    for p in dict.fromkeys(os.path.realpath(path) for path in ro_paths):
+      maybe_bind(args, p, "--ro-bind-try")
 
   if rw_paths:
-    for p in dict.fromkeys(os.path.realpath(path) for path in rw_paths if os.path.exists(path)):
-      args.extend(["--bind", p, p])
+    for p in dict.fromkeys(os.path.realpath(path) for path in rw_paths):
+      maybe_bind(args, p, "--bind")
 
   args.extend(["--chdir", working_dir])
   args.extend(["--setenv", "SBOXED", "1"])
