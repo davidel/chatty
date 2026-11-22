@@ -130,11 +130,12 @@ def handle_patch_file(arguments: Dict[str, Any], session: Any) -> str:
 
 def handle_format_file(arguments: Dict[str, Any], session: Any) -> str:
   path = arguments.get("path")
+  paths = arguments.get("paths")
   formatter = arguments.get("formatter")
   config_path = arguments.get("config_path")
-  if not path:
-    return "Error: Missing parameter 'path'."
-  return tool_format_file(session.sandbox, path, formatter, config_path, session=session)
+  if not path and not paths:
+    return "Error: Missing parameter 'path' or 'paths'."
+  return tool_format_file(session.sandbox, path=path, formatter=formatter, config_path=config_path, session=session, paths=paths)
 
 
 def handle_search_grep(arguments: Dict[str, Any], session: Any) -> str:

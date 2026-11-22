@@ -6,13 +6,17 @@ import subprocess
 import shlex
 import re
 import difflib
-from typing import List, Dict, Any, Tuple, Optional, Union
+import glob
+import fnmatch
+from typing import List, Dict, Any, Tuple, Optional, Union, Sequence
 
 from chatty.safety import (
   get_safe_path,
   is_text_file,
   count_lines,
-  active_session_var
+  active_session_var,
+  load_ignore_patterns,
+  is_path_ignored
 )
 from chatty.utils import print_diff, record_command_binaries
 from chatty.backup import backup_file
@@ -1131,29 +1135,54 @@ def _run_formatter_cmd(cmd_list: List[str], sandbox_dir: str, session: Any = Non
     return res.returncode, res.stdout, res.stderr
 
 
-def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_path: str = None, session: Any = None) -> str:
-  """Automatically format a source code file using the appropriate formatter."""
+ALL_SUPPORTED_FORMAT_EXTENSIONS = {
+  ".py",
+  ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".cs", ".java", ".sv", ".svh", ".v",
+  ".go",
+  ".rs", ".rlib",
+  ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md", ".json", ".yaml", ".yml",
+}
+
+FORMATTER_COMPATIBLE_EXTENSIONS = {
+  "black": {".py"},
+  "ruff": {".py"},
+  "yapf": {".py"},
+  "autopep8": {".py"},
+  "clang-format": {".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".cs", ".java", ".sv", ".svh", ".v"},
+  "gofmt": {".go"},
+  "rustfmt": {".rs", ".rlib"},
+  "prettier": {".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md", ".json", ".yaml", ".yml"},
+  "built-in-json": {".json"},
+  "built-in-yaml": {".yaml", ".yml"},
+  "built-in": {".json", ".yaml", ".yml"},
+}
+
+
+def _format_single_file_impl(
+  sandbox_dir: str,
+  safe_p: str,
+  formatter: Optional[str] = None,
+  config_path: Optional[str] = None,
+  session: Any = None
+) -> Tuple[str, str, Optional[str]]:
+  """Formats a single file.
+
+  Returns (status, message, formatter_used).
+  status is one of: 'formatted', 'unchanged', 'skipped', 'error'
+  """
   try:
-    safe_p = get_safe_path(sandbox_dir, path, write=True)
-    if not os.path.exists(safe_p):
-      return f"Error: File '{path}' does not exist."
-    if not os.path.isfile(safe_p):
-      return f"Error: Path '{path}' is not a file."
-
     rel_path = os.path.relpath(safe_p, sandbox_dir)
-    backup_file(sandbox_dir, rel_path)
-    
-    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
-      old_content = f.read()
-
     ext = os.path.splitext(safe_p)[1].lower()
-    
+
     # 1. Resolve custom configuration file path if specified
     config_abs_path = None
     if config_path:
       config_abs_path = get_safe_path(sandbox_dir, config_path)
       if not os.path.exists(config_abs_path):
-        return f"Error: Configuration file '{config_path}' does not exist."
+        return ("error", f"Error: Configuration file '{config_path}' does not exist.", None)
+
+    with open(safe_p, 'r', encoding='utf-8', errors='replace') as f:
+      old_content = f.read()
 
     # 2. Determine which formatter to use
     chosen_formatter = None
@@ -1165,7 +1194,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
         if formatter_lower in ("built-in-json", "built-in-yaml", "built-in"):
           chosen_formatter = formatter_lower
         else:
-          return f"Error: Formatter '{formatter}' is not installed or not found in system path."
+          return ("error", f"Error: Formatter '{formatter}' is not installed or not found in system path.", None)
       else:
         chosen_formatter = formatter_lower
 
@@ -1178,7 +1207,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       if detected_formatter:
         if not _is_tool_available(detected_formatter, session):
           rel_cfg = os.path.relpath(detected_config, sandbox_dir) if detected_config else "repo config"
-          return f"Error: Formatter '{detected_formatter}' detected from configuration file '{rel_cfg}' is not installed on the system."
+          return ("error", f"Error: Formatter '{detected_formatter}' detected from configuration file '{rel_cfg}' is not installed on the system.", None)
         chosen_formatter = detected_formatter
         if not config_abs_path:
           config_abs_path = detected_config
@@ -1190,22 +1219,22 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
               chosen_formatter = tool
               break
           if not chosen_formatter:
-            return "Error: No Python formatter found (black, ruff, yapf, or autopep8)."
-        elif ext in (".c", ".cpp", ".h", ".hpp", ".cs", ".java", ".sv", ".svh", ".v"):
+            return ("error", "Error: No Python formatter found (black, ruff, yapf, or autopep8).", None)
+        elif ext in (".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".cs", ".java", ".sv", ".svh", ".v"):
           if _is_tool_available("clang-format", session):
             chosen_formatter = "clang-format"
           else:
-            return "Error: clang-format is not installed on the system."
+            return ("error", "Error: clang-format is not installed on the system.", None)
         elif ext == ".go":
           if _is_tool_available("gofmt", session):
             chosen_formatter = "gofmt"
           else:
-            return "Error: gofmt is not installed on the system."
+            return ("error", "Error: gofmt is not installed on the system.", None)
         elif ext in (".rs", ".rlib"):
           if _is_tool_available("rustfmt", session):
             chosen_formatter = "rustfmt"
           else:
-            return "Error: rustfmt is not installed on the system."
+            return ("error", "Error: rustfmt is not installed on the system.", None)
         elif ext in (".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".md", ".json", ".yaml", ".yml"):
           if _is_tool_available("prettier", session):
             chosen_formatter = "prettier"
@@ -1214,9 +1243,11 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
           elif ext in (".yaml", ".yml"):
             chosen_formatter = "built-in-yaml"
           else:
-            return "Error: prettier is not installed on the system."
+            return ("error", "Error: prettier is not installed on the system.", None)
         else:
-          return f"Error: No formatter configured for files with extension '{ext}'."
+          return ("error", f"Error: No formatter configured for files with extension '{ext}'.", None)
+
+    backup_file(sandbox_dir, rel_path)
 
     # 3. Run the chosen formatter command
     formatted_content = None
@@ -1232,7 +1263,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
       if retcode != 0:
         err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
-        return f"Error running {chosen_formatter}: {err_msg}"
+        return ("error", f"Error running {chosen_formatter}: {err_msg}", chosen_formatter)
 
     elif chosen_formatter == "ruff":
       cmd_args = ["ruff", "format"]
@@ -1242,7 +1273,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
       if retcode != 0:
         err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
-        return f"Error running {chosen_formatter}: {err_msg}"
+        return ("error", f"Error running {chosen_formatter}: {err_msg}", chosen_formatter)
 
     elif chosen_formatter == "clang-format":
       cmd_args = ["clang-format", "-i"]
@@ -1252,7 +1283,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
       if retcode != 0:
         err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
-        return f"Error running {chosen_formatter}: {err_msg}"
+        return ("error", f"Error running {chosen_formatter}: {err_msg}", chosen_formatter)
 
     elif chosen_formatter == "prettier":
       cmd_args = ["prettier", "--write"]
@@ -1262,14 +1293,14 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
       if retcode != 0:
         err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
-        return f"Error running {chosen_formatter}: {err_msg}"
+        return ("error", f"Error running {chosen_formatter}: {err_msg}", chosen_formatter)
 
     elif chosen_formatter == "gofmt":
       cmd_args = ["gofmt", "-w", target_rel]
       retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
       if retcode != 0:
         err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
-        return f"Error running {chosen_formatter}: {err_msg}"
+        return ("error", f"Error running {chosen_formatter}: {err_msg}", chosen_formatter)
 
     elif chosen_formatter == "rustfmt":
       cmd_args = ["rustfmt"]
@@ -1279,7 +1310,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
       if retcode != 0:
         err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
-        return f"Error running {chosen_formatter}: {err_msg}"
+        return ("error", f"Error running {chosen_formatter}: {err_msg}", chosen_formatter)
 
     elif chosen_formatter == "yapf":
       cmd_args = ["yapf", "-i"]
@@ -1289,7 +1320,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
       if retcode != 0:
         err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
-        return f"Error running {chosen_formatter}: {err_msg}"
+        return ("error", f"Error running {chosen_formatter}: {err_msg}", chosen_formatter)
 
     elif chosen_formatter == "autopep8":
       cmd_args = ["autopep8", "-i"]
@@ -1299,7 +1330,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
       retcode, stdout, stderr = _run_formatter_cmd(cmd_args, sandbox_dir, session)
       if retcode != 0:
         err_msg = stderr.strip() or stdout.strip() or f"exit code {retcode}"
-        return f"Error running {chosen_formatter}: {err_msg}"
+        return ("error", f"Error running {chosen_formatter}: {err_msg}", chosen_formatter)
 
     elif chosen_formatter in ("built-in-json", "built-in"):
       try:
@@ -1307,7 +1338,7 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
         formatted_content = json.dumps(data, indent=2) + "\n"
         formatter_used = "built-in JSON formatter"
       except json.JSONDecodeError as e:
-        return f"Error parsing JSON: {str(e)}"
+        return ("error", f"Error parsing JSON: {str(e)}", "built-in JSON formatter")
 
     elif chosen_formatter in ("built-in-yaml", "built-in"):
       import yaml
@@ -1316,10 +1347,10 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
         formatted_content = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
         formatter_used = "built-in PyYAML formatter"
       except Exception as e:
-        return f"Error formatting YAML: {str(e)}"
+        return ("error", f"Error formatting YAML: {str(e)}", "built-in PyYAML formatter")
 
     else:
-      return f"Error: Unsupported formatter '{chosen_formatter}'."
+      return ("error", f"Error: Unsupported formatter '{chosen_formatter}'.", None)
 
     # 4. Save and return results
     if formatted_content is not None and formatted_content != old_content:
@@ -1331,14 +1362,257 @@ def tool_format_file(sandbox_dir: str, path: str, formatter: str = None, config_
         formatted_content = f.read()
 
     if formatted_content == old_content:
-      return f"File '{rel_path}' is already formatted correctly."
+      return ("unchanged", f"File '{rel_path}' is already formatted correctly.", formatter_used)
 
     print_diff(rel_path, old_content, formatted_content)
     config_info = f" (config: {os.path.relpath(config_abs_path, sandbox_dir)})" if config_abs_path else ""
-    return f"Successfully formatted file '{rel_path}' using {formatter_used}{config_info}."
+    return ("formatted", f"Successfully formatted file '{rel_path}' using {formatter_used}{config_info}.", formatter_used)
 
   except Exception as e:
-    return f"Error formatting file: {str(e)}"
+    return ("error", f"Error formatting file: {str(e)}", None)
+
+
+def _collect_format_targets(
+  sandbox_dir: str,
+  targets: List[str]
+) -> Tuple[List[str], List[str]]:
+  """Expands targets (files, directories, glob patterns) into relative file paths.
+
+  Returns (matched_relative_files, missing_targets).
+  """
+  ignore_patterns = load_ignore_patterns(sandbox_dir)
+  matched_files: List[str] = []
+  missing_targets: List[str] = []
+
+  for raw_target in targets:
+    target = raw_target.strip()
+    if not target:
+      continue
+
+    has_wildcard = any(c in target for c in ('*', '?', '['))
+    if has_wildcard:
+      if os.path.isabs(target):
+        try:
+          rel_pat = os.path.relpath(target, sandbox_dir)
+          if rel_pat.startswith(".."):
+            missing_targets.append(target)
+            continue
+        except Exception:
+          missing_targets.append(target)
+          continue
+      else:
+        rel_pat = os.path.normpath(target)
+        if rel_pat.startswith(".."):
+          missing_targets.append(target)
+          continue
+
+      found_matches = glob.glob(rel_pat, root_dir=sandbox_dir, recursive=True)
+      if not found_matches and "/" not in rel_pat and not rel_pat.startswith("**"):
+        recursive_pat = os.path.join("**", rel_pat)
+        found_matches = glob.glob(recursive_pat, root_dir=sandbox_dir, recursive=True)
+
+      matched_in_pattern = 0
+      for m in found_matches:
+        norm_m = os.path.normpath(m)
+        if is_path_ignored(norm_m, ignore_patterns):
+          continue
+        abs_m = os.path.join(sandbox_dir, norm_m)
+        if os.path.isfile(abs_m):
+          matched_files.append(norm_m)
+          matched_in_pattern += 1
+
+      if matched_in_pattern == 0:
+        missing_targets.append(target)
+
+    else:
+      try:
+        safe_p = get_safe_path(sandbox_dir, target, write=True)
+      except Exception:
+        missing_targets.append(target)
+        continue
+
+      if not os.path.exists(safe_p):
+        missing_targets.append(target)
+        continue
+
+      if os.path.isdir(safe_p):
+        dir_matched = 0
+        for root, dirs, files in os.walk(safe_p):
+          for d in list(dirs):
+            dir_path = os.path.join(root, d)
+            try:
+              safe_dir = get_safe_path(sandbox_dir, dir_path)
+              rel_dir = os.path.relpath(safe_dir, sandbox_dir)
+              if is_path_ignored(rel_dir, ignore_patterns, is_dir=True):
+                dirs.remove(d)
+            except Exception:
+              dirs.remove(d)
+          for file in files:
+            full_path = os.path.join(root, file)
+            try:
+              safe_file_path = get_safe_path(sandbox_dir, full_path)
+              rel_path = os.path.relpath(safe_file_path, sandbox_dir)
+              if is_path_ignored(rel_path, ignore_patterns):
+                continue
+              if os.path.isfile(safe_file_path):
+                matched_files.append(rel_path)
+                dir_matched += 1
+            except Exception:
+              continue
+
+        if dir_matched == 0:
+          missing_targets.append(target)
+
+      elif os.path.isfile(safe_p):
+        rel_p = os.path.relpath(safe_p, sandbox_dir)
+        matched_files.append(rel_p)
+
+  seen = set()
+  deduped: List[str] = []
+  for f in matched_files:
+    if f not in seen:
+      seen.add(f)
+      deduped.append(f)
+
+  deduped.sort()
+  return (deduped, missing_targets)
+
+
+def tool_format_file(
+  sandbox_dir: str,
+  path: Optional[Union[str, Sequence[str]]] = None,
+  formatter: Optional[str] = None,
+  config_path: Optional[str] = None,
+  session: Any = None,
+  paths: Optional[Union[str, Sequence[str]]] = None
+) -> str:
+  """Automatically format source code files using the appropriate formatter."""
+  try:
+    raw_targets: List[str] = []
+    if isinstance(path, str):
+      raw_targets.append(path)
+    elif isinstance(path, (list, tuple, set)):
+      for p in path:
+        if p:
+          raw_targets.append(str(p))
+
+    if isinstance(paths, str):
+      raw_targets.append(paths)
+    elif isinstance(paths, (list, tuple, set)):
+      for p in paths:
+        if p:
+          raw_targets.append(str(p))
+
+    if not raw_targets:
+      return "Error: Missing parameter 'path' or 'paths'."
+
+    is_batch = (
+      paths is not None
+      or isinstance(path, (list, tuple, set))
+      or len(raw_targets) > 1
+      or any(any(c in t for c in ('*', '?', '[')) for t in raw_targets)
+    )
+
+    if not is_batch:
+      target = raw_targets[0]
+      safe_p = get_safe_path(sandbox_dir, target, write=True)
+      if not os.path.exists(safe_p):
+        return f"Error: File '{target}' does not exist."
+      if os.path.isdir(safe_p):
+        is_batch = True
+      else:
+        if not os.path.isfile(safe_p):
+          return f"Error: Path '{target}' is not a file."
+
+        status, message, _ = _format_single_file_impl(
+          sandbox_dir,
+          safe_p,
+          formatter=formatter,
+          config_path=config_path,
+          session=session
+        )
+        return message
+
+    matched_files, missing_targets = _collect_format_targets(sandbox_dir, raw_targets)
+
+    if not matched_files:
+      if missing_targets:
+        return f"Error: Target path(s) or pattern(s) not found: {', '.join(missing_targets)}"
+      return f"No matching files found for pattern(s): {', '.join(raw_targets)}"
+
+    formatted_files: List[Tuple[str, str]] = []
+    unchanged_files: List[str] = []
+    skipped_files: List[Tuple[str, str]] = []
+    error_files: List[Tuple[str, str]] = []
+
+    for rel_path in matched_files:
+      abs_file = get_safe_path(sandbox_dir, rel_path, write=True)
+      ext = os.path.splitext(abs_file)[1].lower()
+
+      if formatter:
+        f_lower = formatter.lower()
+        if f_lower in FORMATTER_COMPATIBLE_EXTENSIONS and ext not in FORMATTER_COMPATIBLE_EXTENSIONS[f_lower]:
+          skipped_files.append((rel_path, f"not supported by formatter '{formatter}'"))
+          continue
+      else:
+        if ext not in ALL_SUPPORTED_FORMAT_EXTENSIONS:
+          skipped_files.append((rel_path, f"no formatter configured for extension '{ext}'"))
+          continue
+
+      status, msg, f_used = _format_single_file_impl(
+        sandbox_dir,
+        abs_file,
+        formatter=formatter,
+        config_path=config_path,
+        session=session
+      )
+      if status == "formatted":
+        formatted_files.append((rel_path, f_used or "formatter"))
+      elif status == "unchanged":
+        unchanged_files.append(rel_path)
+      elif status == "skipped":
+        skipped_files.append((rel_path, msg))
+      else:
+        error_files.append((rel_path, msg))
+
+    total_count = len(formatted_files) + len(unchanged_files) + len(error_files)
+    if total_count == 0 and skipped_files:
+      return f"No formattable files found ({len(skipped_files)} file(s) skipped)."
+
+    if len(formatted_files) == 0 and len(error_files) == 0:
+      return f"All {len(unchanged_files)} file(s) are already formatted correctly."
+
+    summary_lines = []
+    detail_counts = []
+    if unchanged_files:
+      detail_counts.append(f"{len(unchanged_files)} unchanged")
+    if error_files:
+      detail_counts.append(f"{len(error_files)} error(s)")
+    if skipped_files:
+      detail_counts.append(f"{len(skipped_files)} skipped")
+
+    header_base = f"Formatted {len(formatted_files)} of {total_count} file(s)"
+    if detail_counts:
+      summary_lines.append(f"{header_base} ({', '.join(detail_counts)}):")
+    else:
+      summary_lines.append(f"{header_base}:")
+
+    for f_path, f_used in formatted_files:
+      summary_lines.append(f"  - formatted: {f_path} ({f_used})")
+
+    for f_path, err_msg in error_files:
+      summary_lines.append(f"  - error: {f_path}: {err_msg}")
+
+    if len(unchanged_files) <= 10:
+      for f_path in unchanged_files:
+        summary_lines.append(f"  - unchanged: {f_path}")
+    elif unchanged_files:
+      summary_lines.append(f"  - unchanged: {len(unchanged_files)} file(s)")
+
+    return "\n".join(summary_lines)
+
+  except Exception as e:
+    return f"Error formatting files: {str(e)}"
 
 
 def tool_move_file(sandbox_dir: str, src: str, dest: str) -> str:

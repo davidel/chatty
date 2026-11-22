@@ -139,13 +139,20 @@ TOOLS_SCHEMA = [
     "type": "function",
     "function": {
       "name": "format_file",
-      "description": "Format a source code file using the appropriate formatter (e.g. yapf/black/ruff for Python, clang-format for C/C++/SystemVerilog/Verilog, prettier for JS/TS/HTML/CSS/MD, or built-in json/yaml tools). Automatically detects repo configuration files (such as .style.yapf, .clang-format, pyproject.toml, .prettierrc) if not specified. Shows a diff of changes.",
+      "description": "Format source code files using the appropriate formatter (e.g. yapf/black/ruff for Python, clang-format for C/C++/SystemVerilog/Verilog, prettier for JS/TS/HTML/CSS/MD, or built-in json/yaml tools). Automatically detects repo configuration files (such as .style.yapf, .clang-format, pyproject.toml, .prettierrc) if not specified. Supports single files, directories (e.g. 'src/'), glob patterns (e.g. 'src/**/*.py'), or multiple paths. Shows a diff of changes.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "The file path relative to the sandbox root."
+            "description": "The file path, directory path (e.g. 'src/'), or glob pattern (e.g. 'src/**/*.py', '*.json') relative to the sandbox root."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of file paths, directory paths, or glob patterns relative to the sandbox root to format in batch."
           },
           "formatter": {
             "type": "string",
@@ -155,8 +162,7 @@ TOOLS_SCHEMA = [
             "type": "string",
             "description": "Optional path to the tool-specific configuration file relative to the sandbox root (e.g. '.style.yapf', '.clang-format', 'pyproject.toml', 'prettier.config.js', etc.). If omitted, chatty will automatically search for repository-level configuration files."
           }
-        },
-        "required": ["path"]
+        }
       }
     }
   },

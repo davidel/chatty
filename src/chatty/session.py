@@ -1319,10 +1319,11 @@ class ChatbotSession(LLMMixin):
       if t_name == "format_file":
         t_copy["function"] = dict(t_copy["function"])
         t_copy["function"]["description"] = (
-          "Format a source code file using the appropriate formatter. Shows a diff of changes. "
+          "Format source code files using the appropriate formatter. Shows a diff of changes. "
           f"Detected available formatters on this system: {available_str}. "
           "Automatically detects repo configurations like .style.yapf, .clang-format, pyproject.toml, or .prettierrc, "
-          "or you can specify a custom formatter and the path to a tool-specific rules/configuration file."
+          "or you can specify a custom formatter and the path to a tool-specific rules/configuration file. "
+          "Supports single files, directories, glob patterns (e.g. 'src/**/*.py'), or multiple paths."
         )
       tools.append(t_copy)
 

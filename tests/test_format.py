@@ -180,6 +180,141 @@ class TestFormatFile(unittest.TestCase):
         content = f.read()
       self.assertIn("  x = 1\n  return x", content)
 
+  def test_format_glob_json(self):
+    p1 = os.path.join(self.sandbox_dir, "file1.json")
+    p2 = os.path.join(self.sandbox_dir, "file2.json")
+    with open(p1, "w") as f:
+      f.write('{"k": 1}')
+    with open(p2, "w") as f:
+      f.write('{"k":   2}')
+
+    result = tool_format_file(self.sandbox_dir, "*.json")
+    self.assertIn("Formatted 2 of 2 file(s)", result)
+    self.assertIn("file1.json", result)
+    self.assertIn("file2.json", result)
+
+    with open(p1, "r") as f:
+      self.assertEqual(f.read(), '{\n  "k": 1\n}\n')
+    with open(p2, "r") as f:
+      self.assertEqual(f.read(), '{\n  "k": 2\n}\n')
+
+  def test_format_recursive_glob(self):
+    sub = os.path.join(self.sandbox_dir, "sub", "nested")
+    os.makedirs(sub, exist_ok=True)
+    p1 = os.path.join(self.sandbox_dir, "top.json")
+    p2 = os.path.join(sub, "inner.json")
+    with open(p1, "w") as f:
+      f.write('{"top":1}')
+    with open(p2, "w") as f:
+      f.write('{"inner":2}')
+
+    result = tool_format_file(self.sandbox_dir, "**/*.json")
+    self.assertIn("Formatted 2 of 2 file(s)", result)
+    self.assertIn("top.json", result)
+    self.assertIn("sub/nested/inner.json", result)
+
+  def test_format_directory(self):
+    sub = os.path.join(self.sandbox_dir, "mydir")
+    os.makedirs(sub, exist_ok=True)
+    p1 = os.path.join(sub, "d1.json")
+    p2 = os.path.join(sub, "d2.json")
+    with open(p1, "w") as f:
+      f.write('{"d1":1}')
+    with open(p2, "w") as f:
+      f.write('{"d2":2}')
+
+    result = tool_format_file(self.sandbox_dir, "mydir")
+    self.assertIn("Formatted 2 of 2 file(s)", result)
+    self.assertIn("mydir/d1.json", result)
+    self.assertIn("mydir/d2.json", result)
+
+  def test_format_multiple_paths_list(self):
+    p1 = os.path.join(self.sandbox_dir, "a.json")
+    p2 = os.path.join(self.sandbox_dir, "b.json")
+    with open(p1, "w") as f:
+      f.write('{"a":1}')
+    with open(p2, "w") as f:
+      f.write('{"b":2}')
+
+    result = tool_format_file(self.sandbox_dir, path=["a.json", "b.json"])
+    self.assertIn("Formatted 2 of 2 file(s)", result)
+    self.assertIn("a.json", result)
+    self.assertIn("b.json", result)
+
+  def test_format_paths_argument(self):
+    p1 = os.path.join(self.sandbox_dir, "p1.json")
+    p2 = os.path.join(self.sandbox_dir, "p2.json")
+    with open(p1, "w") as f:
+      f.write('{"p1":1}')
+    with open(p2, "w") as f:
+      f.write('{"p2":2}')
+
+    result = tool_format_file(self.sandbox_dir, paths=["p1.json", "p2.json"])
+    self.assertIn("Formatted 2 of 2 file(s)", result)
+    self.assertIn("p1.json", result)
+    self.assertIn("p2.json", result)
+
+  def test_format_glob_skips_unsupported_for_explicit_formatter(self):
+    style_path = os.path.join(self.sandbox_dir, ".style.yapf")
+    with open(style_path, "w") as f:
+      f.write("[style]\nbased_on_style = pep8\nindent_width = 2\n")
+
+    py_path = os.path.join(self.sandbox_dir, "script.py")
+    json_path = os.path.join(self.sandbox_dir, "data.json")
+    with open(py_path, "w") as f:
+      f.write("def fn():\n    return 42\n")
+    with open(json_path, "w") as f:
+      f.write('{"data": 1}')
+
+    if shutil.which("yapf"):
+      result = tool_format_file(self.sandbox_dir, "*", formatter="yapf")
+      self.assertIn("script.py", result)
+      self.assertIn("1 skipped", result)
+
+  def test_format_glob_respects_gitignore(self):
+    gitignore_path = os.path.join(self.sandbox_dir, ".gitignore")
+    with open(gitignore_path, "w") as f:
+      f.write("ignored/\n*.ignored.json\n")
+
+    ignored_dir = os.path.join(self.sandbox_dir, "ignored")
+    os.makedirs(ignored_dir, exist_ok=True)
+    with open(os.path.join(ignored_dir, "bad.json"), "w") as f:
+      f.write('{"ignored": 1}')
+    with open(os.path.join(self.sandbox_dir, "skip.ignored.json"), "w") as f:
+      f.write('{"ignored": 2}')
+
+    good_path = os.path.join(self.sandbox_dir, "good.json")
+    with open(good_path, "w") as f:
+      f.write('{"good": 1}')
+
+    result = tool_format_file(self.sandbox_dir, "**/*.json")
+    self.assertIn("Formatted 1 of 1 file(s)", result)
+    self.assertIn("good.json", result)
+    self.assertNotIn("bad.json", result)
+    self.assertNotIn("skip.ignored.json", result)
+
+  def test_format_all_already_formatted_batch(self):
+    p = os.path.join(self.sandbox_dir, "clean.json")
+    with open(p, "w") as f:
+      f.write('{\n  "clean": 1\n}\n')
+
+    result = tool_format_file(self.sandbox_dir, path=["clean.json"])
+    self.assertIn("already formatted correctly", result)
+
+  def test_format_batch_partial_error(self):
+    p1 = os.path.join(self.sandbox_dir, "valid.json")
+    p2 = os.path.join(self.sandbox_dir, "broken.json")
+    with open(p1, "w") as f:
+      f.write('{"valid": 1}')
+    with open(p2, "w") as f:
+      f.write('{"broken": ')
+
+    result = tool_format_file(self.sandbox_dir, paths=["valid.json", "broken.json"])
+    self.assertIn("Formatted 1 of 2 file(s)", result)
+    self.assertIn("1 error(s)", result)
+    self.assertIn("valid.json", result)
+    self.assertIn("broken.json", result)
+
 
 if __name__ == "__main__":
   unittest.main()
