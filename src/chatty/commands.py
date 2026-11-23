@@ -1721,6 +1721,39 @@ def cmd_auto_approve(session: Any, arg: str) -> bool:
   return True
 
 
+def cmd_god_mode(session: Any, arg: str) -> bool:
+  arg = arg.strip().lower()
+  is_safe = session.is_safe_backend() if hasattr(session, "is_safe_backend") else False
+  backend_name = session.backend.get_name() if hasattr(session, "backend") and session.backend else "local"
+
+  if not arg:
+    target_state = not getattr(session, "god_mode", False)
+  elif arg in ("on", "true", "1", "yes", "enable"):
+    target_state = True
+  elif arg in ("off", "false", "0", "no", "disable"):
+    target_state = False
+  else:
+    console.print("[bold red]Usage: /god_mode [on|off][/bold red]")
+    return True
+
+  if target_state and not is_safe:
+    console.print(
+      f"[bold red]Cannot enable God-mode:[/bold red] The current backend '{backend_name}' does not provide filesystem isolation. "
+      "God-mode requires a safe sandbox (docker, bwrap, or landlock)."
+    )
+    return True
+
+  session.god_mode = target_state
+  if hasattr(session, "config"):
+    session.config.god_mode = target_state
+
+  if target_state:
+    console.print(f"[bold green]God-mode enabled.[/bold green] All Python AST checks are bypassed inside [cyan]{backend_name}[/cyan] sandbox.")
+  else:
+    console.print("[bold yellow]God-mode disabled.[/bold yellow] Python AST checks and whitelisting restored.")
+  return True
+
+
 def cmd_mcp(session: Any, arg: str) -> bool:
   arg = arg.strip().lower()
   manager = getattr(session, "mcp_manager", None)
@@ -1999,6 +2032,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/config": cmd_config,
   "/auto_approve": cmd_auto_approve,
   "/autoapprove": cmd_auto_approve,
+  "/god_mode": cmd_god_mode,
+  "/godmode": cmd_god_mode,
   "/mcp": cmd_mcp,
   "/backups": cmd_backups,
   "/restore": cmd_restore,

@@ -361,7 +361,10 @@ def validate_command_safety(command: str, session: Optional[Any] = None) -> Opti
             sig = get_structural_signature(script_code)
             if has_forbidden_filesystem_ops(sig):
               if active_session:
-                if is_signature_whitelisted(sig, active_session.whitelisted_script_signatures):
+                if getattr(active_session, "god_mode", False) and active_session.is_safe_backend():
+                  # Whitelisted via safe sandbox god-mode, allow!
+                  pass
+                elif is_signature_whitelisted(sig, active_session.whitelisted_script_signatures):
                   # Whitelisted, allow!
                   pass
                 else:

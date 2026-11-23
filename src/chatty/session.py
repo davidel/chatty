@@ -145,6 +145,7 @@ class SessionConfig:
   prompt_caching: bool = False
   headless: bool = False
   auto_approve: bool = False
+  god_mode: bool = False
   whitelist: List[str] = field(default_factory=list)
   models: List[str] = field(default_factory=list)
   max_thinking_chars: int = 12000
@@ -338,6 +339,7 @@ class ChatbotSession(LLMMixin):
     prompt_caching: bool = False,
     headless: bool = False,
     auto_approve: bool = False,
+    god_mode: bool = False,
     whitelist: Optional[List[str]] = None,
     models: Optional[List[str]] = None,
     max_thinking_chars: int = 12000,
@@ -405,6 +407,7 @@ class ChatbotSession(LLMMixin):
         prompt_caching=prompt_caching,
         headless=headless,
         auto_approve=auto_approve,
+        god_mode=god_mode,
         whitelist=whitelist or [],
         models=models or ([model] if model else []),
         max_thinking_chars=max_thinking_chars,
@@ -457,6 +460,7 @@ class ChatbotSession(LLMMixin):
 
     self.background_commands = {}
     self.whitelisted_script_signatures = set()
+    self.god_mode = getattr(self.config, "god_mode", False)
     self.next_task_id = 1
     self.max_completed_tasks = 10
     self._active_live = None
@@ -599,6 +603,13 @@ class ChatbotSession(LLMMixin):
           console.print(f"[bold green]Added Whitelisted Read-Write path:[/bold green] {abs_path}")
           
     self.backend = self._init_backend()
+    if self.god_mode and not self.is_safe_backend():
+      logger.warning("God-mode requested but backend is not sandboxed (must be docker, bwrap, or landlock). Disabling God-mode.")
+      if not self.config.headless:
+        console.print("[bold yellow]Warning: God-mode disabled because current backend is not a safe sandbox (docker, bwrap, or landlock).[/bold yellow]")
+      self.god_mode = False
+      if hasattr(self.config, "god_mode"):
+        self.config.god_mode = False
     if getattr(self.config, "bwrap_reset", False) and hasattr(self.backend, "reset_sandbox"):
       self.backend.reset_sandbox()
       if not self.config.headless:
@@ -1874,6 +1885,14 @@ class ChatbotSession(LLMMixin):
     except (KeyboardInterrupt, EOFError):
       return False
 
+  def is_safe_backend(self) -> bool:
+    """Checks if the active execution backend is a safe sandbox (docker, bwrap, or landlock)."""
+    if hasattr(self, "backend") and self.backend is not None:
+      if hasattr(self.backend, "is_sandboxed"):
+        return bool(self.backend.is_sandboxed())
+      return self.backend.get_name() in ("docker", "bwrap", "landlock")
+    return False
+
   def prompt_for_script_permission(self, code_str: str, signature: str) -> bool:
     """Prompts the user to allow/deny execution of a Python script with an option to whitelist its signature."""
     if self.headless:
@@ -1898,15 +1917,41 @@ class ChatbotSession(LLMMixin):
 
     try:
       with self._pause_live():
-        self._print(
-          "Allow execution? "
-          "[bold green]\\[y][/bold green]es / "
-          "[bold red]\\[n][/bold red]o / "
-          "[bold cyan]\\[w][/bold cyan]hitelist (allow this class of scripts in this session): ",
-          end=""
-        )
+        is_safe = self.is_safe_backend()
+        backend_name = self.backend.get_name() if hasattr(self, "backend") and self.backend else "sandbox"
+        if is_safe:
+          self._print(
+            "Allow execution? "
+            "[bold green]\\[y][/bold green]es / "
+            "[bold red]\\[n][/bold red]o / "
+            "[bold cyan]\\[w][/bold cyan]hitelist / "
+            f"[bold magenta]god[/bold magenta] (auto-allow all scripts in {backend_name}): ",
+            end=""
+          )
+        else:
+          self._print(
+            "Allow execution? "
+            "[bold green]\\[y][/bold green]es / "
+            "[bold red]\\[n][/bold red]o / "
+            "[bold cyan]\\[w][/bold cyan]hitelist (allow this class of scripts in this session): ",
+            end=""
+          )
         response = input().strip().lower()
-        if response == 'w':
+        if response in ("god", "god-mode", "godmode"):
+          if is_safe:
+            self.god_mode = True
+            if hasattr(self, "config"):
+              self.config.god_mode = True
+            self._print(f"[bold magenta]⚡ God-mode enabled:[/bold magenta] All Python script AST checks bypassed for this session (Sandbox: {backend_name}).")
+            logger.info(f"User enabled God-mode in safe sandbox: {backend_name}")
+            return True
+          else:
+            self._print("[bold red]❌ God-mode cannot be enabled on an unsandboxed host backend (requires docker, bwrap, or landlock).[/bold red]")
+            return False
+        elif response == "g":
+          self._print("[bold yellow]Type 'god' to enable God-mode across this session.[/bold yellow]")
+          return False
+        elif response == 'w':
           self.whitelisted_script_signatures.add(signature)
           logger.info(f"User whitelisted script signature: {signature}")
           return True

@@ -100,6 +100,10 @@ class ExecutionBackend(abc.ABC):
     """Returns backend-specific environment guidelines to append to the system prompt."""
     return None
 
+  def is_sandboxed(self) -> bool:
+    """Returns True if this backend provides filesystem isolation (safe sandbox)."""
+    return False
+
   @property
   def stdin_mode(self) -> int:
     return subprocess.DEVNULL
@@ -161,6 +165,9 @@ class LocalBackend(ExecutionBackend):
 
   def get_name(self) -> str:
     return "landlock" if self.landlock_bin else "local"
+
+  def is_sandboxed(self) -> bool:
+    return bool(self.landlock_bin)
 
   def get_system_prompt_addon(self) -> Optional[str]:
     if self.landlock_bin:
@@ -253,6 +260,9 @@ class BubblewrapBackend(ExecutionBackend):
 
   def get_name(self) -> str:
     return "bwrap"
+
+  def is_sandboxed(self) -> bool:
+    return True
 
   def get_system_prompt_addon(self) -> Optional[str]:
     return (
@@ -985,6 +995,9 @@ class DockerBackend(ExecutionBackend):
 
   def get_name(self) -> str:
     return "docker"
+
+  def is_sandboxed(self) -> bool:
+    return True
 
   def get_system_prompt_addon(self) -> Optional[str]:
     return (

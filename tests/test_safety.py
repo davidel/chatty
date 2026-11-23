@@ -715,6 +715,84 @@ class TestPythonScriptSafety(unittest.TestCase):
       self.assertIsNotNone(err_deny)
       self.assertIn("filesystem operations is prohibited", err_deny)
 
+  def test_god_mode_safe_backend_bypass(self):
+    import unittest.mock as mock
+
+    # Mock backend to report as sandboxed
+    self.session.backend = mock.MagicMock()
+    self.session.backend.is_sandboxed.return_value = True
+    self.session.backend.get_name.return_value = "docker"
+    self.session.god_mode = True
+
+    # With god_mode enabled on safe backend, should not prompt and should be allowed
+    with mock.patch("builtins.input", side_effect=AssertionError("Should not prompt!")):
+      err = self.session.validate_command_safety("python3 -c 'import os; os.remove(\"dummy.txt\")'")
+      self.assertIsNone(err)
+
+  def test_god_mode_unsafe_backend_rejected(self):
+    import unittest.mock as mock
+
+    # Mock backend as unsafe local
+    self.session.backend = mock.MagicMock()
+    self.session.backend.is_sandboxed.return_value = False
+    self.session.backend.get_name.return_value = "local"
+    self.session.god_mode = True
+
+    # With god_mode on unsafe backend, it should prompt or fail
+    with mock.patch("builtins.input", return_value="n"):
+      err = self.session.validate_command_safety("python3 -c 'import os; os.remove(\"dummy.txt\")'")
+      self.assertIsNotNone(err)
+      self.assertIn("filesystem operations is prohibited", err)
+
+  def test_interactive_god_mode_prompt(self):
+    import unittest.mock as mock
+
+    # Mock safe backend
+    self.session.backend = mock.MagicMock()
+    self.session.backend.is_sandboxed.return_value = True
+    self.session.backend.get_name.return_value = "bwrap"
+    self.session.god_mode = False
+
+    # Typing 'g' should NOT activate god-mode and should reject
+    with mock.patch("builtins.input", return_value="g"):
+      err_g = self.session.validate_command_safety("python3 -c 'import os; os.listdir(\".\")'")
+      self.assertIsNotNone(err_g)
+      self.assertFalse(self.session.god_mode)
+
+    # Typing 'god' SHOULD activate god-mode and allow execution
+    with mock.patch("builtins.input", return_value="god"):
+      err_god = self.session.validate_command_safety("python3 -c 'import os; os.listdir(\".\")'")
+      self.assertIsNone(err_god)
+      self.assertTrue(self.session.god_mode)
+
+    # Subsequent commands should bypass prompt automatically
+    with mock.patch("builtins.input", side_effect=AssertionError("Should not prompt!")):
+      err_next = self.session.validate_command_safety("python3 -c 'import shutil; shutil.rmtree(\"dir\")'")
+      self.assertIsNone(err_next)
+
+  def test_cmd_god_mode_slash_command(self):
+    import unittest.mock as mock
+    from chatty.commands import cmd_god_mode
+
+    # Unsafe backend should reject enabling god-mode
+    self.session.backend = mock.MagicMock()
+    self.session.backend.is_sandboxed.return_value = False
+    self.session.backend.get_name.return_value = "local"
+    self.session.god_mode = False
+
+    cmd_god_mode(self.session, "on")
+    self.assertFalse(self.session.god_mode)
+
+    # Safe backend should succeed
+    self.session.backend.is_sandboxed.return_value = True
+    self.session.backend.get_name.return_value = "docker"
+
+    cmd_god_mode(self.session, "on")
+    self.assertTrue(self.session.god_mode)
+
+    cmd_god_mode(self.session, "off")
+    self.assertFalse(self.session.god_mode)
+
 
 if __name__ == "__main__":
   unittest.main()

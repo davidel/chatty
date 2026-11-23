@@ -271,6 +271,7 @@ def show_help(session: Any):
     ("/skill [NAME...|clear]", "Load skill(s) on-demand or clear explicitly loaded skills"),
     ("/config [key=value]", "List, view, or change configuration parameters live"),
     ("/auto_approve [on|off]", "Toggle or set interactive file change approval"),
+    ("/god_mode [on|off]", "Toggle God-mode Python AST execution in safe sandboxes"),
     ("/mcp [list|reload]", "Inspect or reload Model Context Protocol (MCP) servers and tools"),
     ("/clear / /reset", "Clear conversation memory"),
     ("/compress [N]", "Summarize history, clear context, reload summary, keeping N (default 4) recent messages"),
@@ -340,6 +341,9 @@ def show_status(session: Any):
   prof = getattr(session, "profile", "coder")
   table.add_row("Agent Profile", prof if isinstance(prof, str) else "coder")
   table.add_row("Auto Approve", "Enabled" if getattr(session, "auto_approve", False) else "Disabled")
+  backend_name = session.backend.get_name() if hasattr(session, "backend") and session.backend else "local"
+  god_active = getattr(session, "god_mode", False)
+  table.add_row("God Mode", f"Enabled (Sandbox: {backend_name})" if god_active else "Disabled")
   mcp_manager = getattr(session, "mcp_manager", None)
   mcp_count = len(mcp_manager.clients) if mcp_manager else 0
   table.add_row("MCP Servers", f"{mcp_count} configured" if mcp_count else "None")

@@ -349,6 +349,7 @@ def main():
     prompt_caching=args.prompt_caching,
     headless=args.headless,
     auto_approve=args.auto_approve,
+    god_mode=args.god_mode,
     whitelist=args.whitelist,
     max_thinking_chars=args.max_thinking_chars,
     max_thinking_leeway_chars=args.max_thinking_leeway_chars,

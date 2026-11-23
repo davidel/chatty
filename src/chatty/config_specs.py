@@ -63,6 +63,14 @@ CONFIG_SPECS: Dict[str, ConfigSpec] = {
     description="Automatically approve file changes without interactive prompt.",
     flags=("--auto-approve",),
   ),
+  "god_mode": ConfigSpec(
+    name="god_mode",
+    type=bool,
+    default=False,
+    action="store_true",
+    description="Automatically allow Python script execution with filesystem operations if running inside a safe sandbox (docker, bwrap, landlock).",
+    flags=("--god-mode",),
+  ),
   "context_size": ConfigSpec(
     name="context_size",
     type=int,
