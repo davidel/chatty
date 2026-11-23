@@ -1547,17 +1547,15 @@ class LLMMixin:
         logger.info(f"Tool {t_name} (id={t_id}) completed. Result size: {len(t_result)} characters (truncated: {truncated})")
         logger.debug(f"Tool {t_name} (id={t_id}) result content: {t_result}")
 
-        # Record result for context
-        # We wrap tool output in a JSON object to prevent issues with gateways/models
-        # trying to parse raw code/braces as invalid JSON.
+        # Record result for context as raw sanitized string (avoiding double-JSON encoding
+        # which corrupts backslashes in code, regexes, and escape sequences)
         t_result_sanitized = sanitize_tool_output(t_result)
-        wrapped_content = json.dumps({"output": t_result_sanitized})
 
         self.messages.append({
           "role": "tool",
           "tool_call_id": t_id,
           "name": t_name,
-          "content": wrapped_content
+          "content": t_result_sanitized
         })
 
       loop_count += 1

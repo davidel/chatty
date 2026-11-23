@@ -17,7 +17,11 @@ from chatty.tools.web_ops import tool_search_web
 class TestToolsModularity(unittest.TestCase):
 
   def setUp(self):
+    self.old_cwd = os.getcwd()
     self.sandbox_dir = self.enterContext(tempfile.TemporaryDirectory())
+
+  def tearDown(self):
+    os.chdir(self.old_cwd)
 
   def test_schema_validity(self):
     self.assertTrue(len(TOOLS_SCHEMA) > 0)
@@ -146,6 +150,191 @@ scdiag-pretrain --model convvit \\
     with open(os.path.join(self.sandbox_dir, test_file), "r") as f:
       content = f.read()
     self.assertIn("scdiag-pretrain --model convvit \\", content)
+
+  def test_patch_file_verbatim_regex_backslashes(self):
+    class MockSession:
+      def __init__(self, sandbox):
+        self.sandbox = sandbox
+    session = MockSession(self.sandbox_dir)
+
+    test_file = "utils_test.py"
+    original_code = (
+      "def resplit(csstr, sep, unescape=False):\n"
+      "  return sp.split(csstr, r'\\s*' + sep + r'\\s*', unescape=unescape)\n"
+    )
+    with open(os.path.join(self.sandbox_dir, test_file), "w", encoding="utf-8") as f:
+      f.write(original_code)
+
+    patch_data = (
+      "<<<<<<< SEARCH\n"
+      "def resplit(csstr, sep, unescape=False):\n"
+      "  return sp.split(csstr, r'\\s*' + sep + r'\\s*', unescape=unescape)\n"
+      "=======\n"
+      "def resplit(csstr, sep, unescape=False):\n"
+      "  \"\"\"Split a string with optional unescaping.\"\"\"\n"
+      "  return sp.split(csstr, r'\\s*' + sep + r'\\s*', unescape=unescape)\n"
+      ">>>>>>> REPLACE"
+    )
+
+    res = execute_tool(
+      "patch_file",
+      {
+        "path": test_file,
+        "patch": patch_data,
+      },
+      session
+    )
+    self.assertIn("Successfully updated file", res)
+    with open(os.path.join(self.sandbox_dir, test_file), "r", encoding="utf-8") as f:
+      content = f.read()
+
+    # Must preserve exact single backslash and NOT introduce double backslashes
+    self.assertIn("r'\\s*' + sep + r'\\s*'", content)
+    self.assertNotIn("r'\\\\s*'", content)
+
+  def test_patch_file_exact_match_preserves_backslash_distinction(self):
+    class MockSession:
+      def __init__(self, sandbox):
+        self.sandbox = sandbox
+    session = MockSession(self.sandbox_dir)
+
+    test_file = "distinction_test.py"
+    code = (
+      "single_slash = r'\\s*'\n"
+      "double_slash = r'\\\\s*'\n"
+    )
+    with open(os.path.join(self.sandbox_dir, test_file), "w", encoding="utf-8") as f:
+      f.write(code)
+
+    # Patch only the single_slash line
+    res = execute_tool(
+      "patch_file",
+      {
+        "path": test_file,
+        "search": "single_slash = r'\\s*'",
+        "replace": "single_slash = r'\\s+'",
+      },
+      session
+    )
+    self.assertIn("Successfully updated file", res)
+    with open(os.path.join(self.sandbox_dir, test_file), "r", encoding="utf-8") as f:
+      content = f.read()
+
+    self.assertIn("single_slash = r'\\s+'", content)
+    self.assertIn("double_slash = r'\\\\s*'", content)
+
+  def test_patch_file_divergence_diagnostic_no_double_escape_repr(self):
+    class MockSession:
+      def __init__(self, sandbox):
+        self.sandbox = sandbox
+    session = MockSession(self.sandbox_dir)
+
+    test_file = "diverge_test.py"
+    code = (
+      "def match_line(line):\n"
+      "  pattern = r'\\s*#\\s*'\n"
+      "  return re.match(pattern, line)\n"
+    )
+    with open(os.path.join(self.sandbox_dir, test_file), "w", encoding="utf-8") as f:
+      f.write(code)
+
+    # SEARCH block matches line 1, but line 2 has intentional divergence
+    patch_data = (
+      "<<<<<<< SEARCH\n"
+      "def match_line(line):\n"
+      "  pattern = r'different'\n"
+      "=======\n"
+      "def match_line(line):\n"
+      "  pattern = r'new'\n"
+      ">>>>>>> REPLACE"
+    )
+
+    res = execute_tool(
+      "patch_file",
+      {
+        "path": test_file,
+        "patch": patch_data,
+      },
+      session
+    )
+    self.assertIn("SEARCH block not found in file", res)
+    self.assertIn("Diagnostic: Line 1 matched start of SEARCH", res)
+    self.assertIn("diverged at line 2", res)
+    # The actual line in file has r'\s*#\s*'. The diagnostic must present it verbatim,
+    # NOT Python repr-escaped with double slashes r'\\s*#\\s*'.
+    self.assertIn("Actual:   '  pattern = r'\\s*#\\s*''", res)
+    self.assertNotIn(r"\\s*", res)
+
+  def test_tool_result_does_not_double_escape_backslashes_in_session(self):
+    from unittest.mock import Mock
+    import json
+    from chatty.session import ChatbotSession
+
+    session = ChatbotSession(
+      provider="openrouter",
+      model="mock",
+      context_size=8192,
+      sandbox=self.sandbox_dir,
+      max_loops=2
+    )
+
+    test_file = "regex_sample.py"
+    file_content = "pattern = r'\\s*,\\s*'\nnewline = 'line\\n'\n"
+    with open(os.path.join(self.sandbox_dir, test_file), "w", encoding="utf-8") as f:
+      f.write(file_content)
+
+    class MockFunction:
+      def __init__(self, name, arguments):
+        self.name = name
+        self.arguments = arguments
+
+    class MockToolCall:
+      def __init__(self, id, function):
+        self.id = id
+        self.function = function
+        self.index = 0
+
+    class MockDelta:
+      def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+    class MockChoice:
+      def __init__(self, delta):
+        self.delta = delta
+        self.finish_reason = "tool_calls"
+
+    class MockChunk:
+      def __init__(self, choices):
+        self.choices = choices
+
+    mock_tc = MockToolCall(
+      id="call_read_regex",
+      function=MockFunction(name="read_file", arguments=json.dumps({"path": test_file}))
+    )
+
+    mock_chunks = [MockChunk([MockChoice(MockDelta(tool_calls=[mock_tc]))])]
+    mock_chunks_second = [MockChunk([MockChoice(MockDelta(content="Done."))])]
+
+    session.client = Mock()
+    session.client.chat.completions.create.side_effect = [mock_chunks, mock_chunks_second]
+
+    session.run_llm_cycle()
+
+    tool_msgs = [m for m in session.messages if m.get("role") == "tool"]
+    self.assertEqual(len(tool_msgs), 1)
+    tool_msg = tool_msgs[0]
+
+    # Verify tool content is raw string containing single backslash, not JSON-wrapped {"output": ...}
+    self.assertIsInstance(tool_msg["content"], str)
+    self.assertNotIn('{"output":', tool_msg["content"])
+    self.assertIn("pattern = r'\\s*,\\s*'", tool_msg["content"])
+
+    # When serialized for HTTP transmission, it must be escaped exactly once
+    payload = json.dumps({"messages": [tool_msg]})
+    # Single backslash in python string becomes 2 in json wire payload, NOT 4
+    self.assertIn(r"r'\\s*,\\s*'", payload)
+    self.assertNotIn(r"r'\\\\s*", payload)
 
   def test_patch_file_dry_run_via_registry(self):
     class MockSession:

@@ -359,8 +359,11 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
   file_lines = file_content_norm.split("\n")
   search_lines = search_block_norm.split("\n")
 
-  file_lines_rstripped = [re.sub(r'\\+', r'\\', line.rstrip()) for line in file_lines]
-  search_lines_rstripped = [re.sub(r'\\+', r'\\', line.rstrip()) for line in search_lines]
+  raw_file_lines_rstripped = [line.rstrip() for line in file_lines]
+  raw_search_lines_rstripped = [line.rstrip() for line in search_lines]
+
+  file_lines_rstripped = [re.sub(r'\\+', r'\\', line) for line in raw_file_lines_rstripped]
+  search_lines_rstripped = [re.sub(r'\\+', r'\\', line) for line in raw_search_lines_rstripped]
 
   line_start_chars = []
   curr = 0
@@ -386,10 +389,10 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
       return len(file_content_norm)
     return line_start_chars[end_idx + 1]
 
-  # --- Tier 1: Exact Match (modulo trailing whitespace) ---
+  # --- Tier 1: True Exact Match (modulo trailing whitespace) ---
   exact_matches = []
   for i in range(num_file_lines - num_search_lines + 1):
-    if file_lines_rstripped[i:i + num_search_lines] == search_lines_rstripped:
+    if raw_file_lines_rstripped[i:i + num_search_lines] == raw_search_lines_rstripped:
       exact_matches.append(i)
 
   if len(exact_matches) == 1:
@@ -399,9 +402,52 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
   elif len(exact_matches) > 1:
     return "not_unique", exact_matches
 
+  # --- Tier 1b: Backslash-Tolerant Exact Match ---
+  slash_matches = []
+  for i in range(num_file_lines - num_search_lines + 1):
+    if file_lines_rstripped[i:i + num_search_lines] == search_lines_rstripped:
+      slash_matches.append(i)
+
+  if len(slash_matches) == 1:
+    start_line = slash_matches[0]
+    end_line = start_line + num_search_lines - 1
+    return "found", (line_start_chars[start_line], get_end_char(end_line), 0, " ")
+  elif len(slash_matches) > 1:
+    return "not_unique", slash_matches
+
   # --- Tier 2: Normalized Indentation (line-by-line stripped equality) ---
+  raw_file_lines_stripped = [line.strip() for line in raw_file_lines_rstripped]
+  raw_search_lines_stripped = [line.strip() for line in raw_search_lines_rstripped]
+
+  fuzzy_matches = []
+  for i in range(num_file_lines - num_search_lines + 1):
+    if raw_file_lines_stripped[i:i + num_search_lines] == raw_search_lines_stripped:
+      fuzzy_matches.append(i)
+
+  if len(fuzzy_matches) == 1:
+    start_line = fuzzy_matches[0]
+    end_line = start_line + num_search_lines - 1
+    shift, indent_char = compute_shift(file_lines[start_line:end_line + 1], search_lines)
+    return "found", (line_start_chars[start_line], get_end_char(end_line), shift, indent_char)
+  elif len(fuzzy_matches) > 1:
+    return "not_unique", fuzzy_matches
+
+  # --- Tier 2b: Normalized Indentation with Backslash Tolerance ---
   file_lines_stripped = [line.strip() for line in file_lines_rstripped]
   search_lines_stripped = [line.strip() for line in search_lines_rstripped]
+
+  fuzzy_slash_matches = []
+  for i in range(num_file_lines - num_search_lines + 1):
+    if file_lines_stripped[i:i + num_search_lines] == search_lines_stripped:
+      fuzzy_slash_matches.append(i)
+
+  if len(fuzzy_slash_matches) == 1:
+    start_line = fuzzy_slash_matches[0]
+    end_line = start_line + num_search_lines - 1
+    shift, indent_char = compute_shift(file_lines[start_line:end_line + 1], search_lines)
+    return "found", (line_start_chars[start_line], get_end_char(end_line), shift, indent_char)
+  elif len(fuzzy_slash_matches) > 1:
+    return "not_unique", fuzzy_slash_matches
 
   fuzzy_matches = []
   for i in range(num_file_lines - num_search_lines + 1):
@@ -602,8 +648,8 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
       diagnostic_msg = (
         f"Line {best_start} matched start of SEARCH ({max_matched}/{num_search_lines} line(s) matched), "
         f"but diverged at line {divergence_line}:\n"
-        f"  Expected: {repr(divergence_expected)}\n"
-        f"  Actual:   {repr(divergence_actual)}"
+        f"  Expected: '{divergence_expected.rstrip()}'\n"
+        f"  Actual:   '{divergence_actual.rstrip()}'"
       )
 
   # Case 2: Multi-line search block text exists as partial substring in the file
@@ -619,8 +665,8 @@ def find_block_in_file(file_content: str, search_block: str) -> Tuple[str, Any]:
         if norm_file_lines[i] == s_clean:
           diagnostic_msg = (
             f"Line {i+1} matches SEARCH text but differs in whitespace or indentation:\n"
-            f"  File:   {repr(f_line)}\n"
-            f"  SEARCH: {repr(search_lines[0])}"
+            f"  File:   '{f_line.rstrip()}'\n"
+            f"  SEARCH: '{search_lines[0].rstrip()}'"
           )
           break
 

@@ -636,10 +636,10 @@ class TestToolResultJsonWrapping(unittest.TestCase):
     self.assertEqual(tool_msg["name"], "read_file")
     self.assertEqual(tool_msg["tool_call_id"], "call_read_file_test")
 
-    # The content must be valid JSON and contain the file content wrapped under the "output" key
-    parsed_content = json.loads(tool_msg["content"])
-    self.assertIn("output", parsed_content)
-    self.assertIn("module fp_sub", parsed_content["output"])
+    # The content must be stored as raw sanitized text and NOT double-JSON-encoded
+    self.assertIsInstance(tool_msg["content"], str)
+    self.assertIn("module fp_sub", tool_msg["content"])
+    self.assertNotIn('{"output":', tool_msg["content"])
 
 
 class TestAutoContinuation(unittest.TestCase):
