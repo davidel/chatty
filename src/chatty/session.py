@@ -550,6 +550,8 @@ class ChatbotSession(LLMMixin):
     self.scratch_dir = os.path.join(self.sandbox, ".chatty", "scratch")
     os.makedirs(self.scratch_dir, exist_ok=True)
     self._scratch_handled = False
+    self.session_id = str(uuid.uuid4())[:8]
+    self._auto_save_handled = False
     from chatty.backup import ensure_gitignore_ignores_chatty
     ensure_gitignore_ignores_chatty(self.sandbox)
     
@@ -665,14 +667,12 @@ class ChatbotSession(LLMMixin):
       if default_temp not in explicit_whitelist:
         rw_paths = [p for p in rw_paths if p != default_temp]
 
-      session_id = str(uuid.uuid4())[:8]
-
       def _docker_status(msg: str) -> None:
         if not self.config.headless:
           console.print(f"[cyan]{msg}[/cyan]")
 
       backend = DockerBackend(
-        session_id=session_id,
+        session_id=self.session_id,
         host_sandbox=self.sandbox,
         image=self.config.docker_image,
         base_image=self.config.docker_base_image,
@@ -1662,6 +1662,8 @@ class ChatbotSession(LLMMixin):
     if dir_name:
       os.makedirs(dir_name, exist_ok=True)
     session_data = {
+      "session_id": getattr(self, "session_id", None),
+      "timestamp": time.time(),
       "provider": self.provider,
       "model": self.model,
       "models": self.models,
@@ -1693,11 +1695,18 @@ class ChatbotSession(LLMMixin):
 
   def load_session(self, file_path: str):
     """Loads session state from a JSON file."""
-    file_path = os.path.expanduser(file_path)
-    if not os.path.isabs(file_path):
-      file_path = os.path.join(self.sandbox, file_path)
+    from chatty.session_cache import find_cached_session
+    resolved_path = find_cached_session(self.sandbox, file_path)
+    if resolved_path:
+      file_path = resolved_path
+    else:
+      file_path = os.path.expanduser(file_path)
+      if not os.path.isabs(file_path):
+        file_path = os.path.join(self.sandbox, file_path)
     with open(file_path, "r", encoding="utf-8") as f:
       session_data = json.load(f)
+    if "session_id" in session_data and session_data["session_id"]:
+      self.session_id = session_data["session_id"]
     if "provider" in session_data:
       self.provider = session_data["provider"]
     if "model" in session_data:
@@ -2042,10 +2051,31 @@ class ChatbotSession(LLMMixin):
     from chatty.ui import start_interactive_loop
     start_interactive_loop(self)
 
+  def auto_save_session(self, max_sessions: int = 8) -> Optional[str]:
+    """Automatically saves session state to .chatty/cache/ on exit."""
+    if getattr(self, "_auto_save_handled", False):
+      return None
+    self._auto_save_handled = True
+    try:
+      from chatty.session_cache import save_cached_session
+      saved_path = save_cached_session(self, max_sessions=max_sessions)
+      rel_path = os.path.relpath(saved_path, self.sandbox)
+      self._print(f"[dim]Session auto-saved to {rel_path} (ID: {self.session_id})[/dim]")
+      return saved_path
+    except Exception as e:
+      logger.warning(f"Failed to auto-save session on exit: {e}")
+      return None
+
+  def list_sessions(self) -> List[Dict[str, Any]]:
+    """Lists cached sessions in .chatty/cache/."""
+    from chatty.session_cache import list_cached_sessions
+    return list_cached_sessions(self.sandbox)
+
   def __enter__(self):
     return self
 
   def __exit__(self, exc_type, exc_val, exc_tb):
+    self.auto_save_session()
     self.cleanup_scratch(prompt=False)
     self.cleanup_background_commands()
     if hasattr(self, "backend") and self.backend:

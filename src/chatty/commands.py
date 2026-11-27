@@ -10,6 +10,7 @@ console = Console()
 
 
 def cmd_exit(session: Any, arg: str) -> bool:
+  session.auto_save_session()
   session.cleanup_scratch(prompt=True)
   session.cleanup_background_commands()
   console.print("[bold green]Goodbye![/bold green]")
@@ -722,13 +723,34 @@ def cmd_save(session: Any, arg: str) -> bool:
 
 def cmd_load_session(session: Any, arg: str) -> bool:
   if not arg:
-    console.print("[bold red]Error: Usage: /load_session <file_path>[/bold red]")
+    console.print("[bold red]Error: Usage: /load_session <file_path|ID>[/bold red]")
   else:
     try:
       session.load_session(arg.strip())
       console.print(f"[bold green]Session loaded successfully from {arg.strip()}[/bold green]")
     except Exception as e:
       console.print(f"[bold red]Error loading session: {str(e)}[/bold red]")
+  return True
+
+
+def cmd_list_sessions(session: Any, arg: str) -> bool:
+  from chatty.session_cache import list_cached_sessions
+  sessions = list_cached_sessions(session.sandbox)
+  if not sessions:
+    console.print("[yellow]No cached sessions found in .chatty/cache.[/yellow]")
+    return True
+
+  from rich.table import Table
+  table = Table(title="Cached Sessions", show_header=True, header_style="bold magenta")
+  table.add_column("ID", style="bold cyan")
+  table.add_column("Timestamp", style="yellow")
+  table.add_column("Size", style="green")
+
+  for s in sessions:
+    table.add_row(s["id"], s["formatted_time"], s["formatted_size"])
+
+  console.print(table)
+  console.print("\nUse [cyan]/load_session <ID>[/cyan] to restore a session.")
   return True
 
 
@@ -2019,6 +2041,8 @@ COMMANDS: Dict[str, Callable[[Any, str], bool]] = {
   "/save": cmd_save,
   "/save_session": cmd_save,
   "/load_session": cmd_load_session,
+  "/list_sessions": cmd_list_sessions,
+  "/sessions": cmd_list_sessions,
   "/tools": cmd_tools,
   "/find_symbol": cmd_find_symbol,
   "/repo_map": cmd_repo_map,

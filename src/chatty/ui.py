@@ -179,6 +179,18 @@ class ChattyCompleter(Completer):
           sub_doc = Document(path_text, cursor_position=len(path_text))
           for completion in self.path_completer.get_completions(sub_doc, complete_event):
             yield completion
+          if cmd == '/load_session' and self.session and hasattr(self.session, "sandbox"):
+            from chatty.session_cache import list_cached_sessions
+            sessions = list_cached_sessions(self.session.sandbox)
+            prefix = path_text.lower()
+            for s in sessions:
+              s_id = str(s.get("id", ""))
+              meta = f"{s.get('formatted_time', '')} ({s.get('formatted_size', '')})"
+              if s_id.lower().startswith(prefix):
+                yield Completion(s_id, start_position=-len(path_text), display_meta=meta)
+              full_name = f"session_{s_id}"
+              if full_name.lower().startswith(prefix) and not s_id.lower().startswith(prefix):
+                yield Completion(full_name, start_position=-len(path_text), display_meta=meta)
         elif cmd in ('/model', '/models', '/oracle', '/discovery_model', '/discover_model', '/roundtable_models', '/roundtable_moderator'):
           sub_text = parts[1] if len(parts) > 1 else ""
           is_models_add = (cmd == '/models' and sub_text.startswith('add '))
@@ -260,7 +272,8 @@ def show_help(session: Any):
     ("/system [text]", "View or edit the system instructions"),
     ("/load <path> [append|replace]", "Load system prompt guidelines from a file"),
     ("/save_session <path>", "Save the entire session status to a JSON file"),
-    ("/load_session <path>", "Load a saved session status from a JSON file"),
+    ("/load_session <path|ID>", "Load a saved session status from a JSON file or cached session ID"),
+    ("/list_sessions", "List cached auto-saved sessions with ID, timestamp, and size"),
     ("/history [N]", "View message records or show the N-th entry in detail"),
     ("/undo [count]", "Undo the last conversation turn(s)"),
     ("/pop <index>", "Truncate history from index (1-based) onwards"),
@@ -567,6 +580,7 @@ def start_interactive_loop(session: Any):
       session._print("\n[yellow]KeyboardInterrupt (Ctrl+C). Type /exit to quit.[/yellow]")
     except EOFError:
       # Handle Ctrl+D
+      session.auto_save_session()
       session.cleanup_scratch(prompt=True)
       session.cleanup_background_commands()
       session._print("\n[bold green]Goodbye![/bold green]")

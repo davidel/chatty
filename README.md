@@ -185,7 +185,8 @@ During a session, you can input direct queries to the model, or use **Slash Comm
 | `/system` | `[text]` | Inspect or update the base system prompt instructions directly. |
 | `/load` | `<path> [append\|replace]` | Read system instructions from a local YAML or text file, appending or replacing. |
 | `/save` / `/save_session` | `<path>` | Save the whole status of the current conversation/session to a JSON file. |
-| `/load_session` | `<path>` | Load a saved conversation/session status from a JSON file. |
+| `/load_session` | `<path\|ID>` | Load a saved conversation/session status from a JSON file or cached session ID. |
+| `/list_sessions` / `/sessions` | None | Lists cached auto-saved sessions in `.chatty/cache` with ID, timestamp, and size. |
 | `/history` | `[N]` | Renders message records, estimated token counts, roles, and tool calls, or displays the N-th entry in full detail. |
 | `/undo` | `[count]` | Reverts the last conversation turn(s), removing assistant responses, tool outputs, and the user prompt. |
 | `/pop` | `<index>` | Truncates the conversation history by deleting all messages from the specified 1-based index onwards. |
